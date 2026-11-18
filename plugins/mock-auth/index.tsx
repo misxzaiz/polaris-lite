@@ -345,7 +345,7 @@ export const mockAuthPlugin: LitePlugin = {
         { slot: 'auth', component: 'LoginForm', order: 0 },
         // title 面向用户：点开是「账号安全」改密/改号表单，故按内容命名为「账号」，
         // 不与插件名「演示登录」绑定（换成真实 SSO 插件时本面板语义不变）。
-        { slot: 'panel', component: 'ChangeCredentialsPanel', order: 3, title: '账号' },
+        { slot: 'panel', component: 'ChangeCredentialsPanel', order: 4, title: '账号' },
       ],
     },
   },

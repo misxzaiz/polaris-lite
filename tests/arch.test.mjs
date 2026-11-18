@@ -53,6 +53,13 @@ const pluginFiles = collect('plugins').filter(
 );
 const coreFiles = collect('src');
 
+/** 插件 CSS 不受 CODE_RE 覆盖，单独收集（含 dist 之外的源样式） */
+const pluginCssFiles = readdirSync(resolve(root, 'plugins'), { recursive: true })
+  .map((p) => p.replace(/\\/g, '/'))
+  .filter((p) => p.endsWith('.css'))
+  .filter((p) => !p.split('/').some((seg) => SKIP_DIRS.has(seg)))
+  .map((p) => posix.join('plugins', p));
+
 test('插件不得依赖宿主实现或其它插件', () => {
   assert.ok(pluginFiles.length > 0, '未找到插件源码，路径推导可能有误');
   const violations = [];
@@ -120,4 +127,26 @@ test('UI 源码不使用 emoji 或彩色符号图标', () => {
     });
   }
   assert.deepEqual(hits, [], `请使用统一 SVG 细线图标，而非 emoji / 符号字符：\n  ${hits.join('\n  ')}`);
+});
+
+test('插件 CSS 不得触碰宿主命名空间或全局根', () => {
+  // 权威实现在 plugins/build-plugins.mjs 的 lintPluginCss（构建期 fail-fast）；
+  // 这里做测试层快速回归，保证单独跑 `npm test` 也能挡住样式逃逸。
+  const rules = [
+    { re: /(^|[\s,{}]):root\b/, msg: ':root' },
+    { re: /(^|[\s,{}])html\b(?![\w-])/, msg: 'html' },
+    { re: /(^|[\s,{}])body\b(?![\w-])/, msg: 'body' },
+    { re: /#root\b/, msg: '#root' },
+    { re: /@import\b/, msg: '@import' },
+    { re: /\.(slot|shell)[\w-]*/, msg: '宿主类名 .slot-* / .shell-*' },
+    { re: /position\s*:\s*fixed/, msg: 'position: fixed' },
+  ];
+  const hits = [];
+  for (const file of pluginCssFiles) {
+    const css = readFileSync(resolve(root, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const rule of rules) {
+      if (rule.re.test(css)) hits.push(`${file} → ${rule.msg}`);
+    }
+  }
+  assert.deepEqual(hits, [], `插件 CSS 越界（插件样式是全局注入，会污染宿主）：\n  ${hits.join('\n  ')}`);
 });
