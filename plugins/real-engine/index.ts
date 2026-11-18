@@ -11,7 +11,7 @@
  * - running map 按 sessionId::messageId 精确中断（并发流互不误伤）；
  * - 中断路径必须补发 message.done，否则 UI 的「停止」按钮永远不回位。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@/core/types';
+import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 
 const RELAY_URL = '/api/model-relay'; // 宿主内嵌中继（同源；会话 cookie 自动携带）
 
@@ -238,6 +238,8 @@ export const realEnginePlugin: LitePlugin = {
     name: '真实模型引擎',
     version: '0.3.0',
     capabilities: ['cap.model.admin'],
+    /** 依赖供应商管理：装配顺序由声明驱动（面板先于引擎） */
+    requires: ['cap.model.admin'],
     events: ['model-config-changed', 'auth-changed'],
     provides: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
     contributes: { slots: [] },

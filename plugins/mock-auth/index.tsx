@@ -8,7 +8,7 @@
  * - 状态变化经 auth-changed 广播。
  */
 import { useState } from 'react';
-import type { AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@/core/types';
+import type { AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import './auth.css';
 
 const SESSION_KEY = 'mock-auth.session.v1';
@@ -313,7 +313,7 @@ export const mockAuthPlugin: LitePlugin = {
     version: '0.4.0',
     capabilities: ['cap.auth'],
     provides: ['cap.auth'],
-    events: [],
+    events: ['auth-changed'],
     contributes: {
       slots: [
         { slot: 'auth', component: 'LoginForm', order: 0 },

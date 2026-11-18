@@ -1,10 +1,15 @@
 /**
  * 外部插件加载器（宿主与插件完全解耦的关键）。
  *
- * 宿主源码不 import 任何插件；启动时：
- * 1. fetch /plugins/registry.json（外部插件清单，由 build-plugins 脚本生成，可手工增删）；
- * 2. 注入 import map（react/react-dom 指向宿主已加载模块，插件 bundle 以裸 import 引用）；
- * 3. 动态 import() 每个插件的 plugin.js，拿到 LitePlugin 形态后交宿主 runtime 注册。
+ * 启动流程分三阶段（顺序即正确性）：
+ * 1. **导入**：fetch registry.json 与 grants.json → 逐个动态 import 插件模块 →
+ *    解析有效权限（manifest ∩ grants）→ 登记组件。**不执行 setup**。
+ * 2. **排序**：按 manifest.requires 做拓扑排序，让「能力提供方」先于「消费者」装配。
+ *    此前顺序靠 build-plugins.mjs 里的 order 注释维持（real-engine 必须先于 mock-engine），
+ *    一旦增删插件就会静默错序；现在由声明驱动，缺失依赖会在启动告警里点名。
+ * 3. **装配**：按序 registerPlugin（此时才跑 setup）。
+ *
+ * 宿主源码不 import 任何插件；插件只能看到 @sdk 契约与运行时注入的 SlotHostApi。
  */
 import type { ComponentType } from 'react';
 import type { LitePlugin } from '../core/types';
@@ -80,8 +85,13 @@ function installImportMap(): void {
 export interface LoadResult {
   loaded: string[];
   failed: { id: string; error: string }[];
-  /** 授权表相关告警（未登记插件 / 被收紧的权限），由调用方在 UI 暴露 */
+  /** 授权/依赖相关告警（未登记插件、被收紧的权限、缺失依赖），由调用方在 UI 暴露 */
   policyWarnings: string[];
+}
+
+interface StagedPlugin {
+  plugin: LitePlugin;
+  policy: EffectivePolicy;
 }
 
 /** 加载注册表里的全部启用插件并注册进宿主 runtime（权限按 grants.json 收紧） */
@@ -103,6 +113,8 @@ export async function loadExternalPlugins(
   const policyWarnings: string[] = [];
   if (!grants) policyWarnings.push(`授权表 ${grantsUrl} 不可用：插件权限按 manifest 自声明放行`);
 
+  // ---------- 阶段 1：导入 + 权限解析（不执行 setup） ----------
+  const staged: StagedPlugin[] = [];
   for (const entry of registry.plugins ?? []) {
     if (entry.enabled === false) continue;
     try {
@@ -136,10 +148,50 @@ export async function loadExternalPlugins(
         );
       }
       collectComponents(plugin.manifest.id, mod);
-      await register(plugin, policy);
-      loaded.push(plugin.manifest.id);
+      staged.push({ plugin, policy });
     } catch (err) {
       failed.push({ id: entry.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // ---------- 阶段 2：按 requires 拓扑排序（提供方先装配） ----------
+  const providerOf = new Map<string, string>();
+  for (const s of staged) {
+    for (const cap of s.policy.provides) providerOf.set(cap, s.plugin.manifest.id);
+  }
+  const byId = new Map(staged.map((s) => [s.plugin.manifest.id, s]));
+  const state = new Map<string, 'visiting' | 'done'>();
+  const ordered: StagedPlugin[] = [];
+
+  const visit = (s: StagedPlugin): void => {
+    const id = s.plugin.manifest.id;
+    if (state.get(id) === 'done') return;
+    if (state.get(id) === 'visiting') {
+      policyWarnings.push(`插件 ${id} 存在循环依赖（requires），已按当前顺序装配`);
+      return;
+    }
+    state.set(id, 'visiting');
+    for (const cap of s.plugin.manifest.requires ?? []) {
+      const pid = providerOf.get(cap);
+      if (!pid) {
+        policyWarnings.push(`插件 ${id} 依赖的能力 ${cap} 无任何已加载插件提供`);
+        continue;
+      }
+      const dep = byId.get(pid);
+      if (dep && dep !== s) visit(dep);
+    }
+    state.set(id, 'done');
+    ordered.push(s);
+  };
+  for (const s of staged) visit(s);
+
+  // ---------- 阶段 3：按序装配（此处才执行 setup） ----------
+  for (const s of ordered) {
+    try {
+      await register(s.plugin, s.policy);
+      loaded.push(s.plugin.manifest.id);
+    } catch (err) {
+      failed.push({ id: s.plugin.manifest.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 

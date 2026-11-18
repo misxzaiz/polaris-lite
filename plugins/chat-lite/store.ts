@@ -3,7 +3,7 @@
  * 的单写者思想——本版由引擎事件驱动更新，UI 只读）。
  */
 import { create } from 'zustand';
-import type { ChatMessage, ChatSession } from '@/core/types';
+import type { ChatMessage, ChatSession } from '@sdk';
 
 interface SessionState {
   sessions: ChatSession[];

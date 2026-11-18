@@ -60,7 +60,9 @@ export class HostRuntime {
     return {
       dispatch: <T,>(req: Parameters<SlotHostApi['dispatch']>[0]): Promise<CapResponse<T>> => {
         // 流式能力：动作命中已注册的 streaming cap 时，走 dispatchStream 定向投递，
-        // 事件同时镜像到宿主事件总线（'chat-event'）供 UI 层消费。
+        // 事件同时镜像到宿主事件总线供 UI 层消费。
+        // 事件名按「能力」命名（<target>:event，如 cap.ai.chat:event），来源由宿主取该 cap
+        // 的提供方插件 id——插件无法伪造来源（此前硬编码 source:'engine'，任何流式插件都能冒充引擎）。
         if (runtime.bus.isStreaming(req.target)) {
           return new Promise((resolve) => {
             runtime.bus.dispatchStream(
@@ -68,7 +70,11 @@ export class HostRuntime {
               policy.capabilities,
               req,
               () => undefined, // 消费者走广播通道；此处保持订阅以维持生命周期
-              (ev) => runtime.broadcastStream('chat-event', { ...ev, source: 'engine' }),
+              (ev) => runtime.broadcastStream(`${req.target}:event`, {
+                ...ev,
+                source: runtime.bus.providerOf(req.target) ?? manifest.id,
+                target: req.target,
+              }),
             );
             // 流式调用的同步应答：立即返回 ok，结果经事件流送达
             resolve({ ok: true, data: undefined } as CapResponse<T>);
@@ -89,17 +95,22 @@ export class HostRuntime {
         };
       },
       emit: (event, payload) => {
-        // 事件带来源标注，消费者可校验来源（防伪造注入）
+        // 发射侧同样收口：只允许 grants 授权的事件名（防止插件伪造不属于它的事件），
+        // 并自动附加来源插件 id，消费者可校验来源。
+        const declared = policy.events;
+        if (!declared.includes(event)) {
+          throw new Error(`plugin ${manifest.id} is not granted to emit event ${event}`);
+        }
         runtime.listeners.get(event)?.forEach((fn) => fn({ source: manifest.id, payload }));
       },
       registerCapability: {
         register: (target: string, handler: CapabilityHandler) => {
           runtime.assertProvides(policy, target);
-          runtime.bus.register(target, handler);
+          runtime.bus.register(target, handler, policy.pluginId);
         },
         registerStreaming: (target: string, handler: StreamCapabilityHandler) => {
           runtime.assertProvides(policy, target);
-          runtime.bus.registerStreaming(target, handler);
+          runtime.bus.registerStreaming(target, handler, policy.pluginId);
         },
       },
       registerAuthGuard: (guard) => {

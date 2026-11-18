@@ -1,6 +1,6 @@
 /** 消息流（Polaris 对话布局第二段）——支持上滑查看历史消息 */
 import { useEffect, useRef, useState } from 'react';
-import { useSessionStore } from '@/core/sessionStore';
+import { useSessionStore } from './store';
 
 export function MessageStream() {
   const activeId = useSessionStore((s) => s.activeId);

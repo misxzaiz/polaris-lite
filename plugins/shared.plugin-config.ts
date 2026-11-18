@@ -18,8 +18,9 @@ export function createPluginConfig(pluginDir: string, entry: string, outDir: str
     plugins: [react()],
     resolve: {
       alias: {
-        // 插件源码里的 @/ 指向宿主 src/（构建期解析；运行时这些模块已被打进插件包或由宿主提供）
-        '@': resolve(sharedDir, '../src'),
+        // 插件唯一允许的宿主依赖面：@sdk → plugins/sdk（只含类型与常量契约）。
+        // 刻意不再提供 '@' → src 别名：插件误引宿主实现会在构建期直接暴露，而不是形成隐式耦合。
+        '@sdk': resolve(sharedDir, 'sdk'),
       },
     },
     build: {

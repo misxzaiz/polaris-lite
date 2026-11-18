@@ -21,6 +21,8 @@ export type StreamCapabilityHandler = (
 interface Registered {
   handler: CapabilityHandler;
   streaming?: StreamCapabilityHandler;
+  /** 提供方插件 id（由宿主在注册时注入，供事件来源溯源） */
+  providerId?: string;
 }
 
 export interface AuditEntry {
@@ -62,17 +64,22 @@ export class CapBus {
    * [内部] 注册非流式能力。仅供宿主装配（registerCapability 包装）使用；
    * 插件必须经 SlotHostApi.registerCapability（受 manifest.provides 约束）。
    */
-  register(target: string, handler: CapabilityHandler): void {
+  register(target: string, handler: CapabilityHandler, providerId?: string): void {
     if (this.caps.has(target)) throw new Error(`cap ${target} already registered`);
-    this.caps.set(target, { handler });
+    this.caps.set(target, { handler, providerId });
   }
 
   /**
    * [内部] 注册流式能力。同上，仅供宿主装配使用。
    */
-  registerStreaming(target: string, handler: StreamCapabilityHandler): void {
+  registerStreaming(target: string, handler: StreamCapabilityHandler, providerId?: string): void {
     if (this.caps.has(target)) throw new Error(`cap ${target} already registered`);
-    this.caps.set(target, { handler: () => undefined, streaming: handler });
+    this.caps.set(target, { handler: () => undefined, streaming: handler, providerId });
+  }
+
+  /** 该 cap 的提供方插件 id（事件来源溯源用：来源由宿主判定，插件无法伪造） */
+  providerOf(target: string): string | undefined {
+    return this.caps.get(target)?.providerId;
   }
 
   has(target: string): boolean {

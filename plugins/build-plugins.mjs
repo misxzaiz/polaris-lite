@@ -16,9 +16,9 @@ const pluginsRoot = dirname(fileURLToPath(import.meta.url));
 const hostPublic = resolve(pluginsRoot, '../public/plugins');
 
 const plugins = [
-  // order 决定 registry 顺序（= cap 注册顺序，先到先得）。
-  // 约束：real-engine 启动兜底会 dispatch cap.model.admin/resolveActive，故 model-admin 必须先于 real-engine；
-  //       引擎类插件务必排在 mock 之前。
+  // order 只决定 registry 的书写顺序与产物列表；**装配顺序由 manifest.requires 拓扑排序决定**
+  // （宿主在启动时按「能力提供方先装配」排序），不再依赖这里的先后。
+  // mock-engine：验收/演示用途，默认停用（enabled:false）；启用会与 real-engine 抢注 cap.ai.chat。
   { id: 'config-manager', config: 'config-manager/vite.config.ts', dist: 'config-manager/dist', order: 1 },
   { id: 'chat-lite', config: 'chat-lite/vite.config.ts', dist: 'chat-lite/dist', order: 2 },
   { id: 'model-admin', config: 'model-admin/vite.config.ts', dist: 'model-admin/dist', order: 3 },

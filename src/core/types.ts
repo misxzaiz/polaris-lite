@@ -80,8 +80,10 @@ export interface LiteManifest {
   capabilities?: string[];
   /** 提供的 cap（提供方声明），registerCapability 时宿主校验提供资格 */
   provides?: string[];
-  /** 声明要订阅的宿主事件（如 'chat-event'），listen 时校验 */
+  /** 声明要订阅/发射的宿主事件（如 'chat-event'），listen/emit 时校验 */
   events?: string[];
+  /** 依赖的能力（如 'cap.model.admin'）：宿主据此决定插件装配顺序，缺失时告警 */
+  requires?: string[];
   contributes?: {
     slots?: SlotDescriptor[];
   };

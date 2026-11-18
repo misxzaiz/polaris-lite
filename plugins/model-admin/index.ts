@@ -10,7 +10,7 @@
  *
  * cap.model.admin 动作：list / resolveActive / save / remove / setDefault / test / probe
  */
-import type { LitePlugin, SlotHostApi, CapabilityHandler } from '@/core/types';
+import type { LitePlugin, SlotHostApi, CapabilityHandler } from '@sdk';
 import { ModelAdminPanel, setPanelApi } from './Panel';
 import { mergeModelCaps, type ProbeFacts } from './detect';
 import './panel.css';
@@ -168,7 +168,7 @@ export const modelAdminPlugin: LitePlugin = {
     // 面板自身经总线调用本插件提供的 cap.model.admin（自调同样要过 gate，故需声明）
     capabilities: ['cap.model.admin'],
     provides: ['cap.model.admin'],
-    events: [],
+    events: ['model-config-changed'],
     contributes: {
       slots: [{ slot: 'panel', component: 'ModelAdminPanel', order: 2 }],
     },

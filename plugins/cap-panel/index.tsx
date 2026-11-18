@@ -6,7 +6,7 @@
  * 审计展示补 pluginId 与错误信息。
  */
 import { useEffect, useState } from 'react';
-import type { LitePlugin, SlotHostApi } from '@/core/types';
+import type { LitePlugin, SlotHostApi } from '@sdk';
 
 let api: SlotHostApi | null = null;
 
@@ -19,22 +19,34 @@ interface AuditItem {
   error?: string;
 }
 
+/** 有效权限行（来自 cap.meta/policies）：展示「申请 ⊂ 授权」后的结果与收紧项 */
+interface PolicyRow {
+  pluginId: string;
+  listed: boolean;
+  capabilities: string[];
+  provides: string[];
+  events: string[];
+  denied: { field: string; item: string }[];
+}
+
 export function CapPanel() {
   const [caps, setCaps] = useState<string[]>([]);
   const [audit, setAudit] = useState<AuditItem[]>([]);
+  const [policies, setPolicies] = useState<PolicyRow[]>([]);
 
   useEffect(() => {
     const hostApi = api;
     if (!hostApi) return;
     let alive = true;
     const refresh = async () => {
-      const res = await hostApi.dispatch<{ capabilities: string[]; audit: AuditItem[] }>({
+      const res = await hostApi.dispatch<{ capabilities: string[]; audit: AuditItem[]; policies?: PolicyRow[] }>({
         target: 'cap.meta',
         action: 'describe',
       });
       if (alive && res.ok && res.data) {
         setCaps(res.data.capabilities);
         setAudit(res.data.audit);
+        setPolicies(res.data.policies ?? []);
       }
     };
     void refresh();
@@ -58,6 +70,19 @@ export function CapPanel() {
           </div>
         ))}
       </div>
+      <h3 style={{ marginTop: 16 }}>插件权限（manifest ∩ grants）</h3>
+      <ul className="cap-audit">
+        {policies.map((p) => (
+          <li key={p.pluginId}>
+            <span className={`cap-status ${p.listed ? '' : 'fail'}`}>{p.listed ? 'granted' : 'unlisted'}</span>{' '}
+            <code>{p.pluginId}</code>
+            {p.capabilities.length > 0 && <> · 调 {p.capabilities.join(',')}</>}
+            {p.provides.length > 0 && <> · 供 {p.provides.join(',')}</>}
+            {p.events.length > 0 && <> · 事件 {p.events.join(',')}</>}
+            {p.denied.length > 0 && <span className="cap-status fail"> · 收紧 {p.denied.map((d) => d.item).join(',')}</span>}
+          </li>
+        ))}
+      </ul>
       <h3 style={{ marginTop: 16 }}>审计尾部</h3>
       <ul className="cap-audit">
         {audit.slice(-8).reverse().map((a, i) => (

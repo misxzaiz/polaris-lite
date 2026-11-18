@@ -10,8 +10,8 @@
  * - [P1 B-7] interrupt 自愈：流已死时复位本会话所有 streaming 残留。
  * - [P2 B-6] settled 幂等防重复复位；消息 id 用单调计数器不撞车。
  */
-import type { LitePlugin, SlotHostApi, ChatMessage } from '@/core/types';
-import { useSessionStore } from '@/core/sessionStore';
+import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
+import { useSessionStore } from './store';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
@@ -37,7 +37,9 @@ export const chatLitePlugin: LitePlugin = {
     name: '对话',
     version: '0.1.0',
     capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
-    events: ['chat-event'],
+    /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
+    requires: ['cap.ai.chat'],
+    events: ['cap.ai.chat:event'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -106,10 +108,11 @@ export async function sendUserMessage(text: string, attachments?: unknown[]): Pr
   };
 
   let unbind: (() => void) | undefined;
-  const off = api.listen('chat-event', (payload) => {
+  const off = api.listen('cap.ai.chat:event', (payload) => {
     const envelope = payload as StreamEnvelope;
-    // 只消费引擎来源的事件（防其他插件伪造注入）
-    if (envelope.source && envelope.source !== 'engine') return;
+    // 来源由宿主取「cap.ai.chat 的提供方插件 id」后注入，插件无法伪造；
+    // 无来源的事件一律不认（避免核心内部广播或未来新增事件被误当流式事件处理）。
+    if (!envelope.source) return;
     const inner = envelope.payload ?? {};
     // 精确匹配：会话 + 消息 双重过滤（并发流不串台）
     if (inner.sessionId && inner.sessionId !== sid) return;

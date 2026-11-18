@@ -1,5 +1,5 @@
 /** 会话侧栏（Polaris 对话布局第一段） */
-import { useSessionStore } from '@/core/sessionStore';
+import { useSessionStore } from './store';
 
 export function SessionSidebar() {
   const sessions = useSessionStore((s) => s.sessions);

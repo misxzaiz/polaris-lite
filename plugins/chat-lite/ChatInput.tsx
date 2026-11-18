@@ -12,7 +12,7 @@
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
 import { sendUserMessage, interruptChat, enqueuePending } from './index';
-import { useSessionStore } from '@/core/sessionStore';
+import { useSessionStore } from './store';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
 } from './attachments';

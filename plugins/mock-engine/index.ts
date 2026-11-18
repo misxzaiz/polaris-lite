@@ -6,7 +6,7 @@
  *   宿主校验提供资格；main.tsx 不再代为注册。
  * - [P0 B-5] running map key 改为 sessionId::messageId，中断不再误伤同会话并发流。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@/core/types';
+import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 
 const running = new Map<string, () => void>(); // `${sessionId}::${messageId}` -> cancel
 

@@ -10,7 +10,7 @@
  * - 调用方在 manifest.capabilities 里声明 'cap.config'；
  * - namespace 建议用插件 id（如 'model-admin'、'real-engine'），避免互相覆盖。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@/core/types';
+import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 
 const STORAGE_KEY = 'config-manager.store.v1';
 const CHANGE_EVENT = 'config-changed';
@@ -80,7 +80,7 @@ export const configManagerPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: [],
     provides: ['cap.config'],
-    events: [],
+    events: ['config-changed'],
     contributes: { slots: [] },
   },
   setup(api: SlotHostApi) {

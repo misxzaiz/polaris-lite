@@ -62,6 +62,24 @@ await send('Network.setCookie', {
 await send('Page.navigate', { url: TARGET });
 await sleep(7000);
 
+// 可选：模拟输入并发送一条消息（验证流式链路）
+const typed = process.argv[5];
+if (typed) {
+  await send('Runtime.evaluate', {
+    expression: `(() => {
+      const ta = document.querySelector('.chat-textarea');
+      if (!ta) return 'no-textarea';
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, ${JSON.stringify(typed)});
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return 'sent';
+    })()`,
+    returnByValue: true,
+  });
+  await sleep(4000);
+}
+
 const dom = await send('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
 const text = await send('Runtime.evaluate', { expression: 'document.body.innerText.slice(0,1500)', returnByValue: true });
 const errors = events

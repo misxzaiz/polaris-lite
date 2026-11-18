@@ -1,6 +1,6 @@
 /** 模型供应商管理面板 UI：列表 + 表单 + 逐模型能力编辑 + 连通性测试 + 能力自动识别 */
 import { useEffect, useState } from 'react';
-import type { SlotHostApi } from '@/core/types';
+import type { SlotHostApi } from '@sdk';
 import type { ProviderConfig, ModelInfo, PublicProvider } from './index';
 
 let api: SlotHostApi | null = null;
