@@ -120,6 +120,7 @@ sessionStorage.setItem('mock-auth.session.v1', JSON.stringify({
 location.reload();
 // 刷新后 body 渲染出完整四槽业务 UI（sidebar/stream/input/panel）：
 // "Polaris Lite / + 新会话 / 轻量版对话已就绪… / 能力面板 / 模型供应商管理 / 演示登录"
+// 注：第三个 tab 现显示为「账号」（SlotDescriptor.title）；此行为当时的实测记录，故保留原名
 // 此时 /api/auth/status 仍返回 {"status":"unauthenticated"}（服务端未登录）
 ```
 

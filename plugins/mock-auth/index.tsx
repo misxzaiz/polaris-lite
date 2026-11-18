@@ -333,6 +333,8 @@ function ChangeCredentialsForm() {
 export const mockAuthPlugin: LitePlugin = {
   manifest: {
     id: 'mock-auth',
+    // 插件身份名（开发者视角）：说明这是 mock 实现，任意账号可登录。
+    // 用户可见的面板名由下面 contributes.slots[].title 单独给出，不暴露「演示」字样。
     name: '演示登录',
     version: '0.4.0',
     capabilities: ['cap.auth'],
@@ -341,7 +343,9 @@ export const mockAuthPlugin: LitePlugin = {
     contributes: {
       slots: [
         { slot: 'auth', component: 'LoginForm', order: 0 },
-        { slot: 'panel', component: 'ChangeCredentialsPanel', order: 3 },
+        // title 面向用户：点开是「账号安全」改密/改号表单，故按内容命名为「账号」，
+        // 不与插件名「演示登录」绑定（换成真实 SSO 插件时本面板语义不变）。
+        { slot: 'panel', component: 'ChangeCredentialsPanel', order: 3, title: '账号' },
       ],
     },
   },

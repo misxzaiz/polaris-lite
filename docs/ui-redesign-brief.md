@@ -4,6 +4,7 @@
 - shell grid: 260px sidebar / 1fr stream / 300px panel；.shell-input 高 111px @ y789
 - chat-input-bar 宽仅 165px（塌缩），textarea 165x42，style.height=77px 但 clientHeight=40（JS 42..200 自适应 vs CSS max-height:140 冲突）
 - 按钮 x=994 起：📎/停止/排队/发送；面板 .shell-panel 300x900；.slot-tabbar 299x55（三 tab：能力面板/模型供应商管理/演示登录），「模型供应商管理」折两行
+  - 注：第三个 tab 现显示为「账号」（由 `SlotDescriptor.title` 指定，不再跟随插件名 `manifest.name` 的「演示登录」）；此处保留改造前的实测文案
 - 空态 stream 仅两行居中文本，与输入区之间大片留黑
 
 ## 已知根因

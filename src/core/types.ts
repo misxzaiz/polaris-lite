@@ -69,6 +69,14 @@ export interface SlotDescriptor {
   /** 插件内组件导出名（插件模块需导出该名称的 React 组件） */
   component: string;
   order?: number;
+  /**
+   * 该块 UI 的**用户可见名**（多面板槽的 tab 文本），缺省回退 manifest.name。
+   *
+   * 为什么要与插件名分开：manifest.name 回答「插件是谁」，title 回答「这块 UI 是什么」，
+   * 二者并不总是同一个东西——同一个插件可以向多个槽贡献语义不同的界面
+   * （mock-auth 既提供登录页，也提供登录后的账号面板），单一插件名无法同时命名它们。
+   */
+  title?: string;
 }
 
 /** 插件 manifest（Polaris manifest 的瘦身版） */

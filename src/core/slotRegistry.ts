@@ -32,6 +32,8 @@ export class SlotRegistry {
   }
 
   list(slot: SlotId): SlotEntry[] {
-    return [...(this.slots.get(slot) ?? [])];
+    // 必须按 order 排序：注册顺序取决于插件加载时序（registry 顺序 + 依赖拓扑序），
+    // 不排序则 slot.tabbar 的 tab 顺序会随加载快慢漂移，order 声明形同虚设。
+    return [...(this.slots.get(slot) ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
 }

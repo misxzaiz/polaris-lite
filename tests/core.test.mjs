@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CapBus } from '../src/core/bus.ts';
 import { resolvePolicy } from '../src/core/policy.ts';
+import { SlotRegistry } from '../src/core/slotRegistry.ts';
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
@@ -129,4 +130,21 @@ test('授权表：unlistedPolicy=deny 时未登记插件零权限', () => {
   assert.deepEqual(policy.capabilities, []);
   assert.deepEqual(policy.provides, []);
   assert.equal(policy.denied.length, 2);
+});
+
+test('槽位注册表：list 按 order 排序，title 原样透传（tab 名不与插件名耦合）', () => {
+  const reg = new SlotRegistry();
+  // 故意按「乱序」注册，模拟插件加载时序与 manifest 声明顺序不一致的真实情况
+  reg.register('mock-auth', [{ slot: 'panel', component: 'Creds', order: 3, title: '账号' }]);
+  reg.register('model-admin', [{ slot: 'panel', component: 'Models', order: 2 }]);
+  reg.register('cap-panel', [{ slot: 'panel', component: 'Caps', order: 1 }]);
+
+  // tab 顺序必须由 order 决定，而不是谁先加载谁在前
+  assert.deepEqual(
+    reg.list('panel').map((e) => e.component),
+    ['Caps', 'Models', 'Creds'],
+  );
+  // 同一插件可给自己的 panel 块单独命名，与 manifest.name 解耦
+  assert.equal(reg.list('panel')[2].title, '账号');
+  assert.equal(reg.list('panel')[1].title, undefined);
 });
