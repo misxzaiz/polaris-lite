@@ -9,8 +9,6 @@ export function MessageStream() {
   const streamRef = useRef<HTMLDivElement>(null);
   /** 用户是否贴近底部（距底 < 80px 视为在底部）——贴近时新消息自动跟随；上滑查看历史时不打扰 */
   const [atBottom, setAtBottom] = useState(true);
-  /** 记录流式期间内容高度，用于在「贴近底部」时跟随增长 */
-  const lastContentLen = useRef(0);
 
   // 监听滚动：判断是否贴近底部
   useEffect(() => {

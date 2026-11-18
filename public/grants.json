@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "unlistedPolicy": "declare",
+  "plugins": {
+    "config-manager": {
+      "capabilities": [],
+      "provides": ["cap.config"],
+      "events": []
+    },
+    "chat-lite": {
+      "capabilities": ["cap.ai.chat", "cap.ai.chat.interrupt"],
+      "provides": [],
+      "events": ["chat-event"]
+    },
+    "model-admin": {
+      "capabilities": ["cap.model.admin"],
+      "provides": ["cap.model.admin"],
+      "events": []
+    },
+    "real-engine": {
+      "capabilities": ["cap.model.admin"],
+      "provides": ["cap.ai.chat", "cap.ai.chat.interrupt"],
+      "events": ["model-config-changed", "auth-changed"]
+    },
+    "cap-panel": {
+      "capabilities": ["cap.meta"],
+      "provides": [],
+      "events": []
+    },
+    "mock-auth": {
+      "capabilities": ["cap.auth"],
+      "provides": ["cap.auth"],
+      "events": []
+    },
+    "mock-engine": {
+      "capabilities": [],
+      "provides": ["cap.ai.chat", "cap.ai.chat.interrupt"],
+      "events": []
+    }
+  }
+}

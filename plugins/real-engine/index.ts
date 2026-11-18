@@ -1,17 +1,19 @@
 /**
  * real-engine 插件：真实模型供应商引擎（OpenAI 兼容 /chat/completions 流式）。
  *
- * - 供应商配置来自 config-manager（cap.config，namespace='model-admin'）；
- * - 对外提供 cap.ai.chat / cap.ai.chat.interrupt（流式，事件契约 message.delta → message.done）；
- * - 上游请求经宿主内嵌中继 /api/model-relay 转发（同源单端口；会话 cookie 鉴权，
- *   未登录/过期一律 401；CORS 由宿主同源转发解决）；对话发起方（chat-lite）
- *   只经 cap 总线调用，不接触中继/供应商细节；
- * - running map 按 sessionId::messageId 精确中断。
+ * 架构变更（2026-11 密钥下沉）：
+ * - 引擎**不再接触 API Key**：中继接受 {providerId, body}，由服务端注入 key 与上游地址；
+ * - 供应商信息经 cap.model.admin/resolveActive 取得（masked 视图：id / activeModel / 能力表）；
+ * - 因此本插件不再依赖 cap.config，也不再在浏览器里存放任何密钥；
+ * - 对外仍提供 cap.ai.chat / cap.ai.chat.interrupt（流式，message.delta → message.done）。
+ *
+ * 其它约定：
+ * - running map 按 sessionId::messageId 精确中断（并发流互不误伤）；
+ * - 中断路径必须补发 message.done，否则 UI 的「停止」按钮永远不回位。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@/core/types';
 
 const RELAY_URL = '/api/model-relay'; // 宿主内嵌中继（同源；会话 cookie 自动携带）
-const running = new Map<string, () => void>();
 
 interface ModelCaps {
   maxInputTokens: number;
@@ -20,47 +22,48 @@ interface ModelCaps {
   vision: boolean;
 }
 
-interface ProviderConfig {
+/** 引擎视角的供应商（masked：服务端只回这些字段，无 apiKey） */
+interface ActiveProvider {
   id: string;
   name: string;
   baseURL: string;
-  apiKey: string;
   models: { id: string; capabilities?: ModelCaps }[];
   activeModel: string;
   enabled: boolean;
-  isDefault?: boolean;
+  isDefault: boolean;
+  hasKey: boolean;
 }
 
-let currentProvider: ProviderConfig | null = null;
-/** 刷新供应商配置的函数引用（setup 时注入，供流式调用前兜底重试） */
+const running = new Map<string, () => void>();
+let currentProvider: ActiveProvider | null = null;
+/** 刷新供应商配置的函数引用（setup 时注入，流式调用前兜底重试） */
 let refreshProvider: () => Promise<void> = async () => {};
 
-async function relayFetch(body: unknown, apiKey: string, signal?: AbortSignal): Promise<Response> {
+async function relayFetch(body: unknown, providerId: string, signal?: AbortSignal): Promise<Response> {
   return fetch(RELAY_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providerId, body }),
     signal,
   });
 }
 
-function pickProvider(): ProviderConfig | null {
-  if (currentProvider && currentProvider.enabled && currentProvider.apiKey) return currentProvider;
-  return null;
+function pickProvider(): ActiveProvider | null {
+  return currentProvider && currentProvider.enabled && currentProvider.hasKey ? currentProvider : null;
+}
+
+function activeCaps(provider: ActiveProvider): ModelCaps | undefined {
+  return provider.models.find((m) => m.id === provider.activeModel)?.capabilities
+    ?? provider.models[0]?.capabilities;
 }
 
 /** 按供应商方言把能力字段拼进请求体（宁缺毋错传：未知字段不发送） */
-function buildCapabilityParams(provider: ProviderConfig): Record<string, unknown> {
-  const caps = provider.models.find((m) => m.id === provider.activeModel)?.capabilities
-    ?? provider.models[0]?.capabilities;
+function buildCapabilityParams(provider: ActiveProvider): Record<string, unknown> {
+  const caps = activeCaps(provider);
   if (!caps) return {};
   const out: Record<string, unknown> = {};
-  const isAnthropic = provider.baseURL.includes('anthropic');
   if (caps.maxOutputTokens > 0) out.max_tokens = caps.maxOutputTokens;
-  if (caps.effort) {
-    if (isAnthropic) out.thinking = { type: 'enabled', budget_tokens: { low: 2048, medium: 8192, high: 32768 }[caps.effort] ?? 8192 };
-    else out.reasoning_effort = caps.effort;
-  }
+  if (caps.effort) out.reasoning_effort = caps.effort;
   return out;
 }
 
@@ -70,12 +73,13 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     messageId?: string;
     prompt?: string;
     history?: { role: string; content: string }[];
+    attachments?: { name?: string; mime?: string; content?: string; textContent?: string }[];
   };
   const sessionId = payload.sessionId ?? 'unknown';
   const messageId = payload.messageId ?? 'unknown';
   const streamKey = `${sessionId}::${messageId}`;
 
-  // 兜底：流式调用前再刷一次配置（面板保存/启动时序问题都能自愈）
+  // 兜底：流式调用前再刷一次配置（登录后/面板保存后的时序问题都能自愈）
   if (!pickProvider()) {
     try { await refreshProvider(); } catch { /* 下方统一报错 */ }
   }
@@ -84,6 +88,20 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     emit({
       kind: 'stream.error',
       payload: { sessionId, messageId, message: '没有可用的模型供应商：请在「模型供应商管理」面板填写 API Key 并启用。' },
+    });
+    return;
+  }
+
+  // Anthropic 原生接口是 /v1/messages（SSE 结构也不同），当前引擎只实现 OpenAI 兼容协议：
+  // 明确拒绝而不是让上游回 404，避免"看起来能配、其实不通"。
+  if (provider.baseURL.includes('api.anthropic.com')) {
+    emit({
+      kind: 'stream.error',
+      payload: {
+        sessionId,
+        messageId,
+        message: 'Anthropic 原生接口未适配（需 /v1/messages 协议）：请改用 OpenAI 兼容中转地址。',
+      },
     });
     return;
   }
@@ -102,26 +120,18 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     ];
     // 附件：图片进 content（base64 data URL），文本拼进 prompt；
     // vision=false 的模型把图片附件降级为文本说明（不向上游发送会被拒的 image_url）
-    const attachments = (payload.attachments ?? []) as {
-      name?: string; mime?: string; content?: string; textContent?: string;
-    }[];
-    const activeCaps = provider.models.find((m) => m.id === provider.activeModel)?.capabilities
-      ?? provider.models[0]?.capabilities;
-    const visionOk = activeCaps?.vision !== false; // 缺省（未知）按支持处理，宁放行不误杀
-    const lastUser = messages[messages.length - 1];
+    const attachments = payload.attachments ?? [];
+    const caps = activeCaps(provider);
+    const visionOk = caps?.vision !== false; // 缺省（未知）按支持处理，宁放行不误杀
+    const lastUser = messages[messages.length - 1] as { role: string; content: unknown };
     if (attachments.length > 0 && lastUser?.role === 'user') {
       const parts: { type: string; text?: string; image_url?: { url: string } }[] = [];
       let textContent = typeof lastUser.content === 'string' ? lastUser.content : '';
-      let imageCount = 0;
       let imageBlocked = 0;
       for (const att of attachments) {
         if (att.content && att.mime?.startsWith('image/')) {
-          imageCount += 1;
-          if (visionOk) {
-            parts.push({ type: 'image_url', image_url: { url: att.content } });
-          } else {
-            imageBlocked += 1; // 能力表明确不支持图片：降级为文本说明
-          }
+          if (visionOk) parts.push({ type: 'image_url', image_url: { url: att.content } });
+          else imageBlocked += 1; // 能力表明确不支持图片：降级为文本说明
         } else if (att.textContent) {
           textContent += `\n\n[附件: ${att.name ?? 'file'}]\n${att.textContent}`;
         }
@@ -139,15 +149,12 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
 
     const resp = await relayFetch(
       {
-        url: `${provider.baseURL.replace(/\/$/, '')}/chat/completions`,
-        body: {
-          model: provider.activeModel || (provider.models[0]?.id ?? ''),
-          stream: true,
-          messages,
-          ...(buildCapabilityParams(provider) as Record<string, unknown>),
-        },
+        model: provider.activeModel || (provider.models[0]?.id ?? ''),
+        stream: true,
+        messages,
+        ...buildCapabilityParams(provider),
       },
-      provider.apiKey,
+      provider.id,
       abort.signal,
     );
 
@@ -156,17 +163,17 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
       let msg = `HTTP ${resp.status}`;
       try {
         const j = JSON.parse(text);
-        msg = j.error?.message ?? j.message ?? msg;
-      } catch { /* keep */ }
+        msg = j.error?.message ?? j.message ?? j.error ?? msg;
+      } catch { /* 保留 HTTP 状态描述 */ }
       if (resp.status === 401) msg = '登录已过期，请重新登录';
-      emit({ kind: 'stream.error', payload: { sessionId, messageId, message: msg } });
+      emit({ kind: 'stream.error', payload: { sessionId, messageId, message: String(msg) } });
       return;
     }
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    while (true) {
+    for (;;) {
       if (cancelled) {
         emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
         return;
@@ -183,17 +190,16 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         if (data === '[DONE]') continue;
         try {
           const json = JSON.parse(data);
+          // 兼容两类增量：常规 content 与推理模型的 reasoning_content
           const delta: string | undefined = json.choices?.[0]?.delta?.content;
-          if (delta) {
-            emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
-          }
+          if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
         } catch { /* 跳过不完整行 */ }
       }
     }
     emit({ kind: 'message.done', payload: { sessionId, messageId } });
   } catch (err) {
     if (cancelled) {
-      // 中断：必须补发 done，否则 chat-lite 的按钮永远停在「停止」态（验收 B-3 教训）
+      // 中断：必须补发 done，否则 chat-lite 的按钮永远停在「停止」态
       emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
     } else {
       emit({
@@ -230,78 +236,26 @@ export const realEnginePlugin: LitePlugin = {
   manifest: {
     id: 'real-engine',
     name: '真实模型引擎',
-    version: '0.2.0',
-    capabilities: ['cap.config', 'cap.model.admin'],
-    events: ['model-config-changed', 'config-changed'],
+    version: '0.3.0',
+    capabilities: ['cap.model.admin'],
+    events: ['model-config-changed', 'auth-changed'],
     provides: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
     contributes: { slots: [] },
   },
   setup(api: SlotHostApi) {
-    // 供应商配置来源（按优先级）：
-    // 1. cap.config 的 model-admin.providers（config-manager 权威存储）
-    // 2. cap.model.admin/resolveActive（model-admin 面板兜底，含明文 key，本机工具形态）
-    const refreshFromConfig = async (): Promise<boolean> => {
-      const res = await api.dispatch<{ value?: ProviderConfig[] }>({
-        target: 'cap.config',
-        action: 'get',
-        payload: { namespace: 'model-admin', key: 'providers' },
-      });
-      // cap.config get 带 key 返回的就是该 key 的值本身（这里 = ProviderConfig[]）
-      const providers = res.ok ? res.data?.value : undefined;
-      if (Array.isArray(providers) && providers.length) {
-        currentProvider =
-          providers.find((c) => c.isDefault && c.enabled && c.apiKey) ??
-          providers.find((c) => c.enabled && c.apiKey) ??
-          null;
-        return true;
-      }
-      return false;
-    };
-    const refreshFromAdmin = async (): Promise<boolean> => {
-      const res = await api.dispatch<{ config?: ProviderConfig }>({ target: 'cap.model.admin', action: 'resolveActive' });
-      if (res.ok && res.data?.config) {
-        currentProvider = res.data.config;
-        return true;
-      }
-      return false;
-    };
     const refresh = async () => {
-      if (!(await refreshFromConfig())) {
-        const okAdmin = await refreshFromAdmin();
-        if (!okAdmin) {
-          (window as unknown as Record<string, unknown>).__REAL_ENGINE_LAST_REFRESH__ = {
-            time: Date.now(),
-            configOk: false,
-            adminOk: false,
-          };
-        }
-      } else {
-        (window as unknown as Record<string, unknown>).__REAL_ENGINE_LAST_REFRESH__ = {
-          time: Date.now(),
-          configOk: true,
-        };
-      }
+      const res = await api.dispatch<{ config?: ActiveProvider }>({ target: 'cap.model.admin', action: 'resolveActive' });
+      currentProvider = res.ok && res.data?.config ? res.data.config : null;
     };
     refreshProvider = refresh;
 
-    // 启动重试：装配早期 cap.config/cap.model.admin 可能尚未就绪，失败后指数退避重试，
-    // 直到拿到配置（生产可用性：不依赖注册顺序）
-    let attempts = 0;
-    const refreshWithRetry = async () => {
-      while (attempts < 8 && !currentProvider) {
-        await refresh();
-        if (currentProvider) break;
-        attempts += 1;
-        await new Promise((r) => setTimeout(r, Math.min(500 * attempts, 2000)));
-      }
-    };
-    void refreshWithRetry();
-    // 配置热更新：两个来源任一变化都重拉（面板保存 / 其他插件改配置）
+    // 配置热更新：面板保存后广播 model-config-changed；登录态变化后重取（未登录时 resolveActive 会 401）
     api.listen('model-config-changed', () => void refresh());
-    api.listen('config-changed', (payload) => {
-      const p = payload as { namespace?: string };
-      if (p.namespace === 'model-admin') void refresh();
-    });
+    api.listen('auth-changed', () => void refresh());
+
+    // 启动尝试一次（若尚未登录会失败，登录后由 auth-changed 补上）
+    void refresh();
+    // 面板保存时也会直接广播，这里不额外轮询：避免未登录空转
 
     api.registerCapability.registerStreaming('cap.ai.chat', streamHandler);
     api.registerCapability.register('cap.ai.chat.interrupt', interruptHandler);

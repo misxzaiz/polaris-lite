@@ -1,111 +1,95 @@
 /**
- * 模型 API 中继核心（dev vite middleware 与 prod node server 共用）。
+ * 模型 API 中继（密钥注入点，服务端唯一出口）。
  *
- * - 路由：POST /api/model-relay（单端口 9825，同源）；
- * - 鉴权：只认宿主登录会话 cookie（getSession 由 auth-session 注入）；
- *   未登录/过期一律 401 SESSION_REQUIRED——外部 curl 无 cookie 无法使用；
- * - 上游：仅 https + 白名单域名（DEFAULT_HOSTS + plugins/relay-hosts.json）；
- *   redirect:'manual' 防 SSRF 跳转；5MB 体限制；
- * - SSE 透传：逐块 write + 背压 + X-Accel-Buffering:no；客户端断开时 abort 上游。
+ * 契约（2026-11 密钥下沉后）：
+ *   POST /api/model-relay
+ *   { providerId, path?='/chat/completions', method?='POST', body? }
+ * 浏览器**不再**持有 API Key，也不再传 url/Authorization：
+ * 服务端按 providerId 取 baseURL + key，自行拼接并转发。
+ *
+ * 约束：
+ * - 只认宿主登录会话 cookie（未登录 401）；
+ * - 上游地址过 SSRF 策略（https + 白名单 + 非私有地址）；
+ * - redirect:'manual' 防跳转绕过；请求体上限 5MB；
+ * - SSE 逐块透传 + 背压 + X-Accel-Buffering:no；客户端断开即 abort 上游。
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readJson, sendJson, BODY_LIMIT_LARGE } from './http-util.mjs';
 
-export const DEFAULT_HOSTS = [
-  'api.openai.com', 'api.deepseek.com', 'api.moonshot.cn',
-  'api.anthropic.com', 'dashscope.aliyuncs.com', 'open.bigmodel.cn',
-];
+export function createRelayMiddleware({ store, policy, getSession }) {
+  return async function relay(req, res, next) {
+    const [pathname] = (req.url ?? '').split('?');
+    if (pathname !== '/api/model-relay') return next?.();
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
 
-/** 读取自定义白名单（plugins/relay-hosts.json，面板新增供应商时追加） */
-export function loadExtraHosts() {
-  try {
-    const file = resolve(process.cwd(), 'plugins/relay-hosts.json');
-    if (existsSync(file)) return JSON.parse(readFileSync(file, 'utf8'));
-  } catch { /* ignore */ }
-  return [];
-}
+    // ① 登录态门禁（同一个 cookie 会话同时守页面与模型调用）
+    const session = getSession?.(req);
+    if (!session) return sendJson(res, 401, { error: 'unauthorized', code: 'SESSION_REQUIRED' });
 
-const BODY_LIMIT = 5e6;
-
-export function createRelayMiddleware(options = {}) {
-  const allowed = new Set([...DEFAULT_HOSTS, ...(options.extraHosts ?? loadExtraHosts())]);
-  const getSession = options.getSession; // (req) => session | null，由 auth 层注入
-
-  return function relay(req, res, next) {
-    if (req.url !== '/api/model-relay') return next?.();
-    if (req.method !== 'POST') {
-      res.writeHead(405);
-      return res.end('method not allowed');
+    let parsed;
+    try {
+      parsed = await readJson(req, BODY_LIMIT_LARGE);
+    } catch (e) {
+      return sendJson(res, e.status ?? 400, { error: e.message, code: e.code ?? 'BAD_REQUEST' });
     }
 
-    // ① 登录态门禁：只认宿主会话 cookie；未登录/过期一律 401（外部 curl 无 cookie = 401）
-    const session = getSession(req);
-    if (!session) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
+    // ② 解析供应商（key 只在服务端内存里出现，不写日志）
+    const provider = parsed.providerId ? store.get(String(parsed.providerId)) : null;
+    if (!provider) return sendJson(res, 400, { error: 'unknown provider', code: 'PROVIDER_NOT_FOUND' });
+    if (!provider.apiKey) return sendJson(res, 400, { error: 'provider has no api key', code: 'PROVIDER_NO_KEY' });
+
+    const method = parsed.method === 'GET' ? 'GET' : 'POST';
+    const path = typeof parsed.path === 'string' && parsed.path.startsWith('/') ? parsed.path : '/chat/completions';
+    const upstreamUrl = `${provider.baseURL}${path}`;
+    try {
+      policy.assertAllowedUrl(upstreamUrl);
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message, code: 'UPSTREAM_NOT_ALLOWED' });
     }
 
-    // ② 读请求体
-    let body = '';
-    req.on('data', (c) => { body += c; if (body.length > BODY_LIMIT) req.destroy(); });
-    req.on('end', () => {
-      let target;
-      let parsed;
-      try {
-        parsed = JSON.parse(body);
-        target = new URL(parsed.url);
-        if (target.protocol !== 'https:') throw new Error('only https upstream allowed');
-        if (!allowed.has(target.hostname)) {
-          throw new Error(`host not allowed: ${target.hostname}（如需支持，加入 plugins/relay-hosts.json）`);
-        }
-      } catch (e) {
-        res.writeHead(400);
-        return res.end(JSON.stringify({ error: String(e.message ?? e) }));
-      }
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${provider.apiKey}`,
+      // Anthropic 直连需要显式声明版本
+      ...(upstreamUrl.includes('api.anthropic.com') ? { 'anthropic-version': '2023-06-01' } : {}),
+    };
 
-      // ③ 转发上游：key 由请求头透传（本机工具形态）；redirect:'manual' 防 SSRF 跳转
-      const headers = { 'Content-Type': 'application/json' };
-      if (req.headers.authorization) headers.Authorization = req.headers.authorization;
-      if (req.headers['anthropic-version']) headers['anthropic-version'] = req.headers['anthropic-version'];
-      if (req.headers['anthropic-dangerous-direct-browser-access']) {
-        headers['anthropic-dangerous-direct-browser-access'] = req.headers['anthropic-dangerous-direct-browser-access'];
-      }
+    const abort = new AbortController();
+    res.on('close', () => abort.abort()); // 客户端断开（中断对话）即中止上游
 
-      const abort = new AbortController();
-      res.on('close', () => abort.abort()); // 客户端断开时中止上游（对话中断场景）
-
-      fetch(target, {
-        method: 'POST',
+    try {
+      const up = await fetch(upstreamUrl, {
+        method,
         headers,
-        body: JSON.stringify(parsed.body ?? {}),
+        body: method === 'GET' ? undefined : JSON.stringify(parsed.body ?? {}),
         redirect: 'manual',
         signal: abort.signal,
-      })
-        .then((up) => {
-          res.writeHead(up.status, {
-            'Content-Type': up.headers.get('content-type') ?? 'application/json',
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no', // 反代下禁缓冲，保证 SSE 及时下发
-          });
-          if (!up.body) return res.end();
-          const reader = up.body.getReader();
-          (async () => {
-            try {
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!res.write(Buffer.from(value))) {
-                  await new Promise((r) => res.once('drain', r)); // 背压
-                }
-              }
-            } catch { /* 客户端中断（如 real-engine abort）或上游中断 */ }
-            res.end();
-          })();
-        })
-        .catch((e) => {
-          if (!res.headersSent) res.writeHead(502);
-          res.end(JSON.stringify({ error: String(e) }));
-        });
-    });
+      });
+
+      res.writeHead(up.status, {
+        'Content-Type': up.headers.get('content-type') ?? 'application/json',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no', // 反代下禁缓冲，保证 SSE 及时下发
+      });
+      if (!up.body) return res.end();
+
+      const reader = up.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!res.write(Buffer.from(value))) {
+            await new Promise((r) => res.once('drain', r)); // 背压
+          }
+        }
+      } catch { /* 客户端中断或上游中断 */ }
+      res.end();
+    } catch (e) {
+      if (abort.signal.aborted) return; // 客户端主动断开：无需回包
+      if (!res.headersSent) {
+        sendJson(res, 502, { error: String(e?.message ?? e), code: 'UPSTREAM_FAILED' });
+      } else {
+        res.end();
+      }
+    }
   };
 }

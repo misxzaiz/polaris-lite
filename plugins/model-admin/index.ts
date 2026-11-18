@@ -1,18 +1,18 @@
 /**
- * model-admin 插件：模型供应商管理面板（含能力配置：输入/输出 token、图片识别、思考等级）。
+ * model-admin 插件：模型供应商管理面板（配置 + 能力 + 连通性 + 自动识别）。
  *
- * 职责：
- * - 供应商配置 CRUD：配置本体存 config-manager（cap.config，namespace='model-admin'），
- *   本插件做业务编排（校验/打码/默认项管理），不再自己持久化；
- * - 面板 UI：列表 / 新增编辑表单 / key 打码 / 启用开关 / 默认供应商标记 / 连通性测试；
- * - 模型条目能力编辑：maxInputTokens / maxOutputTokens / effort / vision；
- * - 配置变更时广播 model-config-changed 事件，引擎插件监听后热更新（免刷新）。
+ * 架构变更（2026-11 密钥下沉）：
+ * - 供应商配置与 API Key 存**服务端** `.polaris-lite/providers.json`；
+ *   本插件只是 `/api/providers/*` 的薄客户端，前端永不持有明文 key（getPlain 已删除）；
+ * - 能力识别（catalog/vision/effort）必须带 key，故探测在服务端执行，
+ *   浏览器只拿结论；内置知识表与结论合并仍在前端完成（表不需要 key）；
+ * - 对引擎只暴露 masked 视图：引擎不再需要 key，它把 providerId 交给中继即可。
  *
- * 安全约定：apiKey 全文只在 cap.config 存储内；对外（cap 查询/展示）一律返回 masked 值。
+ * cap.model.admin 动作：list / resolveActive / save / remove / setDefault / test / probe
  */
 import type { LitePlugin, SlotHostApi, CapabilityHandler } from '@/core/types';
 import { ModelAdminPanel, setPanelApi } from './Panel';
-import { detectProviderCapabilities } from './detect';
+import { mergeModelCaps, type ProbeFacts } from './detect';
 import './panel.css';
 
 let hostApi: SlotHostApi | null = null;
@@ -35,6 +35,7 @@ export interface ModelInfo {
   capabilities: ModelCapabilities;
 }
 
+/** 服务端存储形态（含明文 key，只存在于服务端与表单提交体） */
 export interface ProviderConfig {
   id: string;
   name: string;
@@ -46,157 +47,126 @@ export interface ProviderConfig {
   isDefault?: boolean;
 }
 
-const NS = 'model-admin';
-
-/** 内存权威缓存：读操作直接走它（同步、无闪烁），写操作穿透到 cap.config */
-let cache: ProviderConfig[] | null = null;
-
-function loadConfigs(): ProviderConfig[] {
-  return cache ?? [];
+/** 服务端回给前端的脱敏形态 */
+export interface PublicProvider {
+  id: string;
+  name: string;
+  baseURL: string;
+  keyMasked: string;
+  hasKey: boolean;
+  models: ModelInfo[];
+  activeModel: string;
+  enabled: boolean;
+  isDefault: boolean;
 }
 
-function saveConfigs(configs: ProviderConfig[]): void {
-  cache = configs;
-  void hostApi
-    ?.dispatch({ target: 'cap.config', action: 'setAll', payload: { namespace: NS, value: { providers: configs } } });
+/** 服务端 API 调用（同源、会话 cookie 自动携带；非 2xx 或 ok:false 统一抛错） */
+async function callApi<T>(path: string, body?: unknown): Promise<T> {
+  const resp = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const data = (await resp.json().catch(() => null)) as
+    | ({ ok?: boolean; error?: { message?: string } } & T)
+    | null;
+  if (!resp.ok || !data?.ok) {
+    throw new Error(data?.error?.message ?? `HTTP ${resp.status}`);
+  }
+  return data;
 }
 
-function maskKey(key: string): string {
-  if (!key) return '';
-  if (key.length <= 8) return '*'.repeat(key.length);
-  return `${key.slice(0, 3)}***${key.slice(-4)}`;
+function broadcastChange(api: SlotHostApi, configs: PublicProvider[]): void {
+  const active =
+    configs.find((c) => c.isDefault && c.enabled && c.hasKey) ??
+    configs.find((c) => c.enabled && c.hasKey) ??
+    null;
+  api.emit('model-config-changed', { configs, active });
 }
 
-function publicView(c: ProviderConfig) {
-  return { ...c, apiKey: maskKey(c.apiKey), hasKey: !!c.apiKey };
-}
-
-function broadcastChange(api: SlotHostApi): void {
-  const configs = loadConfigs();
-  const all = configs.map(publicView);
-  const activeFull =
-    configs.find((c) => c.isDefault && c.enabled && c.apiKey) ?? configs.find((c) => c.enabled && c.apiKey) ?? null;
-  const active = activeFull ? { ...activeFull, apiKey: maskKey(activeFull.apiKey), hasKey: true } : null;
-  api.emit('model-config-changed', { configs: all, active });
-}
-
-/** 初始配置：只给一组可编辑的骨架，**不内置任何 API Key**。
- *  Key 由用户在面板填写后经宿主服务端落盘（.polaris-lite/providers.json），
- *  前端永不持有明文（见 server/providers-api.mjs）。 */
-function initialConfigs(): ProviderConfig[] {
-  return [
-    {
-      id: 'default',
-      name: '默认供应商',
-      baseURL: '',
-      apiKey: '',
-      models: [],
-      activeModel: '',
-      enabled: false,
-      isDefault: true,
-    },
-  ];
-}
-
-/** cap.model.admin 动作表：list / resolveActive / get / getPlain / save / remove / setDefault / detect */
 function createAdminHandler(): CapabilityHandler {
   return async (req) => {
     const payload = (req.payload ?? {}) as { id?: string; config?: ProviderConfig; live?: boolean };
-    switch (req.action) {
-      case 'list':
-        return { configs: loadConfigs().map(publicView) };
-      case 'resolveActive': {
-        const configs = loadConfigs();
-        const active =
-          configs.find((c) => c.isDefault && c.enabled && c.apiKey) ??
-          configs.find((c) => c.enabled && c.apiKey) ??
-          null;
-        return { config: active ?? null };
-      }
-      case 'get': {
-        const found = loadConfigs().find((c) => c.id === payload.id);
-        return { config: found ? publicView(found) : null };
-      }
-      case 'getPlain': {
-        // 供面板「连通性测试」取真实 key（本机工具形态；面板展示仍用打码值）
-        const found = loadConfigs().find((c) => c.id === payload.id);
-        return { config: found ?? null };
-      }
-      case 'save': {
-        const incoming = payload.config;
-        if (!incoming?.id) return { ok: false, error: 'config.id required' };
-        const configs = loadConfigs();
-        const idx = configs.findIndex((c) => c.id === incoming.id);
-        if (idx >= 0) {
-          // 编辑：apiKey 留空 = 保持原值（表单打码回显时不覆盖）
-          const keepKey = !incoming.apiKey ? configs[idx].apiKey : incoming.apiKey;
-          configs[idx] = { ...configs[idx], ...incoming, apiKey: keepKey };
-        } else {
-          configs.push({ ...incoming, apiKey: incoming.apiKey ?? '' });
+    try {
+      switch (req.action) {
+        case 'list':
+          return await callApi<{ configs: PublicProvider[]; activeId: string | null }>('/api/providers/list');
+
+        case 'resolveActive': {
+          const { configs } = await callApi<{ configs: PublicProvider[] }>('/api/providers/list');
+          const active =
+            configs.find((c) => c.isDefault && c.enabled && c.hasKey) ??
+            configs.find((c) => c.enabled && c.hasKey) ??
+            null;
+          return { config: active }; // masked：引擎只需要 id / activeModel / 能力表
         }
-        if (incoming.isDefault) {
-          configs.forEach((c) => { if (c.id !== incoming.id) c.isDefault = false; });
+
+        case 'save': {
+          const incoming = payload.config;
+          if (!incoming?.id) return { ok: false, error: 'config.id required' };
+          const data = await callApi<{ configs: PublicProvider[] }>('/api/providers/save', { config: incoming });
+          if (hostApi) broadcastChange(hostApi, data.configs);
+          return data;
         }
-        saveConfigs(configs);
-        if (hostApi) broadcastChange(hostApi);
-        return { ok: true, configs: configs.map(publicView) };
-      }
-      case 'remove': {
-        let configs = loadConfigs().filter((c) => c.id !== payload.id);
-        if (configs.length && !configs.some((c) => c.isDefault)) configs[0].isDefault = true;
-        saveConfigs(configs);
-        if (hostApi) broadcastChange(hostApi);
-        return { ok: true, configs: configs.map(publicView) };
-      }
-      case 'setDefault': {
-        const configs = loadConfigs();
-        configs.forEach((c) => { c.isDefault = c.id === payload.id; });
-        saveConfigs(configs);
-        if (hostApi) broadcastChange(hostApi);
-        return { ok: true, configs: configs.map(publicView) };
-      }
-      case 'detect': {
-        // 能力自动识别：builtin 表 + （可选）真实链路探测；结论写回并广播。
-        // manual 编辑过的模型不被覆盖（mergeCaps 内部保护）。
-        const target = loadConfigs().find((c) => c.id === payload.id);
-        if (!target) return { ok: false, error: `provider not found: ${payload.id}` };
-        const reports = await detectProviderCapabilities(target, { live: payload.live !== false });
-        const probeReports = reports.filter((r) => r.modelId !== '__catalog__');
-        const catalogReport = reports.find((r) => r.modelId === '__catalog__');
-        const configs = loadConfigs();
-        const idx = configs.findIndex((c) => c.id === payload.id);
-        if (idx >= 0) {
-          configs[idx] = {
-            ...configs[idx],
-            models: configs[idx].models.map((m) => {
-              const r = probeReports.find((x) => x.modelId === m.id);
-              return r ? { ...m, capabilities: r.capabilities } : m;
-            }),
-          };
-          saveConfigs(configs);
-          if (hostApi) broadcastChange(hostApi);
+
+        case 'remove': {
+          const data = await callApi<{ configs: PublicProvider[] }>('/api/providers/remove', { id: payload.id });
+          if (hostApi) broadcastChange(hostApi, data.configs);
+          return data;
         }
-        return {
-          ok: true,
-          reports: probeReports,
-          catalogNotes: catalogReport?.notes ?? [],
-          configs: configs.map(publicView),
-        };
+
+        case 'setDefault': {
+          const data = await callApi<{ configs: PublicProvider[] }>('/api/providers/set-default', { id: payload.id });
+          if (hostApi) broadcastChange(hostApi, data.configs);
+          return data;
+        }
+
+        case 'test':
+          // 连通性测试：服务端持 key 直连上游，前端只拿结论
+          return await callApi<{ ok: boolean; text: string }>('/api/providers/test', { id: payload.id });
+
+        case 'probe': {
+          // 一键识别：服务端真实探测 → 前端「内置表 → 实测」合并 → 回写 models
+          const { configs } = await callApi<{ configs: PublicProvider[] }>('/api/providers/list');
+          const target = configs.find((c) => c.id === payload.id);
+          if (!target) return { ok: false, error: `provider not found: ${payload.id}` };
+
+          const facts = await callApi<ProbeFacts>('/api/providers/probe', {
+            id: payload.id,
+            live: payload.live !== false,
+          });
+
+          const mergedModels = target.models.map((m) => mergeModelCaps(m, facts));
+          const reports = mergedModels.map((r, i) => ({
+            modelId: target.models[i].id,
+            notes: r.notes,
+            source: r.model.capabilities.detected ?? 'builtin',
+          }));
+
+          const { configs: saved } = await callApi<{ configs: PublicProvider[] }>('/api/providers/save', {
+            config: { ...target, models: mergedModels.map((r) => r.model) },
+          });
+          if (hostApi) broadcastChange(hostApi, saved);
+          return { ok: true, reports, catalogNotes: facts.notes, configs: saved };
+        }
+
+        default:
+          return { ok: false, error: `unknown action: ${req.action}` };
       }
-      default:
-        return { ok: false, error: `unknown action: ${req.action}` };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   };
 }
-
-
 
 export const modelAdminPlugin: LitePlugin = {
   manifest: {
     id: 'model-admin',
     name: '模型供应商管理',
-    version: '0.2.0',
-    capabilities: ['cap.model.admin', 'cap.config'],
+    version: '0.3.0',
+    // 面板自身经总线调用本插件提供的 cap.model.admin（自调同样要过 gate，故需声明）
+    capabilities: ['cap.model.admin'],
     provides: ['cap.model.admin'],
     events: [],
     contributes: {
@@ -208,21 +178,13 @@ export const modelAdminPlugin: LitePlugin = {
     setPanelApi(api);
     api.registerCapability.register('cap.model.admin', createAdminHandler());
 
-    // 启动：优先读 cap.config 里已持久化的配置；没有则写入初始配置
-    void api
-      .dispatch<{ value?: { providers?: ProviderConfig[] } }>({
-        target: 'cap.config',
-        action: 'get',
-        payload: { namespace: NS, key: 'providers' },
+    // 启动广播一次，让引擎拿到当前生效供应商（无需等面板打开）
+    void callApi<{ configs: PublicProvider[] }>('/api/providers/list')
+      .then((data) => {
+        if (hostApi) broadcastChange(hostApi, data.configs);
       })
-      .then((res) => {
-        const persisted = res.ok ? res.data?.value?.providers : undefined;
-        if (Array.isArray(persisted) && persisted.length) {
-          cache = persisted;
-        } else {
-          saveConfigs(initialConfigs());
-        }
-        if (hostApi) broadcastChange(hostApi);
+      .catch(() => {
+        /* 未登录时 401：登录后由面板动作再次广播 */
       });
   },
 };

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": ["plugins/**/*.ts", "plugins/**/*.tsx"],
+  "exclude": ["node_modules", "plugins/*/dist", "public", "plugins/shared.plugin-config.ts", "plugins/*/vite.config.ts"]
+}

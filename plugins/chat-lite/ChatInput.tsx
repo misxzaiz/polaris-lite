@@ -11,7 +11,7 @@
  * - ↑↓ prompt 历史召回（localStorage，空输入/浏览态才接管方向键，不污染草稿）
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
-import { sendUserMessage, interruptChat, enqueuePending, flushPendingAll } from './index';
+import { sendUserMessage, interruptChat, enqueuePending } from './index';
 import { useSessionStore } from '@/core/sessionStore';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
@@ -82,9 +82,6 @@ export function ChatInput() {
   const activeId = useSessionStore((s) => s.activeId);
   const streaming = useSessionStore((s) =>
     s.sessions.find((x) => x.id === s.activeId)?.messages.some((m) => m.streaming),
-  );
-  const queueLen = useSessionStore((s) =>
-    (s.sessions.find((x) => x.id === s.activeId)?.pending?.length) ?? 0,
   );
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;

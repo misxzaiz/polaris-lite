@@ -1,17 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
-import { createAuthMiddleware } from './server/auth-session.mjs';
-import { createRelayMiddleware } from './server/relay-core.mjs';
+import { createHost } from './server/host.mjs';
 
-// 宿主内嵌 auth + 模型中继：dev(vite middleware) 与 prod(node server) 共用同一份逻辑。
-// 单端口 9825；/api/auth/* 登录会话（HttpOnly cookie），/api/model-relay 仅放行已登录会话。
+// 宿主内嵌服务端（dev 形态）：鉴权 / 供应商配置 / 模型中继 全部走 server/host.mjs，
+// 与 prod(node server) 同一份实现，避免两套行为漂移。
+// 单端口 9825；密钥只在服务端（.polaris-lite/providers.json），前端永不持有明文。
 const embeddedHost = {
   name: 'polaris-lite-embedded-host',
   configureServer(server) {
-    const auth = createAuthMiddleware();
-    server.middlewares.use(auth.middleware);
-    server.middlewares.use(createRelayMiddleware({ getSession: auth.getSession }));
+    const { middlewares } = createHost({ dataDir: process.env.PLITE_DATA_DIR });
+    for (const mw of middlewares) server.middlewares.use(mw);
   },
 };
 
@@ -24,7 +23,6 @@ export default defineConfig({
     port: 9825,
     strictPort: true,
     host: '0.0.0.0', // 允许内网穿透/局域网访问（鉴权由会话 cookie 把守）
-    // 模型 API 中继已内嵌为 /api/model-relay（见 embeddedHost），不再使用独立 9850 进程。
   },
   build: {
     target: 'es2020',

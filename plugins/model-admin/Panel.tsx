@@ -1,15 +1,10 @@
 /** 模型供应商管理面板 UI：列表 + 表单 + 逐模型能力编辑 + 连通性测试 + 能力自动识别 */
 import { useEffect, useState } from 'react';
-import type { LitePlugin, SlotHostApi } from '@/core/types';
-import type { ProviderConfig, ModelInfo } from './index';
+import type { SlotHostApi } from '@/core/types';
+import type { ProviderConfig, ModelInfo, PublicProvider } from './index';
 
 let api: SlotHostApi | null = null;
 export function setPanelApi(a: SlotHostApi | null): void { api = a; }
-
-interface PublicConfig extends Omit<ProviderConfig, 'apiKey'> {
-  apiKey: string; // 打码值
-  hasKey?: boolean;
-}
 
 interface DetectReportView {
   modelId: string;
@@ -35,8 +30,10 @@ const EFFORT_LABEL: Record<string, string> = {
 const ARM_TIMEOUT_MS = 3000;
 
 export function ModelAdminPanel() {
-  const [configs, setConfigs] = useState<PublicConfig[]>([]);
+  const [configs, setConfigs] = useState<PublicProvider[]>([]);
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
+  /** 编辑态展示用的既有 key 打码值（明文永不下发到前端） */
+  const [editingKeyMasked, setEditingKeyMasked] = useState('');
   const [isNew, setIsNew] = useState(false);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; text: string; busy?: boolean }>>({});
   const [detectResult, setDetectResult] = useState<Record<string, { ok: boolean; reports: DetectReportView[]; catalogNotes: string[]; note?: string } | { ok: false; error: string } | undefined>>({});
@@ -47,7 +44,7 @@ export function ModelAdminPanel() {
 
   const refresh = async () => {
     if (!api) return;
-    const res = await api.dispatch<{ configs: PublicConfig[] }>({ target: 'cap.model.admin', action: 'list' });
+    const res = await api.dispatch<{ configs: PublicProvider[] }>({ target: 'cap.model.admin', action: 'list' });
     if (res.ok && res.data) setConfigs(res.data.configs);
   };
 
@@ -58,12 +55,15 @@ export function ModelAdminPanel() {
   const startNew = () => {
     setIsNew(true);
     setEditing({ ...EMPTY_FORM, id: `prov-${Date.now().toString(36)}` });
+    setEditingKeyMasked('');
     setModelsText('');
   };
 
-  const startEdit = (c: PublicConfig) => {
+  const startEdit = (c: PublicProvider) => {
     setIsNew(false);
-    setEditing({ ...c, apiKey: '' }); // 打码回显：留空 = 不改
+    // apiKey 留空 = 不修改；掩码值只用于提示，不写进输入框
+    setEditing({ ...c, apiKey: '' });
+    setEditingKeyMasked(c.keyMasked);
     setModelsText(c.models.map((m) => m.id).join(', '));
   };
 
@@ -103,12 +103,12 @@ export function ModelAdminPanel() {
     await refresh();
   };
 
-  const toggleEnabled = async (c: PublicConfig) => {
+  const toggleEnabled = async (c: PublicProvider) => {
     if (!api) return;
     await api.dispatch({
       target: 'cap.model.admin',
       action: 'save',
-      payload: { config: { ...c, enabled: !c.enabled } as ProviderConfig },
+      payload: { config: { ...c, enabled: !c.enabled } },
     });
     await refresh();
   };
@@ -124,21 +124,19 @@ export function ModelAdminPanel() {
     });
   };
 
-  /** 一键识别：走 cap.model.admin/detect（内置表 + 真实链路探测），结论直接落库。
+  /** 一键识别：走 cap.model.admin/probe（服务端实测 + 前端内置表合并），结论直接落库。
    *  busy 态期间 aria-busy + pointer-events:none 物理防重复点击。 */
   const detectCapabilities = async (id: string) => {
     if (!api || detectBusy[id]) return;
     setMoreOpen(null);
     setDetectBusy((s) => ({ ...s, [id]: true }));
     setDetectResult((s) => ({ ...s, [id]: undefined }));
-    const t0 = performance.now();
     try {
       const res = await api.dispatch<{
         reports?: { modelId: string; notes: string[] }[];
         catalogNotes?: string[];
-        configs?: PublicConfig[];
-      }>({ target: 'cap.model.admin', action: 'detect', payload: { id } });
-      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+        configs?: PublicProvider[];
+      }>({ target: 'cap.model.admin', action: 'probe', payload: { id } });
       if (res.ok && res.data) {
         if (res.data.configs) setConfigs(res.data.configs);
         const anyManual = (res.data.configs ?? [])
@@ -153,48 +151,31 @@ export function ModelAdminPanel() {
           },
         }));
       } else {
-        setDetectResult((s) => ({ ...s, [id]: { ok: false, error: `识别失败：${res.error ?? '未知错误'}` } }));
+        setDetectResult((s) => ({ ...s, [id]: { ok: false, error: `识别失败：${res.error?.message ?? '未知错误'}` } }));
       }
-      void secs;
+    } catch (e) {
+      setDetectResult((s) => ({ ...s, [id]: { ok: false, error: `识别失败：${e instanceof Error ? e.message : String(e)}` } }));
     } finally {
       setDetectBusy((s) => ({ ...s, [id]: false }));
     }
   };
 
-  const testConnectivity = async (c: PublicConfig) => {
+  /** 连通性测试：服务端持 key 直连上游，前端只展示结论（不再取明文 key） */
+  const testConnectivity = async (c: PublicProvider) => {
     setTestResult((s) => ({ ...s, [c.id]: { ok: false, text: '测试中…', busy: true } }));
     const t0 = performance.now();
     try {
-      // 取该供应商的真实 key（cap.model.admin/getPlain；面板展示仍是打码值）
-      const keyRes = await api.dispatch<{ config?: { apiKey?: string } }>({
+      const res = await api!.dispatch<{ ok?: boolean; text?: string }>({
         target: 'cap.model.admin',
-        action: 'getPlain',
+        action: 'test',
         payload: { id: c.id },
       });
-      const plainKey = keyRes.data?.config?.apiKey ?? '';
-      // 走与真实对话相同的中继链路（同源 /api/model-relay，登录会话 cookie 自动携带）
-      const resp = await fetch('/api/model-relay', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${plainKey}`,
-        },
-        body: JSON.stringify({
-          url: `${c.baseURL.replace(/\/$/, '')}/chat/completions`,
-          body: { model: c.models[0]?.id ?? 'gpt-4o-mini', messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
-        }),
-      });
       const ms = Math.round(performance.now() - t0);
-      const text = await resp.text();
-      let detail = `HTTP ${resp.status}`;
-      try {
-        const j = JSON.parse(text);
-        detail = j.error?.message ?? j.message ?? detail;
-      } catch { /* keep */ }
-      setTestResult((s) => ({ ...s, [c.id]: { ok: resp.ok, text: resp.ok ? `连通 ${ms}ms` : `${detail} (${ms}ms)` } }));
+      const text = res.ok && res.data?.text ? res.data.text : (res.error?.message ?? '测试失败');
+      setTestResult((s) => ({ ...s, [c.id]: { ok: !!res.ok, text: `${text} (${ms}ms)` } }));
     } catch {
       const ms = Math.round(performance.now() - t0);
-      setTestResult((s) => ({ ...s, [c.id]: { ok: false, text: `无法连接中继 (${ms}ms)` } }));
+      setTestResult((s) => ({ ...s, [c.id]: { ok: false, text: `无法连接宿主服务 (${ms}ms)` } }));
     }
   };
 
@@ -221,7 +202,16 @@ export function ModelAdminPanel() {
           <label>Base URL</label>
           <input value={editing.baseURL} onChange={(e) => setEditing({ ...editing, baseURL: e.target.value })} placeholder="https://api.openai.com/v1" />
           <label>API Key {isNew ? '' : '(留空 = 不修改)'}</label>
-          <input type="password" value={editing.apiKey} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} placeholder="sk-..." />
+          <input
+            type="password"
+            value={editing.apiKey}
+            onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })}
+            placeholder={isNew ? 'sk-...' : (editingKeyMasked ? `当前 ${editingKeyMasked}（留空保持不变）` : '未配置')}
+            autoComplete="new-password"
+          />
+          <span className="ma-hint" style={{ marginTop: -4 }}>
+            Key 由服务端保存（.polaris-lite/providers.json），浏览器不保留明文
+          </span>
           <label>模型列表（逗号分隔；保存后可逐模型编辑能力）</label>
           <input value={modelsText} onChange={(e) => setModelsText(e.target.value)} placeholder="gpt-4o-mini, gpt-4o" />
           {editing.models.length > 0 && (
@@ -316,7 +306,7 @@ export function ModelAdminPanel() {
               </div>
               <div className="ma-meta" title={c.baseURL}>{c.baseURL}</div>
               <div className="ma-meta">
-                Key: {c.hasKey ? <code>{c.apiKey}</code> : <em>未配置</em>}
+                Key: {c.hasKey ? <code>{c.keyMasked}</code> : <em>未配置</em>}
               </div>
               {c.models.length > 0 && (
                 <div className="ma-models">

@@ -8,6 +8,7 @@
  */
 import type { ComponentType } from 'react';
 import type { LitePlugin } from '../core/types';
+import { loadGrants, resolvePolicy, type EffectivePolicy } from './policy';
 
 export interface ExternalPluginEntry {
   id: string;
@@ -79,33 +80,42 @@ function installImportMap(): void {
 export interface LoadResult {
   loaded: string[];
   failed: { id: string; error: string }[];
+  /** 授权表相关告警（未登记插件 / 被收紧的权限），由调用方在 UI 暴露 */
+  policyWarnings: string[];
 }
 
-/** 加载注册表里的全部启用插件并注册进宿主 runtime */
+/** 加载注册表里的全部启用插件并注册进宿主 runtime（权限按 grants.json 收紧） */
 export async function loadExternalPlugins(
   registryUrl: string,
-  register: (plugin: LitePlugin) => Promise<void>,
+  grantsUrl: string,
+  register: (plugin: LitePlugin, policy: EffectivePolicy) => Promise<void>,
 ): Promise<LoadResult> {
   installImportMap();
 
   const res = await fetch(registryUrl);
   if (!res.ok) throw new Error(`plugin registry fetch failed: ${res.status}`);
   const registry = (await res.json()) as PluginRegistryFile;
+  // 授权表拉取失败 → 走 unlisted 兜底（按 manifest 放行并告警），不 brick 应用
+  const grants = await loadGrants(grantsUrl);
 
   const loaded: string[] = [];
   const failed: { id: string; error: string }[] = [];
+  const policyWarnings: string[] = [];
+  if (!grants) policyWarnings.push(`授权表 ${grantsUrl} 不可用：插件权限按 manifest 自声明放行`);
 
   for (const entry of registry.plugins ?? []) {
     if (entry.enabled === false) continue;
     try {
       const url = new URL(entry.module, window.location.origin).href;
-      // 插件若有独立 CSS 产物（vite lib 模式会拆出 style.css），按约定注入 link
+      // 插件若有独立 CSS 产物（vite lib 模式会拆出 style.css），按约定注入 link；
+      // 没有 CSS 的插件会 404 —— onerror 时移除节点，避免控制台噪音与无用请求残留。
       const cssUrl = url.replace(/plugin\.js$/, 'style.css');
       if (!document.querySelector(`link[data-plugin-css="${entry.id}"]`)) {
         const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.dataset.pluginCss = entry.id;
         link.href = cssUrl;
+        link.addEventListener('error', () => link.remove(), { once: true });
         document.head.appendChild(link);
       }
       const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
@@ -114,13 +124,24 @@ export async function loadExternalPlugins(
         failed.push({ id: entry.id, error: 'module has no default plugin export' });
         continue;
       }
+      const policy = resolvePolicy(plugin.manifest, grants);
+      if (!policy.listed) {
+        policyWarnings.push(`插件 ${plugin.manifest.id} 未在 grants.json 登记，已按 manifest 自声明放行`);
+      }
+      if (policy.denied.length > 0) {
+        policyWarnings.push(
+          `插件 ${policy.pluginId} 有 ${policy.denied.length} 项权限未被授权：${policy.denied
+            .map((d) => `${d.field}/${d.item}`)
+            .join('、')}`,
+        );
+      }
       collectComponents(plugin.manifest.id, mod);
-      await register(plugin);
+      await register(plugin, policy);
       loaded.push(plugin.manifest.id);
     } catch (err) {
       failed.push({ id: entry.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  return { loaded, failed };
+  return { loaded, failed, policyWarnings };
 }

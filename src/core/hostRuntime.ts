@@ -12,23 +12,33 @@ import { CapBus } from './bus';
 import type { CapabilityHandler, StreamCapabilityHandler } from './bus';
 import { SlotRegistry } from './slotRegistry';
 import type { CapResponse, LiteManifest, LitePlugin, SlotHostApi } from './types';
+import { resolvePolicy, type EffectivePolicy } from './policy';
+
+interface RegisteredPlugin {
+  manifest: LiteManifest;
+  instance: LitePlugin;
+  /** 宿主侧授权的有效权限（manifest ∩ grants.json），否则插件可自签能力 */
+  policy: EffectivePolicy;
+}
 
 export class HostRuntime {
   readonly bus = new CapBus();
   readonly slots = new SlotRegistry();
-  private plugins = new Map<string, { manifest: LiteManifest; instance: LitePlugin }>();
+  private plugins = new Map<string, RegisteredPlugin>();
   private listeners = new Map<string, Set<(payload: unknown) => void>>();
   themeMode: 'light' | 'dark' = 'dark';
   private themeSubs = new Set<(mode: 'light' | 'dark') => void>();
 
-  /** 注册插件（构建期静态 import，或运行时动态注册均可）；重复注册幂等跳过 */
-  async registerPlugin(plugin: LitePlugin): Promise<void> {
+  /** 注册插件（构建期静态 import，或运行时动态注册均可）；重复注册幂等跳过。
+   *  policy 缺省时按 manifest 自声明解析（unlisted 语义），由调用方负责告警。 */
+  async registerPlugin(plugin: LitePlugin, policy?: EffectivePolicy): Promise<void> {
     const id = plugin.manifest.id;
     if (this.plugins.has(id)) return; // 幂等
-    this.plugins.set(id, { manifest: plugin.manifest, instance: plugin });
+    const effective = policy ?? resolvePolicy(plugin.manifest, null);
+    this.plugins.set(id, { manifest: plugin.manifest, instance: plugin, policy: effective });
     this.slots.register(id, plugin.manifest.contributes?.slots ?? []);
 
-    const api = this.createApi(plugin.manifest);
+    const api = this.createApi(plugin.manifest, effective);
     await plugin.setup?.(api);
   }
 
@@ -40,7 +50,12 @@ export class HostRuntime {
     return this.plugins.get(id)?.manifest;
   }
 
-  createApi(manifest: LiteManifest): SlotHostApi {
+  /** 有效权限表（cap.meta 自省用：面板可以看到「申请了但被收紧」的项） */
+  policyTable(): EffectivePolicy[] {
+    return [...this.plugins.values()].map((p) => p.policy);
+  }
+
+  createApi(manifest: LiteManifest, policy: EffectivePolicy = resolvePolicy(manifest, null)): SlotHostApi {
     const runtime = this;
     return {
       dispatch: <T,>(req: Parameters<SlotHostApi['dispatch']>[0]): Promise<CapResponse<T>> => {
@@ -50,7 +65,7 @@ export class HostRuntime {
           return new Promise((resolve) => {
             runtime.bus.dispatchStream(
               manifest.id,
-              manifest.capabilities,
+              policy.capabilities,
               req,
               () => undefined, // 消费者走广播通道；此处保持订阅以维持生命周期
               (ev) => runtime.broadcastStream('chat-event', { ...ev, source: 'engine' }),
@@ -59,11 +74,11 @@ export class HostRuntime {
             resolve({ ok: true, data: undefined } as CapResponse<T>);
           });
         }
-        return runtime.bus.dispatch(manifest.id, manifest.capabilities, req) as Promise<CapResponse<T>>;
+        return runtime.bus.dispatch(manifest.id, policy.capabilities, req) as Promise<CapResponse<T>>;
       },
       listen: (event, handler) => {
-        // 事件订阅 gate：仅放行 manifest.events 声明的事件名（默认拒绝）
-        const declared = manifest.events ?? [];
+        // 事件订阅 gate：仅放行被授权的（manifest ∩ grants）事件名，默认拒绝
+        const declared = policy.events;
         if (!declared.includes(event)) {
           throw new Error(`plugin ${manifest.id} is not granted event ${event}`);
         }
@@ -79,17 +94,17 @@ export class HostRuntime {
       },
       registerCapability: {
         register: (target: string, handler: CapabilityHandler) => {
-          runtime.assertProvides(manifest, target);
+          runtime.assertProvides(policy, target);
           runtime.bus.register(target, handler);
         },
         registerStreaming: (target: string, handler: StreamCapabilityHandler) => {
-          runtime.assertProvides(manifest, target);
+          runtime.assertProvides(policy, target);
           runtime.bus.registerStreaming(target, handler);
         },
       },
       registerAuthGuard: (guard) => {
-        // 只有声明提供 cap.auth 的插件才有资格安装接口级鉴权钩子（对等性：谁能认证，谁才能把门）
-        runtime.assertProvides(manifest, 'cap.auth');
+        // 只有被授权提供 cap.auth 的插件才有资格安装接口级鉴权钩子（谁能认证，谁才能把门）
+        runtime.assertProvides(policy, 'cap.auth');
         runtime.setAuthGuard(guard);
       },
       theme: {
@@ -113,11 +128,10 @@ export class HostRuntime {
     };
   }
 
-  /** 提供方校验：插件只能注册 manifest.provides 声明过的 cap（P0 修复） */
-  private assertProvides(manifest: LiteManifest, target: string): void {
-    const provides = manifest.provides ?? [];
-    if (!provides.includes(target)) {
-      throw new Error(`plugin ${manifest.id} is not declared to provide ${target}`);
+  /** 提供方校验：插件只能注册被授权 provides 的 cap（manifest ∩ grants） */
+  private assertProvides(policy: EffectivePolicy, target: string): void {
+    if (!policy.provides.includes(target)) {
+      throw new Error(`plugin ${policy.pluginId} is not declared to provide ${target}`);
     }
   }
 

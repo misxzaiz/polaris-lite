@@ -8,7 +8,6 @@
  * - 状态变化经 auth-changed 广播。
  */
 import { useState } from 'react';
-import md5 from 'md5';
 import type { AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@/core/types';
 import './auth.css';
 
@@ -70,42 +69,66 @@ async function serverStatus(): Promise<{ status: string; user?: { name: string }
   }
 }
 
+/**
+ * 总线鉴权的服务端兜底（单飞 + 3s 缓存）。
+ *
+ * 背景：壳层镜像（sessionStorage）是异步补齐的——首次带 cookie 打开页面时，
+ * 各面板的 dispatch 可能早于 mock-auth 的启动对齐完成，导致"明明已登录却被拒"。
+ * 镜像不可用时问一次服务端，并把结果回填镜像，既修竞态也修"清过 sessionStorage"的场景。
+ */
+const SERVER_AUTH_TTL_MS = 3000;
+let serverAuthCache: { at: number; authed: boolean } | null = null;
+let serverAuthInflight: Promise<boolean> | null = null;
+
+export function invalidateServerAuth(): void {
+  serverAuthCache = null;
+}
+
+async function serverAuthenticated(): Promise<boolean> {
+  if (serverAuthCache && Date.now() - serverAuthCache.at < SERVER_AUTH_TTL_MS) return serverAuthCache.authed;
+  if (serverAuthInflight) return serverAuthInflight;
+  const p = (async () => {
+    const s = await serverStatus();
+    const authed = s?.status === 'authenticated';
+    serverAuthCache = { at: Date.now(), authed };
+    // 服务端已登录但本地镜像缺失 → 回填（壳层门禁与欢迎语都用它）
+    if (authed && !readSession() && s?.user) {
+      writeSession({
+        user: { id: `u-${s.user.name}`, name: s.user.name, roles: ['owner'] },
+        token: `server-${Date.now().toString(36)}`,
+        issuedAt: Date.now(),
+      });
+      notifyChanged();
+    }
+    return authed;
+  })();
+  serverAuthInflight = p;
+  try {
+    return await p;
+  } finally {
+    serverAuthInflight = null;
+  }
+}
+
 function createAuthHandler(): CapabilityHandler {
   return (req) => {
-    const payload = (req.payload ?? {}) as { username?: string; password?: string; permission?: string };
     switch (req.action) {
       case 'status':
-        // 同步返回本地镜像（壳层门禁用）；服务端权威校验由 LoginForm 的
-        // /api/auth/status 双查与 /api/model-relay 的 401 兜底执行
+        // 同步返回本地镜像（壳层门禁需要同步判定）；服务端权威校验在登录/中继 401 处执行，
+        // 启动时另有 reconcile（见 setup）把镜像与服务端对齐。
         return currentStatus();
-      case 'login': {
-        const username = (payload.username ?? '').trim();
-        const password = payload.password ?? '';
-        if (!username) {
-          return { ok: false, error: { code: 'AUTH_INVALID_CREDENTIALS', message: '用户名不能为空' } };
-        }
-        if (password.length < 4) {
-          return { ok: false, error: { code: 'AUTH_INVALID_CREDENTIALS', message: '密码至少 4 位' } };
-        }
-        // 凭据校验/注册人判定/会话签发全部在宿主 /api/auth/login（服务端权威）
-        return { pendingServer: true, username };
-      }
       case 'logout': {
         // 服务端删会话 + 清 cookie；前端清镜像
         void fetch('/api/auth/logout', { method: 'POST' }).finally(() => {
           clearSession();
+          invalidateServerAuth();
           notifyChanged();
         });
         return { ok: true };
       }
       case 'check': {
-        const s = readSession();
-        const allowed = !!s;
+        const allowed = !!readSession();
         return { allowed, reason: allowed ? undefined : '未登录' };
-      }
-      case 'server-status': {
-        // 供异步流程获取服务端权威状态（V3 修复：不单信本地镜像）
-        return { pending: true };
       }
       default:
         return { ok: false, error: { code: 'AUTH_UNKNOWN_ACTION', message: `unknown action: ${req.action}` } };
@@ -124,25 +147,28 @@ function LoginForm() {
     setBusy(true);
     setError('');
     try {
-      // 密码先 MD5 再传输/提交（前端加密；服务端存同算法哈希比对）
+      // 密码直接经 HTTPS/同源 POST 提交；服务端用 scrypt 加盐哈希存储。
+      // （此前前端先做 md5，等于把"可重放的静态凭据"当密码用，且 md5 对安全性零收益）
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password: md5(password) }),
+        body: JSON.stringify({ username, password }),
       });
-      const data = (await res.json()) as { ok?: boolean; status?: string; user?: { name: string }; error?: { message?: string } };
+      const data = (await res.json()) as { ok?: boolean; status?: string; user?: { name: string }; expiresAt?: number; error?: { message?: string } };
       if (!res.ok || data.ok === false || data.status !== 'authenticated') {
         setError(data.error?.message ?? '登录失败');
         setBusy(false);
         return;
       }
-      // 服务端会话已签发（cookie）。镜像到 sessionStorage 供壳层门禁/欢迎语。
+      // 服务端会话已签发（cookie）。镜像到 sessionStorage 供壳层门禁/欢迎语使用。
+      const ttl = 12 * 60 * 60 * 1000;
       writeSession({
-        user: { id: `u-${data.user!.name}`, name: data.user!.name, roles: ['user'] },
+        user: { id: `u-${data.user!.name}`, name: data.user!.name, roles: ['owner'] },
         token: `server-${Date.now().toString(36)}`,
-        issuedAt: Date.now(),
+        issuedAt: data.expiresAt ? data.expiresAt - ttl : Date.now(),
       });
       notifyChanged();
+      invalidateServerAuth();
       // 壳层 useAuthGate 收到 auth-changed 后自动放行
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');
@@ -157,6 +183,7 @@ function LoginForm() {
     const logout = async () => {
       await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
       clearSession();
+      invalidateServerAuth();
       notifyChanged();
     };
     return (
@@ -222,15 +249,19 @@ function ChangeCredentialsForm() {
       const res = await fetch('/api/auth/change-credentials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newUsername, oldPassword: md5(oldPassword), newPassword: md5(newPassword) }),
+        body: JSON.stringify({ newUsername, oldPassword, newPassword }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: { message?: string } };
       if (!res.ok || data.ok === false) {
         setErr(data.error?.message ?? '修改失败');
       } else {
         setMsg('修改成功，请用新账号密码重新登录');
-        // 服务端已清除所有会话；前端同步清理回到登录视图
+        // 服务端已清除所有会话；前端同步清理并回登录视图
         sessionStorage.removeItem(SESSION_KEY);
+        invalidateServerAuth();
+        notifyChanged();
+        window.location.reload();
+        return;
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : '修改失败');
@@ -296,11 +327,30 @@ export const mockAuthPlugin: LitePlugin = {
     // 接口级检查：受保护 cap 在总线层先过登录校验。
     // 走 SlotHostApi 一等契约（宿主按 manifest.provides 校验资格），不再依赖 window 全局后门——
     // 后者在 bootstrap 时序上永远晚于插件 setup，guard 实际从未安装（已修）。
-    api.registerAuthGuard?.(() => {
+    api.registerAuthGuard?.(async () => {
       const s = readSession();
-      if (!s) return false;
-      const expired = s.issuedAt + SESSION_TTL_MS < Date.now();
-      return !expired; // 镜像判断；服务端权威校验由 /api/model-relay 自身执行
+      // 镜像有效 → 直接放行（快路径，不打网络）
+      if (s && s.issuedAt + SESSION_TTL_MS > Date.now()) return true;
+      // 镜像缺失/过期 → 以服务端为准（单飞 + 短 TTL 缓存）
+      return await serverAuthenticated();
+    });
+
+    // 启动对齐（服务端为权威）：多标签页、清过 sessionStorage、服务重启后会话仍有效等场景，
+    // 以 /api/auth/status 修正本地镜像，避免「服务端已登录但界面停在登录页」或反向的假登录态。
+    void serverStatus().then((s) => {
+      if (!s) return; // 服务端不可达：保持现状，不误清
+      const mirror = readSession();
+      if (s.status === 'authenticated' && !mirror && s.user) {
+        writeSession({
+          user: { id: `u-${s.user.name}`, name: s.user.name, roles: ['owner'] },
+          token: `server-${Date.now().toString(36)}`,
+          issuedAt: Date.now(),
+        });
+        notifyChanged();
+      } else if (s.status !== 'authenticated' && mirror) {
+        clearSession();
+        notifyChanged();
+      }
     });
   },
 };
