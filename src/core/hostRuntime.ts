@@ -26,8 +26,26 @@ export class HostRuntime {
   readonly slots = new SlotRegistry();
   private plugins = new Map<string, RegisteredPlugin>();
   private listeners = new Map<string, Set<(payload: unknown) => void>>();
-  themeMode: 'light' | 'dark' = 'dark';
+  /** 主题：启动时从 localStorage 恢复（默认浅色蓝白），并同步到 <html data-theme>，
+   *  在 main.tsx 首帧渲染前完成，避免主题闪变 */
+  themeMode: 'light' | 'dark' = HostRuntime.restoreTheme();
   private themeSubs = new Set<(mode: 'light' | 'dark') => void>();
+
+  /** 读取持久化主题并应用到 DOM；非法值回退 'light' */
+  private static restoreTheme(): 'light' | 'dark' {
+    if (typeof document === 'undefined') return 'light';
+    let mode: 'light' | 'dark' = 'light';
+    try {
+      const saved = window.localStorage.getItem(HostRuntime.THEME_KEY);
+      if (saved === 'light' || saved === 'dark') mode = saved;
+    } catch {
+      /* localStorage 不可用（隐私模式等）→ 用默认主题 */
+    }
+    document.documentElement.dataset.theme = mode;
+    return mode;
+  }
+
+  private static readonly THEME_KEY = 'plite.theme';
 
   /** 注册插件（构建期静态 import，或运行时动态注册均可）；重复注册幂等跳过。
    *  policy 缺省时按 manifest 自声明解析（unlisted 语义），由调用方负责告警。 */
@@ -124,6 +142,12 @@ export class HostRuntime {
         },
         setMode: (mode) => {
           runtime.themeMode = mode;
+          document.documentElement.dataset.theme = mode;
+          try {
+            window.localStorage.setItem(HostRuntime.THEME_KEY, mode);
+          } catch {
+            /* 持久化失败不阻断切换（会话内仍生效） */
+          }
           runtime.notifyTheme(mode);
         },
       },

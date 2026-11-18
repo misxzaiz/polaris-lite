@@ -17,10 +17,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.014);
+  background: rgba(var(--border-rgb), 0.025);
   transition: border-color var(--plite-dur), background var(--plite-dur);
 }
-.ma-item:hover { border-color: var(--border-strong); background: rgba(199, 166, 107, 0.025); }
+.ma-item:hover { border-color: var(--border-strong); background: rgba(var(--accent-rgb), 0.025); }
 .ma-item.disabled { opacity: 0.55; }
 
 .ma-item-head {
@@ -136,8 +136,8 @@
   transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
 }
 .ma-btn:hover { border-color: var(--accent); color: var(--accent-bright); background: var(--accent-soft); }
-.ma-btn.primary { background: var(--accent); border-color: var(--accent); color: #17130d; }
-.ma-btn.primary:hover { background: var(--accent-bright); color: #17130d; }
+.ma-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.ma-btn.primary:hover { background: var(--accent-bright); color: var(--on-accent); }
 .ma-btn.danger { color: var(--danger); border-color: rgba(255, 122, 122, 0.4); }
 .ma-btn.danger:hover { border-color: var(--danger); background: var(--danger-soft); }
 /* 两段式删除确认：arm 态红底，3s 超时回退 */
@@ -231,7 +231,7 @@
   font-size: var(--ctl-font);
   border: 1px solid var(--border);
   border-radius: var(--ctl-radius);
-  background: rgba(0, 0, 0, 0.16);
+  background: var(--bg-hover);
   color: var(--text);
   outline: none;
   width: 100%;
@@ -394,7 +394,7 @@
   border-radius: 50%; background: var(--text-dim); top: 2px; left: 2px; transition: 0.2s;
 }
 .ma-switch input:checked + span { background: var(--accent); }
-.ma-switch input:checked + span::before { transform: translateX(15px); background: #17130d; }
+.ma-switch input:checked + span::before { transform: translateX(15px); background: var(--on-accent); }
 .ma-more > button { display: inline-flex; align-items: center; gap: 6px; background: transparent; }
 .ma-chevron { width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg) translateY(-2px); }
 

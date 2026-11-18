@@ -1,24 +1,38 @@
 /**
- * polaris-lite 设计令牌：曜石黑 / 暖香槟金 / 编辑式排版。
+ * polaris-lite 设计令牌：双主题——「静谧蓝白」（默认，私人银行式简约）与「曜石黑」。
  * 壳层与插件共同消费；插件只读令牌，不在局部另起一套品牌色。
+ *
+ * 主题切换由宿主写 document.documentElement.dataset.theme，
+ * 本文件只描述两套令牌值；所有衍生色（边框、柔和底、焦点环）从 RGB 三元组推导，
+ * 保证插件样式里 rgba(var(--accent-rgb), a) 之类的写法在两套主题下同时成立。
  */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  /* 基础色：低饱和暖黑，避免蓝紫渐变带来的通用 SaaS 观感 */
-  --bg: #0b0b0d;
-  --bg-panel: #111114;
-  --bg-hover: #19191d;
-  --bg-elevated: #151518;
-  --border: rgba(230, 220, 200, 0.11);
-  --border-strong: rgba(210, 180, 126, 0.28);
-  --text: #ece9e2;
-  --text-soft: #b8b2a8;
-  --text-dim: #a29d94;
-  --text-faint: #79746c;
-  --accent: #c7a66b;
-  --accent-bright: #e0c28c;
-  --accent-soft: rgba(199, 166, 107, 0.1);
+  /* ===== 静谧蓝白：冷白基底 + 墨蓝文字 + 单一深蓝强调 ===== */
+  --bg: #f6f7f9;
+  --bg-panel: #ffffff;
+  --bg-hover: #eef0f4;
+  --bg-elevated: #ffffff;
+  --bg-translucent: rgba(246, 247, 249, 0.92);
+  --bg-code: #f3f5f8;
+
+  --border-rgb: 15, 23, 42;
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(29, 78, 216, 0.32);
+
+  --text: #101828;
+  --text-soft: #384255;
+  --text-dim: #5d6473;
+  --text-faint: #858ca0;
+
+  --accent-rgb: 29, 78, 216;
+  --accent: #1d4ed8;
+  --accent-bright: #3d6cf0;
+  --accent-soft: rgba(29, 78, 216, 0.07);
+  --on-accent: #ffffff;
+
+  --mask-bg: rgba(15, 23, 42, 0.34);
   --radius: 10px;
   --radius-lg: 16px;
   --plite-radius-sm: 6px;
@@ -44,20 +58,21 @@
   --plite-font-display: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
   --plite-font-mono: 'SFMono-Regular', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
 
-  /* 语义色均降低饱和度，与香槟金共存而不争抢 */
-  --plite-success: #83aa90;
-  --plite-warning: #c9a66a;
-  --plite-danger: #d17b72;
-  --plite-info: #91a7b7;
-  --plite-success-soft: rgba(131, 170, 144, 0.1);
-  --plite-warning-soft: rgba(201, 166, 106, 0.1);
-  --plite-danger-soft: rgba(209, 123, 114, 0.1);
-  --plite-info-soft: rgba(145, 167, 183, 0.1);
-  --plite-neutral-soft: rgba(152, 147, 138, 0.09);
+  /* 语义色：浅色底上加深一档，保证对比 */
+  --plite-success: #1f7a4d;
+  --plite-warning: #9a6b1f;
+  --plite-danger: #c0392f;
+  --plite-info: #35618f;
+  --plite-success-soft: rgba(31, 122, 77, 0.09);
+  --plite-warning-soft: rgba(154, 107, 31, 0.1);
+  --plite-danger-soft: rgba(192, 57, 47, 0.09);
+  --plite-info-soft: rgba(53, 97, 143, 0.09);
+  --plite-neutral-soft: rgba(93, 100, 115, 0.09);
 
   /* 焦点 / 阴影 / 动效 */
-  --plite-focus-ring: 0 0 0 3px rgba(199, 166, 107, 0.18);
-  --plite-shadow-1: 0 18px 50px rgba(0, 0, 0, 0.36);
+  --plite-focus-ring: 0 0 0 3px rgba(29, 78, 216, 0.16);
+  --plite-shadow-1: 0 18px 50px rgba(15, 23, 42, 0.1);
+  --plite-shadow-2: 0 8px 26px rgba(15, 23, 42, 0.07);
   --plite-dur: 180ms;
   --plite-dur-slow: 360ms;
   --plite-ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -69,7 +84,7 @@
   --ok-soft: var(--plite-success-soft);
   --warn: var(--plite-warning);
   --warn-soft: var(--plite-warning-soft);
-  --ring: rgba(199, 166, 107, 0.2);
+  --ring: rgba(29, 78, 216, 0.2);
   --neutral-soft: var(--plite-neutral-soft);
   --muted: var(--text-dim);
   --ctl-h: var(--plite-h-md);
@@ -79,4 +94,48 @@
   --ctl-radius: 8px;
   --ctl-focus-ring: var(--plite-focus-ring);
   --control-h: var(--plite-h-md);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* ===== 曜石黑：低饱和暖黑 + 香槟金 ===== */
+  --bg: #0b0b0d;
+  --bg-panel: #111114;
+  --bg-hover: #19191d;
+  --bg-elevated: #151518;
+  --bg-translucent: rgba(17, 17, 20, 0.96);
+  --bg-code: #09090b;
+
+  --border-rgb: 230, 220, 200;
+  --border: rgba(230, 220, 200, 0.11);
+  --border-strong: rgba(210, 180, 126, 0.28);
+
+  --text: #ece9e2;
+  --text-soft: #b8b2a8;
+  --text-dim: #a29d94;
+  --text-faint: #79746c;
+
+  --accent-rgb: 199, 166, 107;
+  --accent: #c7a66b;
+  --accent-bright: #e0c28c;
+  --accent-soft: rgba(199, 166, 107, 0.1);
+  --on-accent: #17130d;
+
+  --mask-bg: rgba(0, 0, 0, 0.74);
+
+  --plite-success: #83aa90;
+  --plite-warning: #c9a66a;
+  --plite-danger: #d17b72;
+  --plite-info: #91a7b7;
+  --plite-success-soft: rgba(131, 170, 144, 0.1);
+  --plite-warning-soft: rgba(201, 166, 106, 0.1);
+  --plite-danger-soft: rgba(209, 123, 114, 0.1);
+  --plite-info-soft: rgba(145, 167, 183, 0.1);
+  --plite-neutral-soft: rgba(152, 147, 138, 0.09);
+
+  --plite-focus-ring: 0 0 0 3px rgba(199, 166, 107, 0.18);
+  --plite-shadow-1: 0 18px 50px rgba(0, 0, 0, 0.36);
+  --plite-shadow-2: 0 8px 26px rgba(0, 0, 0, 0.16);
+  --ring: rgba(199, 166, 107, 0.2);
 }

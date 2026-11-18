@@ -15,21 +15,21 @@
   padding: 0 13px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: rgba(0, 0, 0, 0.16);
+  background: var(--bg-hover);
   color: var(--text);
   font-size: 14px;
   outline: none;
   transition: border-color var(--plite-dur), box-shadow var(--plite-dur), background var(--plite-dur);
 }
 .auth-input::placeholder { color: var(--text-faint); }
-.auth-input:focus { border-color: var(--accent); background: rgba(0, 0, 0, 0.24); box-shadow: var(--plite-focus-ring); }
+.auth-input:focus { border-color: var(--accent); background: var(--bg-hover); box-shadow: var(--plite-focus-ring); }
 .auth-submit {
   min-height: 43px;
   margin-top: 7px;
   border: 1px solid var(--accent);
   border-radius: 7px;
   background: var(--accent);
-  color: #17130d;
+  color: var(--on-accent);
   padding: 10px 14px;
   font-size: 13px;
   font-weight: 600;

@@ -11,15 +11,15 @@
   background: rgba(21, 21, 24, 0.94);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28), inset 0 1px rgba(255, 255, 255, 0.018);
+  box-shadow: var(--plite-shadow-1), inset 0 1px rgba(var(--border-rgb), 0.03);
   backdrop-filter: blur(20px);
   transition: border-color var(--plite-dur), box-shadow var(--plite-dur);
 }
 .chat-input-bar:focus-within {
   border-color: var(--border-strong);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34), 0 0 0 3px rgba(199, 166, 107, 0.055);
+  box-shadow: var(--plite-shadow-1), 0 0 0 3px rgba(var(--accent-rgb), 0.055);
 }
-.chat-input-bar:has(.chat-send.stop) { border-color: rgba(199, 166, 107, 0.25); }
+.chat-input-bar:has(.chat-send.stop) { border-color: rgba(var(--accent-rgb), 0.25); }
 .chat-input-bar::before {
   content: '';
   position: absolute;
@@ -85,7 +85,7 @@
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: var(--accent);
-  color: #17130d;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -109,7 +109,7 @@
 .chat-send.stop:hover:not(:disabled) { background: var(--plite-danger-soft); border-color: var(--plite-danger); }
 .chat-send.stop:disabled { animation: stop-wait 1.2s ease-in-out infinite; }
 @keyframes stop-wait { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.85; } }
-.chat-send.queue { background: var(--accent); border-color: var(--accent); color: #17130d; }
+.chat-send.queue { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .chat-send.queue:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
 
 .chat-input-warn {
@@ -143,7 +143,7 @@
   cursor: pointer;
   font-size: 10px;
 }
-.chat-queue-clear:hover { background: rgba(199, 166, 107, 0.1); }
+.chat-queue-clear:hover { background: rgba(var(--accent-rgb), 0.1); }
 .chat-queue-pill {
   align-self: flex-start;
   padding: 5px 10px;
@@ -163,7 +163,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 5px 7px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
 }
 .chat-attach-thumb { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .chat-attach-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 5px; }

@@ -15,7 +15,7 @@ html, body, #root {
 
 button, input, textarea, select { font-family: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
-::selection { color: var(--text); background: rgba(199, 166, 107, 0.26); }
+::selection { color: var(--text); background: rgba(var(--accent-rgb), 0.22); }
 
 /* ===== 四槽布局壳：曜石底 + 细金属分隔线 ===== */
 .polaris-lite-shell {
@@ -25,7 +25,7 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(ellipse 68% 52% at 52% -8%, rgba(199, 166, 107, 0.055), transparent 72%),
+    radial-gradient(ellipse 68% 52% at 52% -8%, rgba(var(--accent-rgb), 0.045), transparent 72%),
     var(--bg);
 }
 
@@ -33,7 +33,7 @@ button { -webkit-tap-highlight-color: transparent; }
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: rgba(17, 17, 20, 0.96);
+  background: var(--bg-translucent);
   border-right: 1px solid var(--border);
 }
 
@@ -111,7 +111,7 @@ button { -webkit-tap-highlight-color: transparent; }
   display: flex;
   flex-direction: column;
   gap: 0;
-  background: rgba(17, 17, 20, 0.96);
+  background: var(--bg-translucent);
   border-left: 1px solid var(--border);
 }
 .shell-panel > .slot { border-bottom: 1px solid var(--border); }
@@ -124,7 +124,7 @@ button { -webkit-tap-highlight-color: transparent; }
   min-height: 55px;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
-  background: rgba(17, 17, 20, 0.96);
+  background: var(--bg-translucent);
   position: sticky;
   top: 0;
   z-index: 5;
@@ -174,14 +174,14 @@ button { -webkit-tap-highlight-color: transparent; }
   justify-content: center;
   padding: env(safe-area-inset-top, 0px) 20px env(safe-area-inset-bottom, 0px);
   background:
-    radial-gradient(ellipse 60% 50% at 50% 20%, rgba(199, 166, 107, 0.08), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 50% 20%, rgba(var(--accent-rgb), 0.06), transparent 70%),
     var(--bg);
 }
 .shell-gate::before {
   content: '';
   position: absolute;
   inset: 22px;
-  border: 1px solid rgba(230, 220, 200, 0.055);
+  border: 1px solid rgba(var(--border-rgb), 0.08);
   pointer-events: none;
 }
 .shell-gate .slot-auth {
@@ -189,7 +189,7 @@ button { -webkit-tap-highlight-color: transparent; }
   width: min(92vw, 410px);
   border: 1px solid var(--border-strong);
   border-radius: 2px;
-  background: rgba(17, 17, 20, 0.9);
+  background: var(--bg-elevated);
   box-shadow: var(--plite-shadow-1);
   padding: 38px 36px 34px;
   backdrop-filter: blur(18px);
@@ -237,6 +237,10 @@ button { -webkit-tap-highlight-color: transparent; }
   z-index: 0;
   isolation: isolate;
 }
+/* sidebar 槽：条目依序排列，首个条目占满剩余高度（会话目录），
+ * 后续条目（如主题切换）自然沉底；条目内部才能用 flex:1 + overflow 滚动 */
+.shell-sidebar > .slot { display: flex; flex-direction: column; min-height: 0; }
+.shell-sidebar > .slot:not(:last-child) { flex: 1; }
 .slot-empty, .slot-error {
   display: flex;
   align-items: center;
@@ -255,9 +259,9 @@ button { -webkit-tap-highlight-color: transparent; }
   right: 0;
   z-index: 999;
   padding: 10px 18px;
-  background: rgba(35, 22, 21, 0.96);
+  background: var(--bg-elevated);
   color: var(--plite-danger);
-  border-bottom: 1px solid rgba(209, 123, 114, 0.35);
+  border-bottom: 1px solid var(--border-strong);
   font-size: 12px;
   overflow-wrap: anywhere;
   backdrop-filter: blur(16px);
@@ -292,7 +296,7 @@ button { -webkit-tap-highlight-color: transparent; }
     justify-content: space-between;
     min-height: 60px;
     padding: calc(env(safe-area-inset-top, 0px) + 8px) 14px 8px;
-    background: rgba(11, 11, 13, 0.92);
+    background: var(--bg-translucent);
     border-bottom: 1px solid var(--border);
     backdrop-filter: blur(18px);
     z-index: 30;
@@ -357,7 +361,7 @@ button { -webkit-tap-highlight-color: transparent; }
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.74);
+    background: var(--mask-bg);
     backdrop-filter: blur(5px);
     z-index: 35;
     animation: mask-in var(--plite-dur-slow) ease-out;

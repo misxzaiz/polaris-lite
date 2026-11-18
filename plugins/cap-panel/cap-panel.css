@@ -17,7 +17,7 @@
   gap: 8px;
   min-width: 0;
   padding: 9px 2px;
-  border-bottom: 1px solid rgba(230, 220, 200, 0.06);
+  border-bottom: 1px solid rgba(var(--border-rgb), 0.09);
   color: var(--text-dim);
   overflow-wrap: anywhere;
 }
@@ -27,7 +27,7 @@
 .cap-audit li {
   margin: 0;
   padding: 8px 0;
-  border-bottom: 1px solid rgba(230, 220, 200, 0.055);
+  border-bottom: 1px solid rgba(var(--border-rgb), 0.08);
   color: var(--text-dim);
   font-family: var(--plite-font-mono);
   font-size: 10px;

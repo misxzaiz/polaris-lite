@@ -1,0 +1,54 @@
+/* theme-switcher：侧栏底部主题切换。只消费宿主令牌，两套主题下同一套规则。 */
+.theme-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 12px 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+}
+.theme-switcher-label {
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.theme-switcher-options {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease);
+}
+.theme-option svg { width: 14px; height: 14px; }
+.theme-option:hover { color: var(--text); }
+.theme-option.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.theme-option:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); }
+
+@media (max-width: 768px) {
+  .theme-switcher { margin: 8px 10px 10px; }
+  .theme-option { height: 34px; } /* 触摸目标 */
+}

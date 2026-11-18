@@ -31,7 +31,7 @@
   gap: 8px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: rgba(199, 166, 107, 0.035);
+  background: rgba(var(--accent-rgb), 0.035);
   color: var(--accent-bright);
   cursor: pointer;
   font-size: 12px;
@@ -69,11 +69,11 @@
   transform: scaleY(0.4);
   transition: opacity var(--plite-dur), transform var(--plite-dur);
 }
-.chat-session-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.025); }
+.chat-session-item:hover { color: var(--text); background: var(--bg-hover); }
 .chat-session-item.active {
   color: var(--text);
-  background: linear-gradient(90deg, rgba(199, 166, 107, 0.1), rgba(199, 166, 107, 0.035));
-  border-color: rgba(199, 166, 107, 0.13);
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.035));
+  border-color: rgba(var(--accent-rgb), 0.13);
 }
 .chat-session-item.active::before { opacity: 1; transform: scaleY(1); }
 .chat-session-item .title {
@@ -182,13 +182,13 @@
   color: var(--accent-bright);
   border: 1px solid var(--border-strong);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(199, 166, 107, 0.09), transparent 68%);
-  box-shadow: 0 0 60px rgba(199, 166, 107, 0.06);
+  background: radial-gradient(circle, rgba(var(--accent-rgb), 0.09), transparent 68%);
+  box-shadow: 0 0 60px rgba(var(--accent-rgb), 0.06);
 }
 .chat-empty-logo::before, .chat-empty-logo::after {
   content: '';
   position: absolute;
-  border: 1px solid rgba(199, 166, 107, 0.09);
+  border: 1px solid rgba(var(--accent-rgb), 0.09);
   border-radius: 50%;
 }
 .chat-empty-logo::before { inset: -11px; }
@@ -226,14 +226,14 @@
   gap: 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--bg-hover);
   color: var(--text-dim);
   text-align: left;
   cursor: pointer;
   transition: border-color var(--plite-dur), background var(--plite-dur), transform var(--plite-dur);
 }
 .chat-empty-chip:hover {
-  background: rgba(199, 166, 107, 0.045);
+  background: rgba(var(--accent-rgb), 0.045);
   border-color: var(--border-strong);
   transform: translateY(-1px);
 }
@@ -259,7 +259,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.018);
+  background: var(--bg-hover);
   color: var(--text-dim);
 }
 .chat-msg.assistant .chat-avatar { color: var(--accent); border-color: var(--border-strong); }
@@ -277,10 +277,10 @@
 }
 .chat-msg.user .chat-bubble {
   padding: 10px 15px;
-  border: 1px solid rgba(199, 166, 107, 0.13);
+  border: 1px solid rgba(var(--accent-rgb), 0.13);
   border-radius: 13px 3px 13px 13px;
-  background: rgba(199, 166, 107, 0.09);
-  color: #e6e0d5;
+  background: rgba(var(--accent-rgb), 0.09);
+  color: var(--text);
   line-height: 1.7;
 }
 .chat-bubble.markdown { white-space: normal; }
@@ -322,15 +322,15 @@
   font-style: italic;
 }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
-.md a { color: var(--accent-bright); text-decoration: none; border-bottom: 1px solid rgba(224, 194, 140, 0.35); }
+.md a { color: var(--accent-bright); text-decoration: none; border-bottom: 1px solid rgba(var(--accent-rgb), 0.4); }
 .md a:hover { border-bottom-color: var(--accent-bright); }
 .md strong { color: var(--text); font-weight: 600; }
 .md del { color: var(--text-dim); }
 .md code.inline {
   padding: 2px 5px;
   border-radius: 4px;
-  background: rgba(199, 166, 107, 0.07);
-  border: 1px solid rgba(199, 166, 107, 0.12);
+  background: rgba(var(--accent-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
   font-family: var(--plite-font-mono);
   font-size: 0.9em;
   color: var(--accent-bright);
@@ -340,9 +340,9 @@
   margin: 0 0 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #09090b;
+  background: var(--bg-code);
   overflow: hidden;
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--plite-shadow-2);
 }
 .md-code-head {
   display: flex;
@@ -351,7 +351,7 @@
   gap: 8px;
   min-height: 36px;
   padding: 5px 8px 5px 13px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
   border-bottom: 1px solid var(--border);
   color: var(--text-faint);
 }
@@ -378,7 +378,7 @@
   font-family: var(--plite-font-mono);
   font-size: 12px;
   line-height: 1.75;
-  color: #d8d3ca;
+  color: var(--text-soft);
   white-space: pre;
   tab-size: 2;
 }

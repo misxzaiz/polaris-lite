@@ -69,6 +69,7 @@ const plugins = [
   { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 5 },
   { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 6 },
   { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 7, enabled: false },
+  { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 8 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

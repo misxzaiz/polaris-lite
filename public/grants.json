@@ -36,6 +36,11 @@
       "capabilities": [],
       "provides": ["cap.ai.chat", "cap.ai.chat.interrupt"],
       "events": []
+    },
+    "theme-switcher": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }
