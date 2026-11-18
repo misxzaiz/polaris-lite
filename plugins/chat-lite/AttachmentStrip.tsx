@@ -1,11 +1,9 @@
-/** 附件预览条：图片缩略图 + 文件图标卡，hover 删除 */
+/** 附件预览条：图片缩略图 + 细线文件图标。 */
 import type { Attachment } from './attachments';
 import { formatFileSize, isImageMime } from './attachments';
+import { CloseIcon, FileIcon } from './icons';
 
-export function AttachmentStrip({
-  attachments,
-  onRemove,
-}: {
+export function AttachmentStrip({ attachments, onRemove }: {
   attachments: Attachment[];
   onRemove: (id: string) => void;
 }) {
@@ -21,12 +19,14 @@ export function AttachmentStrip({
             </div>
           ) : (
             <div className="chat-attach-file">
-              <span className="chat-attach-icon">📄</span>
+              <span className="chat-attach-icon"><FileIcon /></span>
               <span className="chat-attach-name">{a.name}</span>
               <span className="chat-attach-size">{formatFileSize(a.size)}</span>
             </div>
           )}
-          <button className="chat-attach-remove" aria-label={`移除 ${a.name}`} onClick={() => onRemove(a.id)}>×</button>
+          <button className="chat-attach-remove" aria-label={`移除 ${a.name}`} onClick={() => onRemove(a.id)}>
+            <CloseIcon />
+          </button>
         </div>
       ))}
     </div>

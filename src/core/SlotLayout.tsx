@@ -1,13 +1,6 @@
 /**
- * SlotLayout：核心的四槽布局壳（对应 Polaris 对话四段式）+ auth 门禁（P1 壳层拦截）。
- *
- * 桌面（>768px）：左 sidebar | 中 stream+input | 右 panel 三栏 grid。
- * 手机（≤768px）：单栏，sidebar/panel 变抽屉，经顶栏按钮开关。
- *
- * 门禁（cap.auth 契约，宿主零插件引用）：
- * - pending → Splash；
- * - unauthenticated → 只渲染 auth 槽（登录视图，由权限插件贡献）；
- * - authenticated / open-no-provider → 四槽业务布局。
+ * SlotLayout：核心四槽布局壳 + auth 门禁。
+ * 视觉仅持有壳层；业务控件与业务样式仍由各插件提供。
  */
 import { useEffect, useState } from 'react';
 import { SlotOutlet } from './SlotOutlet';
@@ -15,7 +8,6 @@ import { useAuthGate } from './useAuthGate';
 
 export type LayoutDrawer = 'none' | 'sidebar' | 'panel';
 
-/** 核心·布局状态（手机端抽屉开关） */
 const layoutListeners = new Set<(d: LayoutDrawer) => void>();
 let currentDrawer: LayoutDrawer = 'none';
 
@@ -28,23 +20,55 @@ export function useDrawer(): LayoutDrawer {
   const [d, setD] = useState<LayoutDrawer>(currentDrawer);
   useEffect(() => {
     layoutListeners.add(setD);
-    return () => {
-      layoutListeners.delete(setD);
-    };
+    return () => { layoutListeners.delete(setD); };
   }, []);
   return d;
+}
+
+function BrandMark({ className = 'brand-mark' }: { className?: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M16 2.5 18.8 13.2 29.5 16 18.8 18.8 16 29.5 13.2 18.8 2.5 16 13.2 13.2 16 2.5Z" stroke="currentColor" strokeWidth="1.15" />
+        <path d="M16 9.5 17.35 14.65 22.5 16 17.35 17.35 16 22.5 14.65 17.35 9.5 16 14.65 14.65 16 9.5Z" fill="currentColor" fillOpacity="0.22" />
+      </svg>
+    </span>
+  );
+}
+
+function Brand() {
+  return (
+    <div className="shell-brand">
+      <BrandMark />
+      <span className="brand-copy">
+        <span className="brand-name">Polaris</span>
+        <span className="brand-edition">Lite · Private Intelligence</span>
+      </span>
+    </div>
+  );
+}
+
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 7h16M4 12h11M4 17h16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PanelIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 4v16M12 4v16M19 4v16M3 8h4M10 15h4M17 10h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function Splash() {
   return (
     <div className="shell-splash">
-      <div className="shell-brand">
-        <span className="brand-dot" />
-        <span className="brand-name">Polaris Lite</span>
-      </div>
-      <div className="splash-dots">
-        <span /><span /><span />
-      </div>
+      <Brand />
+      <div className="splash-dots" aria-label="正在载入"><span /><span /><span /></div>
     </div>
   );
 }
@@ -52,14 +76,10 @@ function Splash() {
 export function SlotLayout() {
   const drawer = useDrawer();
   const gate = useAuthGate();
-  /** 是否窄屏（抽屉形态）。桌面端不该有任何抽屉语义——包括滚动锁 */
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
   );
 
-  // 视口变化跟随：变宽时强制收起抽屉。
-  // 少了这一步，手机上开着抽屉再转横屏/拉宽窗口，body 的 overflow:hidden 会一直留着，
-  // 桌面布局看起来「卡住不能滚」。
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
     const onChange = (e: MediaQueryListEvent) => {
@@ -70,7 +90,6 @@ export function SlotLayout() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // 抽屉打开时：ESC 关闭 + 锁正文滚动（仅窄屏）
   useEffect(() => {
     if (drawer === 'none') return;
     const onKey = (e: KeyboardEvent) => {
@@ -84,18 +103,10 @@ export function SlotLayout() {
     };
   }, [drawer, narrow]);
 
-  // ===== 门禁三段式 =====
-  if (gate.state === 'pending') {
-    return <Splash />;
-  }
+  if (gate.state === 'pending') return <Splash />;
   if (gate.state === 'unauthenticated') {
-    return (
-      <main className="shell-gate">
-        <SlotOutlet slot="auth" />
-      </main>
-    );
+    return <main className="shell-gate"><SlotOutlet slot="auth" /></main>;
   }
-  // authenticated / open-no-provider → 四槽业务布局
 
   return (
     <div
@@ -103,15 +114,14 @@ export function SlotLayout() {
       data-layout="four-slot"
       data-drawer={drawer}
     >
-      {/* 手机端顶栏（桌面隐藏） */}
       <header className="shell-topbar">
         <button
-          className="topbar-btn"
+          className={`topbar-btn ${drawer === 'sidebar' ? 'active' : ''}`}
           aria-label="会话列表"
           aria-expanded={drawer === 'sidebar'}
           onClick={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
         >
-          ☰
+          <MenuIcon />
         </button>
         <span className="topbar-title">Polaris Lite</span>
         <button
@@ -120,34 +130,24 @@ export function SlotLayout() {
           aria-expanded={drawer === 'panel'}
           onClick={() => setDrawer(drawer === 'panel' ? 'none' : 'panel')}
         >
-          ⚙
+          <PanelIcon />
         </button>
       </header>
 
       <aside
         className={`shell-sidebar ${drawer === 'sidebar' ? 'open' : ''}`}
-        // 窄屏且未打开：对辅助技术隐藏（视觉上已移出屏幕，但仍在无障碍树里）
         aria-hidden={narrow && drawer !== 'sidebar' ? true : undefined}
         onClick={(e) => {
-          if ((e.target as HTMLElement).closest('.chat-session-item, .chat-session-new')) {
-            setDrawer('none');
-          }
+          if ((e.target as HTMLElement).closest('.chat-session-item, .chat-session-new')) setDrawer('none');
         }}
       >
-        <div className="shell-brand">
-          <span className="brand-dot" />
-          <span className="brand-name">Polaris Lite</span>
-        </div>
+        <Brand />
         <SlotOutlet slot="sidebar" />
       </aside>
 
       <main className="shell-main">
-        <div className="shell-stream">
-          <SlotOutlet slot="stream" />
-        </div>
-        <div className="shell-input">
-          <SlotOutlet slot="input" />
-        </div>
+        <div className="shell-stream"><SlotOutlet slot="stream" /></div>
+        <div className="shell-input"><SlotOutlet slot="input" /></div>
       </main>
 
       <aside
@@ -157,9 +157,7 @@ export function SlotLayout() {
         <SlotOutlet slot="panel" />
       </aside>
 
-      {drawer !== 'none' && (
-        <div className="drawer-mask" onClick={() => setDrawer('none')} />
-      )}
+      {drawer !== 'none' && <div className="drawer-mask" onClick={() => setDrawer('none')} />}
     </div>
   );
 }

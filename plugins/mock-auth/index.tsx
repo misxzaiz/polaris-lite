@@ -136,6 +136,21 @@ function createAuthHandler(): CapabilityHandler {
   };
 }
 
+function AuthBrand() {
+  return (
+    <div className="auth-brand" aria-label="Polaris Lite">
+      <span className="auth-brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M16 2.5 18.8 13.2 29.5 16 18.8 18.8 16 29.5 13.2 18.8 2.5 16 13.2 13.2 16 2.5Z" stroke="currentColor" strokeWidth="1.1" />
+          <path d="M16 9.5 17.35 14.65 22.5 16 17.35 17.35 16 22.5 14.65 17.35 9.5 16 14.65 14.65 16 9.5Z" fill="currentColor" fillOpacity="0.2" />
+        </svg>
+      </span>
+      <span className="auth-brand-name">POLARIS</span>
+      <span className="auth-brand-edition">Lite · Private Intelligence</span>
+    </div>
+  );
+}
+
 function LoginForm() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -198,26 +213,35 @@ function LoginForm() {
 
   return (
     <div className="auth-login">
-      <div className="auth-title">登录 Polaris Lite</div>
-      <div className="auth-sub">首登将注册为管理员（仅此一次）；之后请使用注册人账号登录</div>
-      <input
-        className="auth-input"
-        placeholder="用户名"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-      />
-      <input
-        className="auth-input"
-        type="password"
-        placeholder="密码"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-      />
+      <AuthBrand />
+      <div className="auth-title">欢迎回来</div>
+      <div className="auth-sub">进入你的私人智能空间。首次登录将创建唯一管理员账号。</div>
+      <label className="auth-field">
+        <span>账号</span>
+        <input
+          className="auth-input"
+          placeholder="用户名"
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+        />
+      </label>
+      <label className="auth-field">
+        <span>密码</span>
+        <input
+          className="auth-input"
+          type="password"
+          placeholder="至少 4 位字符"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+        />
+      </label>
       {error && <div className="auth-error">{error}</div>}
       <button className="auth-submit" onClick={submit} disabled={busy || !username || password.length < 4}>
-        {busy ? '登录中…' : '登录'}
+        {busy ? '正在验证…' : '进入 Polaris'}
       </button>
     </div>
   );

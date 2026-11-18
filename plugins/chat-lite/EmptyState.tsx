@@ -1,38 +1,35 @@
-/**
- * 对话空态：两种场景共用一套视觉，靠 variant 区分文案与引导力度。
- *
- * - no-session：全新用户，一句话都还没说（首屏）；
- * - no-message：已点「+ 新会话」，会话存在但还没消息。
- *   这是原实现最尴尬的一屏——侧栏有「新会话 0」，中间却全黑，用户不知道下一步。
- *
- * 快捷建议点击后**填入输入框**而不是直接发送：建议句多数需要改两个字再用，
- * 直接发出去反而要用户先撤回。填入走 index.ts 的 compose 通道，不引入跨组件状态。
- */
+/** 对话空态：编辑式欢迎页，建议仅填入输入框，由用户确认后发送。 */
 import { requestCompose } from './index';
+import { ArrowUpRightIcon, PolarisMark } from './icons';
 
 const SUGGESTIONS = [
-  '总结一下这段代码的作用',
-  '帮我写一个 SQL 查询',
-  '解释这个报错信息',
-  '把这段话翻译成英文',
+  { prompt: '总结一下这段代码的作用', label: '理解一段代码', category: 'CODE REVIEW' },
+  { prompt: '帮我写一个 SQL 查询', label: '构建 SQL 查询', category: 'DATABASE' },
+  { prompt: '解释这个报错信息', label: '诊断报错信息', category: 'DEBUGGING' },
+  { prompt: '把这段话翻译成英文', label: '翻译一段文字', category: 'TRANSLATION' },
 ];
 
 export function EmptyState({ variant }: { variant: 'no-session' | 'no-message' }) {
   const first = variant === 'no-session';
   return (
     <div className="chat-empty" data-testid={`chat-empty-${variant}`}>
-      <div className="chat-empty-logo" aria-hidden="true">◈</div>
-      <h2>{first ? 'Polaris Lite' : '开始新的对话'}</h2>
-      <p>{first ? '轻量版对话已就绪，试试：' : '输入消息，或从下面挑一个开头：'}</p>
+      <div className="chat-empty-logo" aria-hidden="true"><PolarisMark size={38} /></div>
+      <span className="chat-empty-eyebrow">Polaris · Private Intelligence</span>
+      <h2>{first ? '思考，从此刻展开。' : '开启一段新的对话'}</h2>
+      <p>{first ? '一个安静、专注的智能工作空间。' : '选择下面的起点，或直接输入你的想法。'}</p>
       <div className="chat-empty-chips">
-        {SUGGESTIONS.map((s) => (
-          <button key={s} className="chat-empty-chip" onClick={() => requestCompose(s)}>
-            {s}
+        {SUGGESTIONS.map((s, index) => (
+          <button key={s.prompt} className="chat-empty-chip" onClick={() => requestCompose(s.prompt)}>
+            <span className="chat-empty-chip-index">{String(index + 1).padStart(2, '0')}</span>
+            <span className="chat-empty-chip-copy">
+              <span className="chat-empty-chip-category">{s.category}</span>
+              <strong>{s.label}</strong>
+            </span>
+            <ArrowUpRightIcon />
           </button>
         ))}
       </div>
-      {!first && <span className="chat-empty-hint">也可以从左侧切回之前的会话</span>}
-      {first && <div className="chat-empty-lead" aria-hidden="true" />}
+      <span className="chat-empty-hint">{first ? '你的每一次思考，都值得被认真对待' : '也可以从左侧切回之前的会话'}</span>
     </div>
   );
 }

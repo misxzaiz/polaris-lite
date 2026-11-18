@@ -10,6 +10,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import { parseBlocks, type Block, type Inline } from './markdown-parse';
+import { CheckIcon, CopyIcon } from './icons';
 
 /** 超过该长度不再做 Markdown 解析：长文档逐帧重排会明显掉帧，退回纯文本更诚实 */
 const MARKDOWN_MAX_CHARS = 40_000;
@@ -37,7 +38,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           onClick={copy}
           title="复制代码"
         >
-          {state === 'done' ? '已复制' : state === 'fail' ? '复制失败' : '复制'}
+          {state === 'done' ? <CheckIcon /> : <CopyIcon />}
+          <span>{state === 'done' ? '已复制' : state === 'fail' ? '复制失败' : '复制'}</span>
         </button>
       </div>
       <pre>

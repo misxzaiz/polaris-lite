@@ -17,6 +17,7 @@ import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
 } from './attachments';
 import { AttachmentStrip } from './AttachmentStrip';
+import { PaperclipIcon, SendIcon, StopIcon } from './icons';
 import './chat-input.css';
 
 const MAX_CHARS = 200_000;
@@ -325,7 +326,7 @@ export function ChatInput() {
       <textarea
         ref={taRef}
         className="chat-textarea"
-        placeholder={streaming ? '流式回复中…可输入排队（Enter 入队）' : '输入消息，Enter 发送，Shift+Enter 换行，↑↓ 召回历史'}
+        placeholder={streaming ? '回复生成中，可继续输入并排入队列…' : '向 Polaris 提问，或记录一个想法…'}
         value={text}
         rows={1}
         enterKeyHint="send"
@@ -341,25 +342,27 @@ export function ChatInput() {
         onChange={handleFilePicker}
       />
       <div className="chat-input-btns">
+        <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
         <button
           className="chat-send attach"
           onClick={() => fileRef.current?.click()}
           disabled={streaming}
           title="添加附件"
+          aria-label="添加附件"
         >
-          📎
+          <PaperclipIcon />
         </button>
         {showBoth && (
-          <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}>停止</button>
+          <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}><StopIcon />停止</button>
         )}
         {showStop && !showBoth && (
           <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}>
-            {interrupting ? '停止中…' : '停止'}
+            <StopIcon />{interrupting ? '停止中…' : '停止'}
           </button>
         )}
         {!streaming && (
           <button className="chat-send" onClick={doSend} disabled={!canSend}>
-            发送
+            <SendIcon />发送
           </button>
         )}
         {streaming && (

@@ -10,6 +10,7 @@
  *     不得 import 宿主实现（`@/`、`../src/`、`../../`）或其它插件目录。
  *  2. 宿主核心（src/）不得 import 任何插件路径——核心不认识插件，只认识 @sdk 契约。
  *  3. 源码目录不得出现疑似真实密钥（`sk-` 长串）。产物里的同类检查在构建脚本中。
+ *  4. UI 源码不使用 emoji / 彩色符号字符，统一使用可控的 SVG 细线图标。
  *
  * 注：`shared.plugin-config.ts` 被各插件的 vite.config.ts 以 `../shared.plugin-config`
  * 引用，属**构建期**共享配置、不进 bundle，故允许单层向上；`../../` 才是逃逸信号。
@@ -107,4 +108,16 @@ test('源码目录不含疑似真实密钥', () => {
     }
   }
   assert.deepEqual(hits, [], `疑似密钥入库：\n  ${hits.join('\n  ')}`);
+});
+
+test('UI 源码不使用 emoji 或彩色符号图标', () => {
+  const hits = [];
+  const iconChar = /[\p{Extended_Pictographic}\u2600-\u27BF]/u;
+  for (const file of [...coreFiles, ...pluginFiles]) {
+    const lines = readFileSync(resolve(root, file), 'utf8').split('\n');
+    lines.forEach((line, index) => {
+      if (iconChar.test(line)) hits.push(`${file}:${index + 1}`);
+    });
+  }
+  assert.deepEqual(hits, [], `请使用统一 SVG 细线图标，而非 emoji / 符号字符：\n  ${hits.join('\n  ')}`);
 });

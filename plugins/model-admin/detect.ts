@@ -112,7 +112,7 @@ export function mergeModelCaps(model: ModelInfo, facts: ProbeFacts): { model: Mo
 
   // ② catalog：只确认存在性，不改能力值
   if (facts.catalogIds && !facts.catalogIds.includes(model.id)) {
-    notes.push('⚠ 上游目录未列出该模型（可能是聚合中转的别名）');
+    notes.push('注意：上游目录未列出该模型（可能是聚合中转的别名）');
   }
 
   const probe = facts.probes?.[model.id];

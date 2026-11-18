@@ -177,7 +177,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       if (settled) return;
       const prev = readContent();
       useSessionStore.getState().updateMessage(sid, assistantId, {
-        content: `${prev}${prev ? '\n\n' : ''}⚠️ 响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000}s 无新内容），已结束本次流式`,
+        content: `${prev}${prev ? '\n\n' : ''}响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000}s 无新内容），已结束本次流式`,
       });
       settle();
     }, STREAM_IDLE_TIMEOUT_MS);
@@ -209,7 +209,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       }
       const prev = readContent();
       useSessionStore.getState().updateMessage(sid, assistantId, {
-        content: `${prev}${prev ? '\n\n' : ''}⚠️ ${detail || '流式请求失败'}`,
+        content: `${prev}${prev ? '\n\n' : ''}${detail || '流式请求失败'}`,
       });
       settle();
     }

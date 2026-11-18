@@ -1,71 +1,62 @@
-/* ===== mock-auth 登录视图 ===== */
-.auth-login {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.auth-title {
-  font-size: 17px;
-  font-weight: 600;
-  text-align: center;
-  margin-bottom: 2px;
-}
-.auth-sub {
-  font-size: 11.5px;
-  color: var(--text-dim);
-  text-align: center;
-  margin-bottom: 10px;
-}
+/* mock-auth：私人会所式门禁，与曜石 / 香槟金壳层同源。 */
+.auth-login { display: flex; flex-direction: column; gap: 12px; }
+.auth-brand { display: flex; flex-direction: column; align-items: center; margin: 0 0 20px; }
+.auth-brand-mark { width: 42px; height: 42px; margin-bottom: 14px; color: var(--accent); }
+.auth-brand-mark svg { display: block; width: 100%; height: 100%; }
+.auth-brand-name { font-family: var(--plite-font-display); font-size: 24px; letter-spacing: 0.24em; line-height: 1; text-indent: 0.24em; }
+.auth-brand-edition { margin-top: 8px; color: var(--text-faint); font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; }
+.auth-title { color: var(--text); font-size: 16px; font-weight: 500; letter-spacing: 0.08em; text-align: center; }
+.auth-sub { margin: -4px 0 13px; color: var(--text-soft); font-size: 12px; line-height: 1.8; text-align: center; }
+.auth-field { display: flex; flex-direction: column; gap: 7px; }
+.auth-field > span { color: var(--text-soft); font-size: 11px; letter-spacing: 0.12em; }
 .auth-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 13px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.16);
   color: var(--text);
-  padding: 10px 12px;
   font-size: 14px;
   outline: none;
-  width: 100%;
+  transition: border-color var(--plite-dur), box-shadow var(--plite-dur), background var(--plite-dur);
 }
-.auth-input:focus { border-color: var(--accent); }
-.auth-error {
-  font-size: 12px;
-  color: #ff7a7a;
-  background: rgba(255, 122, 122, 0.1);
-  border-radius: var(--radius);
-  padding: 7px 10px;
-}
+.auth-input::placeholder { color: var(--text-faint); }
+.auth-input:focus { border-color: var(--accent); background: rgba(0, 0, 0, 0.24); box-shadow: var(--plite-focus-ring); }
 .auth-submit {
-  margin-top: 6px;
-  border: none;
-  border-radius: var(--radius);
+  min-height: 43px;
+  margin-top: 7px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
   background: var(--accent);
-  color: #fff;
-  padding: 11px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.auth-submit:disabled { opacity: 0.45; cursor: default; }
-.auth-submit:hover:not(:disabled) { filter: brightness(1.08); }
-
-/* 修改账号/密码表单 */
-.auth-chg {
-  margin: 12px 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.auth-chg-title {
-  font-size: 12px;
-  color: var(--text-dim);
+  color: #17130d;
+  padding: 10px 14px;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.09em;
+  cursor: pointer;
+  transition: background var(--plite-dur), border-color var(--plite-dur), opacity var(--plite-dur);
 }
-.auth-msg {
-  font-size: 12px;
-  color: #4cc38a;
-  background: rgba(76, 195, 138, 0.1);
-  border-radius: var(--radius);
-  padding: 7px 10px;
+.auth-submit:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
+.auth-submit:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); }
+.auth-submit:disabled { opacity: 0.35; cursor: default; }
+.auth-error, .auth-msg {
+  padding: 8px 10px;
+  border-left: 1px solid currentColor;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.auth-error { color: var(--plite-danger); background: var(--plite-danger-soft); }
+.auth-msg { color: var(--plite-success); background: var(--plite-success-soft); }
+
+/* 面板内账号安全表单 */
+.auth-chg { display: flex; flex-direction: column; gap: 9px; }
+.auth-chg-title { margin-bottom: 3px; color: var(--text-faint); font-size: 9px; letter-spacing: 0.1em; }
+.auth-chg .auth-submit { min-height: 36px; margin-top: 3px; }
+.auth-chg .auth-submit:not(:last-child) { background: transparent; color: var(--text-dim); border-color: var(--border); }
+.auth-chg .auth-submit:not(:last-child):hover { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
+.auth-chg .auth-input { height: 38px; font-size: 12px; }
+
+@media (max-width: 768px) {
+  .auth-input { font-size: 16px; }
 }

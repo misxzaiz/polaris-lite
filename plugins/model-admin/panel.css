@@ -3,17 +3,24 @@
 .model-admin { font-size: var(--plite-fs-md); }
 
 .ma-list { display: flex; flex-direction: column; gap: 8px; }
+.ma-empty { padding: 26px 8px 22px; text-align: center; color: var(--text-dim); }
+.ma-empty-mark { display: block; width: 34px; height: 34px; margin: 0 auto 14px; color: var(--accent); }
+.ma-empty-mark svg { width: 100%; height: 100%; }
+.ma-empty strong { display: block; color: var(--text); font-size: 13px; font-weight: 500; letter-spacing: 0.06em; }
+.ma-empty p { margin: 8px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.8; }
 
 /* ===== 列表卡片（三段式：head / body / foot） ===== */
 .ma-item {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 13px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  background: var(--bg);
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.014);
+  transition: border-color var(--plite-dur), background var(--plite-dur);
 }
+.ma-item:hover { border-color: var(--border-strong); background: rgba(199, 166, 107, 0.025); }
 .ma-item.disabled { opacity: 0.55; }
 
 .ma-item-head {
@@ -34,10 +41,11 @@
 .ma-badge {
   font-size: var(--plite-fs-xs);
   padding: 1px 6px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-bright);
   font-weight: 500;
+  letter-spacing: 0.04em;
 }
 .ma-badge.off { background: var(--plite-danger-soft); color: var(--plite-danger); }
 
@@ -82,8 +90,8 @@
   height: 20px;
   padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-panel);
+  border-radius: 5px;
+  background: transparent;
   font-size: 11px;
 }
 .ma-model-chip code {
@@ -118,8 +126,8 @@
 .ma-btn {
   border: 1px solid var(--border);
   border-radius: var(--ctl-radius);
-  background: var(--bg);
-  color: var(--text);
+  background: transparent;
+  color: var(--text-dim);
   height: var(--plite-h-sm);
   padding: 0 10px;
   font-size: 12px;
@@ -127,8 +135,9 @@
   -webkit-tap-highlight-color: transparent;
   transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
 }
-.ma-btn:hover { border-color: var(--accent); }
-.ma-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ma-btn:hover { border-color: var(--accent); color: var(--accent-bright); background: var(--accent-soft); }
+.ma-btn.primary { background: var(--accent); border-color: var(--accent); color: #17130d; }
+.ma-btn.primary:hover { background: var(--accent-bright); color: #17130d; }
 .ma-btn.danger { color: var(--danger); border-color: rgba(255, 122, 122, 0.4); }
 .ma-btn.danger:hover { border-color: var(--danger); background: var(--danger-soft); }
 /* 两段式删除确认：arm 态红底，3s 超时回退 */
@@ -181,8 +190,8 @@
   z-index: 20;
   min-width: 132px;
   padding: 4px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   box-shadow: var(--plite-shadow-1);
   display: flex;
@@ -222,7 +231,7 @@
   font-size: var(--ctl-font);
   border: 1px solid var(--border);
   border-radius: var(--ctl-radius);
-  background: var(--bg);
+  background: rgba(0, 0, 0, 0.16);
   color: var(--text);
   outline: none;
   width: 100%;
@@ -371,7 +380,7 @@
 .ma-test.ok { color: var(--ok); }
 .ma-test.fail { color: var(--danger); }
 
-.ma-hint { font-size: 10.5px; color: var(--text-dim); margin: 10px 0 0; line-height: 1.5; }
+.ma-hint { font-size: 11px; color: var(--text-dim); margin: 12px 0 0; line-height: 1.75; }
 
 /* 开关 */
 .ma-switch { position: relative; display: inline-block; width: 34px; height: 19px; flex-shrink: 0; }
@@ -385,7 +394,9 @@
   border-radius: 50%; background: var(--text-dim); top: 2px; left: 2px; transition: 0.2s;
 }
 .ma-switch input:checked + span { background: var(--accent); }
-.ma-switch input:checked + span::before { transform: translateX(15px); background: #fff; }
+.ma-switch input:checked + span::before { transform: translateX(15px); background: #17130d; }
+.ma-more > button { display: inline-flex; align-items: center; gap: 6px; background: transparent; }
+.ma-chevron { width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg) translateY(-2px); }
 
 /* 面板滚动条 */
 .model-admin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }

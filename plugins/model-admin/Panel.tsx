@@ -288,6 +288,17 @@ export function ModelAdminPanel() {
   return (
     <div className="cap-panel model-admin" data-testid="model-admin" onClick={() => moreOpen && setMoreOpen(null)}>
       <h3>模型供应商</h3>
+      {configs.length === 0 && (
+        <div className="ma-empty">
+          <span className="ma-empty-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="m16 4 11 6-11 6L5 10l11-6ZM5 16l11 6 11-6M5 22l11 6 11-6" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <strong>尚未接入模型</strong>
+          <p>添加一个 OpenAI 兼容供应商，<br />开始第一次对话。</p>
+        </div>
+      )}
       <div className="ma-list">
         {configs.map((c) => {
           const dr = detectResult[c.id];
@@ -330,7 +341,7 @@ export function ModelAdminPanel() {
                     aria-expanded={moreOpen === c.id}
                     onClick={(e) => { e.stopPropagation(); setMoreOpen(moreOpen === c.id ? null : c.id); }}
                   >
-                    更多 ▾
+                    更多 <span className="ma-chevron" aria-hidden="true" />
                   </button>
                   {moreOpen === c.id && (
                     <div className="ma-more-menu" role="menu">
@@ -363,7 +374,7 @@ export function ModelAdminPanel() {
               {dr && 'reports' in dr && (
                 <div className={`ma-detect-report ${dr.ok ? 'ok' : 'fail'}`}>
                   <div className="ma-detect-head">
-                    {dr.ok ? '✓ 识别完成' : '识别无结论'}
+                    {dr.ok ? '识别完成' : '识别无结论'}
                     <span className="ma-detect-sub">{dr.reports.length} 个模型</span>
                   </div>
                   {dr.reports.map((r) => (
@@ -386,7 +397,7 @@ export function ModelAdminPanel() {
           );
         })}
       </div>
-      <button className="ma-btn primary wide" onClick={startNew}>+ 新增供应商</button>
+      <button className="ma-btn primary wide" onClick={startNew}>新增供应商</button>
       <p className="ma-hint">配置保存后广播 model-config-changed，引擎插件监听后免刷新热更新；「识别模型能力」走真实链路探测（消耗少量 token），结论自动落库。</p>
     </div>
   );
