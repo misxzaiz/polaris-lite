@@ -163,6 +163,7 @@ function createAdminHandler(): CapabilityHandler {
 export const modelAdminPlugin: LitePlugin = {
   manifest: {
     id: 'model-admin',
+    // name 为插件身份名（开发者视角）；用户可见的 tab 名由 slots[].title 给出
     name: '模型供应商管理',
     version: '0.3.0',
     // 面板自身经总线调用本插件提供的 cap.model.admin（自调同样要过 gate，故需声明）
@@ -170,7 +171,8 @@ export const modelAdminPlugin: LitePlugin = {
     provides: ['cap.model.admin'],
     events: ['model-config-changed'],
     contributes: {
-      slots: [{ slot: 'panel', component: 'ModelAdminPanel', order: 2 }],
+      // tab 标签用「模型」：三连 tab 在 297px 内三等分，全称会被 ellipsis 截断
+      slots: [{ slot: 'panel', component: 'ModelAdminPanel', order: 2, title: '模型' }],
     },
   },
   setup(api) {

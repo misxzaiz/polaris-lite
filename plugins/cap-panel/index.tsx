@@ -102,10 +102,11 @@ export function CapPanel() {
 export const capPanelPlugin: LitePlugin = {
   manifest: {
     id: 'cap-panel',
+    // name 为插件身份名（开发者视角）；用户可见的 tab 名由 slots[].title 给出
     name: '能力面板',
     version: '0.1.0',
     capabilities: ['cap.meta'],
-    contributes: { slots: [{ slot: 'panel', component: 'CapPanel', order: 1 }] },
+    contributes: { slots: [{ slot: 'panel', component: 'CapPanel', order: 1, title: '能力' }] },
   },
   setup(hostApi) {
     api = hostApi;
