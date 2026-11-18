@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 9825 --strictPort --host 0.0.0.0",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && npm run check:plugins && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.plugins.json --noEmit",
-    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/server.test.mjs",
+    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/server.test.mjs tests/build.test.mjs",
     "build:plugins": "node plugins/build-plugins.mjs",
+    "check:plugins": "node plugins/build-plugins.mjs --check",
     "preview": "vite preview --port 9825 --strictPort --host 127.0.0.1",
     "start": "node server/prod-server.mjs"
   },

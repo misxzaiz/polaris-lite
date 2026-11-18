@@ -6,45 +6,376 @@
  * - 插件各自独立构建为 ESM bundle（react 外部化，由宿主 import map 提供）；
  * - 产物连同 plugin 清单复制到宿主 public/plugins/<id>/；
  * - 生成 public/plugins/registry.json，宿主启动时 fetch + 动态 import。
+ *
+ * 校验策略：**fail-fast，绝不产出「半可用」的产物集**。
+ * 以前这个脚本只做拼接，出错都推迟到运行时才以控制台告警的形式暴露——
+ * 「漏登记 grants」「manifest.id 与目录名不一致」「忘了复制 esm-shim」这类问题
+ * 全都表现为「插件静默不加载」，排查成本极高。现在一律在构建期失败并指明原因。
+ *
+ *  A. 构建前（静态一致性，零成本失败）
+ *     1. 清单条目 id / config / dist 无重复；目录、vite 配置、入口文件真实存在
+ *     2. 源码 manifest.id 必须与目录名一致（public/plugins/<dir>/ 即插件对外身份）
+ *     3. manifest.requires 的每个能力，必须有**已启用**插件在 provides 里覆盖
+ *     4. public/grants.json 必须登记该插件，且 manifest 申请项 ⊆ 授权项
+ *        （grants 是宿主侧唯一事实来源，漏登记会在运行时被静默收紧权限）
+ *  B. 构建后（产物完整性）
+ *     5. dist/plugin.js 存在且非空；有 style.css 才写进 plugin.json 的 style 字段
+ *     6. 复制到 public/plugins/<id>/ 后复核；plugin.json 回读比对
+ *     7. 产物内不得残留疑似真实密钥（sk- 长串）
+ *     8. 产物内必须含字面量 id（构建后自证身份，防止打包错入口）
+ *  C. 收尾（注册表）
+ *     9. 清理 public/plugins 下的陈旧插件目录（仅限含 plugin.json 且 id 不在清单内的）
+ *    10. registry.json 回读校验：id 唯一、每个 module 指向真实存在的文件
+ *
+ * 用法：
+ *   node plugins/build-plugins.mjs              # 校验 + 构建 + 生成注册表
+ *   node plugins/build-plugins.mjs --skip-build # 复用现有 dist，只做产物校验与注册表生成
+ *   node plugins/build-plugins.mjs --check      # 只跑静态一致性校验（CI 快速门禁）
  */
 import { execSync } from 'node:child_process';
-import { mkdirSync, cpSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  mkdirSync,
+  cpSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  rmSync,
+  readdirSync,
+} from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginsRoot = dirname(fileURLToPath(import.meta.url));
-const hostPublic = resolve(pluginsRoot, '../public/plugins');
+const hostRoot = resolve(pluginsRoot, '..');
+const hostPublic = resolve(hostRoot, 'public/plugins');
+const grantsFile = resolve(hostRoot, 'public/grants.json');
+const ESM_SHIM = 'esm-shim.mjs';
 
+const argv = new Set(process.argv.slice(2));
+const SKIP_BUILD = argv.has('--skip-build');
+const CHECK_ONLY = argv.has('--check');
+
+/**
+ * 插件清单。`order` 只决定 registry 的书写顺序与产物列表；
+ * **装配顺序由 manifest.requires 拓扑排序决定**（宿主启动时按「能力提供方先装配」排序）。
+ * mock-engine：验收/演示用途，默认停用；启用会与 real-engine 抢注 cap.ai.chat。
+ */
 const plugins = [
-  // order 只决定 registry 的书写顺序与产物列表；**装配顺序由 manifest.requires 拓扑排序决定**
-  // （宿主在启动时按「能力提供方先装配」排序），不再依赖这里的先后。
-  // mock-engine：验收/演示用途，默认停用（enabled:false）；启用会与 real-engine 抢注 cap.ai.chat。
   { id: 'config-manager', config: 'config-manager/vite.config.ts', dist: 'config-manager/dist', order: 1 },
   { id: 'chat-lite', config: 'chat-lite/vite.config.ts', dist: 'chat-lite/dist', order: 2 },
   { id: 'model-admin', config: 'model-admin/vite.config.ts', dist: 'model-admin/dist', order: 3 },
   { id: 'real-engine', config: 'real-engine/vite.config.ts', dist: 'real-engine/dist', order: 4 },
   { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 5 },
   { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 6 },
-  // mock-engine：验收/演示用途，默认停用（enabled:false）；启用会与 real-engine 抢注 cap.ai.chat
   { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 7, enabled: false },
-];
-plugins.sort((a, b) => a.order - b.order);
+].sort((a, b) => a.order - b.order);
 
-const registry = { plugins: [] };
-
-for (const p of plugins) {
-  process.stdout.write(`building ${p.id} ... `);
-  execSync(`npx vite build --config ${p.config}`, { cwd: pluginsRoot, stdio: 'inherit' });
-  const dest = resolve(hostPublic, p.id);
-  mkdirSync(dest, { recursive: true });
-  cpSync(resolve(pluginsRoot, p.dist), dest, { recursive: true });
-
-  // 每个插件的静态清单（与源码 manifest.id 一致，宿主运行时还会二次校验）
-  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js`, enabled: p.enabled ?? true };
-  writeFileSync(resolve(dest, 'plugin.json'), JSON.stringify(manifest, null, 2));
-  registry.plugins.push(manifest);
-  console.log(`ok -> public/plugins/${p.id}/plugin.js`);
+class BuildError extends Error {}
+function fail(msg) {
+  throw new BuildError(msg);
+}
+function ok(msg) {
+  console.log(`  ok  ${msg}`);
 }
 
-writeFileSync(resolve(hostPublic, 'registry.json'), JSON.stringify(registry, null, 2));
-console.log(`registry -> public/plugins/registry.json (${registry.plugins.length} plugins)`);
+/** 从插件源码里取出 manifest 对象字面量的文本（括号配对，跳过字符串与注释） */
+function extractBalanced(src, startIdx) {
+  let depth = 0;
+  let quote = null;
+  let inLine = false;
+  let inBlock = false;
+  for (let i = startIdx; i < src.length; i += 1) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (inLine) {
+      if (c === '\n') inLine = false;
+      continue;
+    }
+    if (inBlock) {
+      if (c === '*' && n === '/') {
+        inBlock = false;
+        i += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (c === '\\') {
+        i += 1;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '/' && n === '/') {
+      inLine = true;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      inBlock = true;
+      i += 1;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+      continue;
+    }
+    if (c === '{') depth += 1;
+    else if (c === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+/** 解析插件源码 manifest：id / version / capabilities / provides / requires / events */
+function readSourceManifest(p) {
+  const dir = resolve(pluginsRoot, p.id);
+  const entry = ['index.ts', 'index.tsx'].find((f) => existsSync(resolve(dir, f)));
+  if (!entry) fail(`插件 ${p.id}：目录下找不到入口 index.ts / index.tsx`);
+
+  const src = readFileSync(resolve(dir, entry), 'utf8');
+  const m = /\bmanifest\s*:\s*\{/.exec(src);
+  if (!m) fail(`插件 ${p.id}：${entry} 里找不到 manifest 对象字面量`);
+  const literal = extractBalanced(src, m.index + m[0].length - 1);
+  if (!literal) fail(`插件 ${p.id}：manifest 对象括号不闭合`);
+
+  const idMatch = /\bid\s*:\s*['"`]([^'"`]+)['"`]/.exec(literal);
+  if (!idMatch) fail(`插件 ${p.id}：manifest 缺少字符串字面量 id`);
+
+  const list = (field) => {
+    const hit = new RegExp(`\\b${field}\\s*:\\s*\\[([^\\]]*)\\]`).exec(literal);
+    if (!hit) return [];
+    if (hit[1].includes('{')) fail(`插件 ${p.id}：manifest.${field} 必须是字符串数组`);
+    return [...hit[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((x) => x[1]);
+  };
+
+  return {
+    entry,
+    id: idMatch[1],
+    version: (/\bversion\s*:\s*['"`]([^'"`]+)['"`]/.exec(literal) ?? [])[1] ?? '?',
+    capabilities: list('capabilities'),
+    provides: list('provides'),
+    requires: list('requires'),
+    events: list('events'),
+  };
+}
+
+// ============================================================================
+// A. 构建前：静态一致性校验
+// ============================================================================
+function preflight() {
+  console.log('[1/3] 静态一致性校验');
+
+  // 清单自检：id / config / dist 不得重复
+  const seen = new Map();
+  for (const key of ['id', 'config', 'dist']) {
+    const dup = plugins.filter((p, i) => plugins.findIndex((q) => q[key] === p[key]) !== i);
+    if (dup.length) fail(`插件清单 ${key} 重复：${dup.map((p) => p[key]).join('、')}`);
+    for (const p of plugins) {
+      const prev = seen.get(`${key}:${p[key]}`);
+      if (prev) fail(`插件清单 ${key} 冲突：${prev} 与 ${p.id} 都是 ${p[key]}`);
+      seen.set(`${key}:${p[key]}`, p.id);
+    }
+  }
+
+  // 目录 / vite 配置 / 入口文件
+  const manifests = new Map();
+  for (const p of plugins) {
+    if (!existsSync(resolve(pluginsRoot, p.id))) fail(`插件目录不存在：plugins/${p.id}`);
+    if (!existsSync(resolve(pluginsRoot, p.config))) fail(`插件 ${p.id}：vite 配置不存在 ${p.config}`);
+    const mf = readSourceManifest(p);
+    if (mf.id !== p.id) {
+      fail(`插件 ${p.id}：manifest.id 为 "${mf.id}"，与目录名不一致（产物会挂到 /plugins/${p.id}/ 下）`);
+    }
+    manifests.set(p.id, mf);
+  }
+  ok(`${plugins.length} 个插件的目录 / 配置 / 入口齐备，manifest.id 与目录名一致`);
+
+  // requires ⊆ 已启用插件的 provides
+  const enabled = plugins.filter((p) => p.enabled !== false);
+  const providedBy = new Map();
+  for (const p of enabled) {
+    for (const cap of manifests.get(p.id).provides) {
+      if (providedBy.has(cap)) {
+        console.warn(
+          `  warn ${cap} 同时由 ${providedBy.get(cap)} 与 ${p.id} 提供（运行时会抢占注册，请确认这是预期）`,
+        );
+      } else {
+        providedBy.set(cap, p.id);
+      }
+    }
+  }
+  const orphanRequires = [];
+  for (const p of enabled) {
+    for (const cap of manifests.get(p.id).requires) {
+      if (!providedBy.has(cap)) orphanRequires.push(`${p.id} → ${cap}`);
+    }
+  }
+  if (orphanRequires.length) {
+    fail(`以下 requires 没有任何已启用插件提供（运行期只能告警 + 依赖缺失）：\n      ${orphanRequires.join('\n      ')}`);
+  }
+  ok('manifest.requires 均已被已启用插件的 provides 覆盖');
+
+  // grants.json 交叉校验：登记 + 申请项 ⊆ 授权项
+  if (!existsSync(grantsFile)) fail(`授权表缺失：public/grants.json`);
+  let grants;
+  try {
+    grants = JSON.parse(readFileSync(grantsFile, 'utf8'));
+  } catch (err) {
+    fail(`public/grants.json 解析失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+  const granted = grants.plugins ?? {};
+  const unlisted = plugins.filter((p) => !granted[p.id]).map((p) => p.id);
+  if (unlisted.length) {
+    fail(`以下插件未在 public/grants.json 登记（运行时会被按 manifest 自声明放行并告警）：\n      ${unlisted.join('\n      ')}`);
+  }
+  const subsetIssues = [];
+  for (const p of plugins) {
+    const mf = manifests.get(p.id);
+    const g = granted[p.id] ?? {};
+    for (const field of ['capabilities', 'provides', 'events']) {
+      const allow = new Set(g[field] ?? []);
+      const missing = (mf[field] ?? []).filter((x) => !allow.has(x));
+      if (missing.length) subsetIssues.push(`${p.id}.${field} 申请未授权：${missing.join('、')}`);
+    }
+  }
+  if (subsetIssues.length) {
+    fail(`manifest 申请项超出 grants.json 授权（会被运行时收紧）：\n      ${subsetIssues.join('\n      ')}`);
+  }
+  const stale = Object.keys(granted).filter((id) => !plugins.some((p) => p.id === id));
+  if (stale.length) console.warn(`  warn public/grants.json 存在已下线插件的条目：${stale.join('、')}`);
+  ok('public/grants.json 覆盖全部插件，且无越权申请');
+
+  return manifests;
+}
+
+// ============================================================================
+// B. 构建 + 产物校验
+// ============================================================================
+const SECRET_RE = /\bsk-[A-Za-z0-9_-]{20,}/;
+
+function buildOne(p) {
+  if (SKIP_BUILD) return;
+  process.stdout.write(`  build ${p.id} ... `);
+  try {
+    execSync(`npx vite build --config ${p.config}`, { cwd: pluginsRoot, stdio: 'inherit' });
+  } catch {
+    throw new BuildError(`插件 ${p.id} 构建失败（见上方 vite 输出）`);
+  }
+  console.log('');
+}
+
+function publishOne(p) {
+  const distDir = resolve(pluginsRoot, p.dist);
+  const bundle = resolve(distDir, 'plugin.js');
+  if (!existsSync(bundle)) fail(`插件 ${p.id}：产物缺失 ${p.dist}/plugin.js`);
+  if (statSync(bundle).size === 0) fail(`插件 ${p.id}：产物 ${p.dist}/plugin.js 为空`);
+
+  const code = readFileSync(bundle, 'utf8');
+  const leak = SECRET_RE.exec(code);
+  if (leak) fail(`插件 ${p.id}：产物中疑似真实密钥 "${leak[0].slice(0, 12)}…"，已中止发布`);
+  if (!code.includes(`"${p.id}"`)) {
+    fail(`插件 ${p.id}：产物里找不到字面量 "${p.id}"，可能打包了错误入口（manifest.id 未进入 bundle）`);
+  }
+
+  const dest = resolve(hostPublic, p.id);
+  mkdirSync(dest, { recursive: true });
+  cpSync(distDir, dest, { recursive: true });
+
+  const published = resolve(dest, 'plugin.js');
+  if (!existsSync(published) || statSync(published).size !== statSync(bundle).size) {
+    fail(`插件 ${p.id}：复制到 public/plugins/${p.id}/ 后大小不一致`);
+  }
+
+  // 只有真实存在 CSS 产物时才声明 style，宿主据此决定是否注入 <link>（不再靠 404 + onerror 兜底）
+  const hasStyle = existsSync(resolve(distDir, 'style.css'));
+  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js`, enabled: p.enabled ?? true };
+  if (hasStyle) manifest.style = `/plugins/${p.id}/style.css`;
+  const manifestFile = resolve(dest, 'plugin.json');
+  writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const readBack = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  if (readBack.id !== p.id || readBack.module !== manifest.module) {
+    fail(`插件 ${p.id}：plugin.json 回读不一致`);
+  }
+  return manifest;
+}
+
+// ============================================================================
+// C. 收尾：静态资源 + 陈旧目录清理 + registry
+// ============================================================================
+function publishSharedAssets() {
+  const shim = resolve(pluginsRoot, ESM_SHIM);
+  if (!existsSync(shim)) fail(`缺少 ESM shim：plugins/${ESM_SHIM}`);
+  mkdirSync(hostPublic, { recursive: true });
+  cpSync(shim, resolve(hostPublic, ESM_SHIM));
+  // 这是插件能否加载的前置条件（import map 指向它）；以前靠手工复制，clean 后会整体崩掉
+  ok(`已发布 ${ESM_SHIM}`);
+}
+
+function pruneStale() {
+  if (!existsSync(hostPublic)) return;
+  const keep = new Set(plugins.map((p) => p.id));
+  const removed = [];
+  for (const name of readdirSync(hostPublic, { withFileTypes: true })) {
+    if (!name.isDirectory() || keep.has(name.name)) continue;
+    const owner = resolve(hostPublic, name.name, 'plugin.json');
+    if (!existsSync(owner)) continue; // 不是构建产物，不动
+    rmSync(resolve(hostPublic, name.name), { recursive: true, force: true });
+    removed.push(name.name);
+  }
+  if (removed.length) ok(`清理陈旧插件产物：${removed.join('、')}`);
+}
+
+function writeRegistry(entries) {
+  const registry = { plugins: entries };
+  const file = resolve(hostPublic, 'registry.json');
+  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`);
+
+  // 回读校验：id 唯一 + 每个 module 指向真实文件
+  const readBack = JSON.parse(readFileSync(file, 'utf8'));
+  const ids = readBack.plugins.map((x) => x.id);
+  const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (dup.length) fail(`registry.json id 重复：${dup.join('、')}`);
+  for (const entry of readBack.plugins) {
+    const target = resolve(hostPublic, entry.module.replace(/^\/plugins\//, ''));
+    if (!existsSync(target)) fail(`registry 指向的文件不存在：${entry.module}`);
+  }
+  ok(`registry.json（${readBack.plugins.length} 个插件）回读校验通过`);
+}
+
+// ============================================================================
+// main
+// ============================================================================
+try {
+  const manifests = preflight();
+  if (CHECK_ONLY) {
+    console.log('\n--check：静态校验通过，未构建。');
+    process.exit(0);
+  }
+
+  console.log(`\n[2/3] ${SKIP_BUILD ? '复用现有产物（--skip-build）' : '构建插件'}`);
+  const entries = [];
+  for (const p of plugins) {
+    buildOne(p);
+    const manifest = publishOne(p);
+    entries.push(manifest);
+    ok(`${p.id} v${manifests.get(p.id).version} -> ${manifest.module}${manifest.style ? ' + style.css' : ''}`);
+  }
+
+  console.log('\n[3/3] 收尾');
+  publishSharedAssets();
+  pruneStale();
+  writeRegistry(entries);
+
+  console.log('\n构建完成：public/plugins/');
+} catch (err) {
+  if (err instanceof BuildError) {
+    console.error(`\n✖ 构建中止：${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+}

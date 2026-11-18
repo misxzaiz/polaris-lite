@@ -19,6 +19,12 @@ export interface ExternalPluginEntry {
   id: string;
   /** 插件 bundle 的 URL（相对宿主根） */
   module: string;
+  /**
+   * 插件的 CSS 产物 URL（相对宿主根）。由构建脚本按「dist 里是否真有 style.css」写入：
+   * 有才登记，没有就不登记。宿主据此决定是否注入 <link>——
+   * 以前是无条件按约定拼出 style.css 路径，让没有样式的插件吃一个 404 再靠 onerror 移除节点。
+   */
+  style?: string;
   /** 是否启用 */
   enabled?: boolean;
 }
@@ -119,15 +125,14 @@ export async function loadExternalPlugins(
     if (entry.enabled === false) continue;
     try {
       const url = new URL(entry.module, window.location.origin).href;
-      // 插件若有独立 CSS 产物（vite lib 模式会拆出 style.css），按约定注入 link；
-      // 没有 CSS 的插件会 404 —— onerror 时移除节点，避免控制台噪音与无用请求残留。
-      const cssUrl = url.replace(/plugin\.js$/, 'style.css');
-      if (!document.querySelector(`link[data-plugin-css="${entry.id}"]`)) {
+      // 插件若有独立 CSS 产物（vite lib 模式会拆出 style.css），构建脚本会在 plugin.json 里
+      // 登记 style 字段；没登记就说明没有样式，不再盲拼地址吃 404。
+      const cssUrl = entry.style ? new URL(entry.style, window.location.origin).href : null;
+      if (cssUrl && !document.querySelector(`link[data-plugin-css="${entry.id}"]`)) {
         const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.dataset.pluginCss = entry.id;
         link.href = cssUrl;
-        link.addEventListener('error', () => link.remove(), { once: true });
         document.head.appendChild(link);
       }
       const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
