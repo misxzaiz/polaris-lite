@@ -6,9 +6,28 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#0f1117" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="icon" href="data:," />
     <title>Polaris Lite</title>
+    <!--
+      主题引导：必须内联且在样式/模块之前执行。
+      1) 首帧即为正确配色，不出现「先黑后白」闪变；
+      2) 即使 JS bundle 加载失败，页面也不会停在错误主题上；
+      3) 默认白色为主——只有用户显式选过深色才用深色。
+    -->
+    <script>
+      (function () {
+        var mode = 'light';
+        try {
+          if (localStorage.getItem('plite.theme') === 'dark') mode = 'dark';
+        } catch (e) {
+          /* localStorage 不可用（隐私模式）→ 保持默认白 */
+        }
+        document.documentElement.dataset.theme = mode;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', mode === 'dark' ? '#0b0b0d' : '#ffffff');
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

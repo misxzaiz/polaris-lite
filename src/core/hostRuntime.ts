@@ -31,18 +31,25 @@ export class HostRuntime {
   themeMode: 'light' | 'dark' = HostRuntime.restoreTheme();
   private themeSubs = new Set<(mode: 'light' | 'dark') => void>();
 
-  /** 读取持久化主题并应用到 DOM；非法值回退 'light' */
+  /** 读取持久化主题并应用到 DOM；非法值/无值均回退 'light'（白色为主） */
   private static restoreTheme(): 'light' | 'dark' {
     if (typeof document === 'undefined') return 'light';
     let mode: 'light' | 'dark' = 'light';
     try {
       const saved = window.localStorage.getItem(HostRuntime.THEME_KEY);
-      if (saved === 'light' || saved === 'dark') mode = saved;
+      if (saved === 'dark') mode = 'dark';
     } catch {
       /* localStorage 不可用（隐私模式等）→ 用默认主题 */
     }
-    document.documentElement.dataset.theme = mode;
+    HostRuntime.applyTheme(mode);
     return mode;
+  }
+
+  /** 主题落地到 DOM：data-theme + 浏览器 UI 主题色（移动端地址栏跟随） */
+  private static applyTheme(mode: 'light' | 'dark'): void {
+    document.documentElement.dataset.theme = mode;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', mode === 'dark' ? '#0b0b0d' : '#ffffff');
   }
 
   private static readonly THEME_KEY = 'plite.theme';
@@ -142,7 +149,7 @@ export class HostRuntime {
         },
         setMode: (mode) => {
           runtime.themeMode = mode;
-          document.documentElement.dataset.theme = mode;
+          HostRuntime.applyTheme(mode);
           try {
             window.localStorage.setItem(HostRuntime.THEME_KEY, mode);
           } catch {

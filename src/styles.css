@@ -25,7 +25,7 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 100dvh;
   overflow: hidden;
   background:
-    radial-gradient(ellipse 68% 52% at 52% -8%, rgba(var(--accent-rgb), 0.045), transparent 72%),
+    radial-gradient(ellipse 68% 52% at 52% -8%, rgba(var(--accent-rgb), 0.022), transparent 72%),
     var(--bg);
 }
 
@@ -174,7 +174,7 @@ button { -webkit-tap-highlight-color: transparent; }
   justify-content: center;
   padding: env(safe-area-inset-top, 0px) 20px env(safe-area-inset-bottom, 0px);
   background:
-    radial-gradient(ellipse 60% 50% at 50% 20%, rgba(var(--accent-rgb), 0.06), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 50% 20%, rgba(var(--accent-rgb), 0.04), transparent 70%),
     var(--bg);
 }
 .shell-gate::before {

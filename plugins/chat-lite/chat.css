@@ -166,6 +166,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* 空态块在 flex 列里会占满可用高度，内容需自身垂直居中，否则下方留大片空白 */
+  justify-content: center;
   text-align: center;
   color: var(--text-dim);
   animation: empty-enter 700ms var(--plite-ease) both;
