@@ -1,0 +1,50 @@
+/**
+ * cap-panel 自有样式（能力清单 / 授权策略 / 审计列表）。
+ *
+ * 这些规则原先写在宿主 src/styles.css —— 宿主样式表里出现 .cap-* 等于核心仍然
+ * 知道「能力面板」这个业务插件长什么样。与 chat-lite 的 .chat-* 一并下沉后，
+ * 核心只剩 .shell-*（四槽布局壳）与 .slot-*（槽容器）。
+ */
+
+.cap-panel { padding: 14px 16px; }
+.cap-panel h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.cap-list { display: flex; flex-direction: column; gap: 6px; }
+.cap-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cap-item code { color: var(--accent); font-family: 'JetBrains Mono', Consolas, monospace; }
+.cap-audit { margin-top: 14px; }
+.cap-audit li {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere; /* 长 cap 名折行，不撑出抽屉横向滚动（验收 A-4） */
+}
+.cap-status { color: var(--plite-success); }
+.cap-status.fail { color: var(--plite-danger); }
+
+/* 细滚动条（面板在移动端是抽屉，可纵向滚动） */
+@supports (scrollbar-width: thin) {
+  .cap-panel { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+}
+.cap-panel::-webkit-scrollbar { width: 6px; height: 6px; }
+.cap-panel::-webkit-scrollbar-track { background: transparent; }
+.cap-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.cap-panel::-webkit-scrollbar-thumb:hover { background: #3a4157; }

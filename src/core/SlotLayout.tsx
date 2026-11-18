@@ -52,14 +52,37 @@ function Splash() {
 export function SlotLayout() {
   const drawer = useDrawer();
   const gate = useAuthGate();
+  /** 是否窄屏（抽屉形态）。桌面端不该有任何抽屉语义——包括滚动锁 */
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
+  );
 
-  // 手机端：打开任一抽屉时锁正文滚动（body 级）
+  // 视口变化跟随：变宽时强制收起抽屉。
+  // 少了这一步，手机上开着抽屉再转横屏/拉宽窗口，body 的 overflow:hidden 会一直留着，
+  // 桌面布局看起来「卡住不能滚」。
   useEffect(() => {
-    document.body.style.overflow = drawer !== 'none' ? 'hidden' : '';
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => {
+      setNarrow(e.matches);
+      if (!e.matches) setDrawer('none');
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // 抽屉打开时：ESC 关闭 + 锁正文滚动（仅窄屏）
+  useEffect(() => {
+    if (drawer === 'none') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrawer('none');
+    };
+    window.addEventListener('keydown', onKey);
+    if (narrow) document.body.style.overflow = 'hidden';
     return () => {
+      window.removeEventListener('keydown', onKey);
       document.body.style.overflow = '';
     };
-  }, [drawer]);
+  }, [drawer, narrow]);
 
   // ===== 门禁三段式 =====
   if (gate.state === 'pending') {
@@ -85,6 +108,7 @@ export function SlotLayout() {
         <button
           className="topbar-btn"
           aria-label="会话列表"
+          aria-expanded={drawer === 'sidebar'}
           onClick={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
         >
           ☰
@@ -102,6 +126,8 @@ export function SlotLayout() {
 
       <aside
         className={`shell-sidebar ${drawer === 'sidebar' ? 'open' : ''}`}
+        // 窄屏且未打开：对辅助技术隐藏（视觉上已移出屏幕，但仍在无障碍树里）
+        aria-hidden={narrow && drawer !== 'sidebar' ? true : undefined}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('.chat-session-item, .chat-session-new')) {
             setDrawer('none');
@@ -124,7 +150,10 @@ export function SlotLayout() {
         </div>
       </main>
 
-      <aside className={`shell-panel ${drawer === 'panel' ? 'open' : ''}`}>
+      <aside
+        className={`shell-panel ${drawer === 'panel' ? 'open' : ''}`}
+        aria-hidden={narrow && drawer !== 'panel' ? true : undefined}
+      >
         <SlotOutlet slot="panel" />
       </aside>
 

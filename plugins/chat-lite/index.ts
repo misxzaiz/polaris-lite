@@ -16,12 +16,40 @@ import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
+// 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown（原先散落在宿主 src/styles.css）
+import './chat.css';
 
 /** 与 mock-auth 的会话镜像键保持一致（跨插件约定） */
 const MOCK_AUTH_SESSION_KEY = 'mock-auth.session.v1';
 
 /** 看门狗：流式期间超过该时长没有任何增量，强制收敛（防按钮永久卡在「停止」） */
 const STREAM_IDLE_TIMEOUT_MS = 30_000;
+
+/** 空态快捷建议 → 输入框的填写通道（避免为一句「填入草稿」在组件间拉一条状态） */
+type ComposeListener = (text: string) => void;
+const composeListeners = new Set<ComposeListener>();
+
+/** 订阅「填入输入框」；返回取消订阅（ChatInput 挂载时注册） */
+export function onCompose(fn: ComposeListener): () => void {
+  composeListeners.add(fn);
+  return () => {
+    composeListeners.delete(fn);
+  };
+}
+
+/** 把一段文本填入输入框（不发送），供空态建议复用 */
+export function requestCompose(text: string): void {
+  if (!hostApi) {
+    // 插件尚未装配（理论上不会发生：空态本身由本插件渲染）——退化为直接发送
+    void sendUserMessage(text);
+    return;
+  }
+  if (composeListeners.size === 0) {
+    void sendUserMessage(text);
+    return;
+  }
+  composeListeners.forEach((fn) => fn(text));
+}
 
 let hostApi: SlotHostApi | null = null;
 let msgCounter = 0;

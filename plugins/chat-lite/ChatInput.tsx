@@ -11,7 +11,7 @@
  * - ↑↓ prompt 历史召回（localStorage，空输入/浏览态才接管方向键，不污染草稿）
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
-import { sendUserMessage, interruptChat, enqueuePending, clearPending } from './index';
+import { sendUserMessage, interruptChat, enqueuePending, clearPending, onCompose } from './index';
 import { useSessionStore } from './store';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
@@ -174,6 +174,19 @@ export function ChatInput() {
       if (draftTimer.current) clearTimeout(draftTimer.current);
     };
   }, [activeId]);
+
+  // 空态建议「填入输入框」：写入草稿并聚焦到行尾（用户可改两个字再发）
+  useEffect(() => onCompose((suggested) => {
+    setText(suggested);
+    setHistoryIndex(null);
+    if (activeId) saveDraft(activeId, suggested);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(suggested.length, suggested.length);
+    });
+  }), [activeId]);
 
   // 自适应增高：现代内核走 CSS field-sizing:content（见 chat-input.css）；
   // 旧内核 JS 兜底——scrollHeight 不含 2px 边框，需补边框口径，与 CSS min/max 42/200 对齐

@@ -1,6 +1,8 @@
 /** 消息流（Polaris 对话布局第二段）——支持上滑查看历史消息 */
 import { useEffect, useRef, useState } from 'react';
 import { useSessionStore } from './store';
+import { EmptyState } from './EmptyState';
+import { Markdown } from './markdown';
 
 export function MessageStream() {
   const activeId = useSessionStore((s) => s.activeId);
@@ -22,9 +24,8 @@ export function MessageStream() {
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  const lastMsg = session?.messages[session.messages.length - 1];
-  const lastContent = lastMsg?.content ?? '';
   const msgCount = session?.messages.length ?? 0;
+  const lastContent = session?.messages[msgCount - 1]?.content ?? '';
 
   // 自动跟随：仅在用户贴近底部时，滚动到最新内容；上滑查看历史时不打扰
   useEffect(() => {
@@ -32,28 +33,21 @@ export function MessageStream() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [msgCount, lastContent, atBottom]);
 
+  // 空态一：还没有任何会话（首屏）
   if (!activeId || !session) {
-    // 空态：logo + 标题 + 快捷建议 chips（点击即以该提示开聊）+ 渐变引导线衔接输入区
-    const suggestions = ['总结一下这段代码的作用', '帮我写一个 SQL 查询', '解释这个报错信息', '把这段话翻译成英文'];
-    const startWith = (text: string) => {
-      void (async () => {
-        const { sendUserMessage } = await import('./index');
-        await sendUserMessage(text);
-      })();
-    };
     return (
       <div className="chat-stream" data-testid="message-stream">
-        <div className="chat-empty">
-          <div className="chat-empty-logo" aria-hidden="true">◈</div>
-          <h2>Polaris Lite</h2>
-          <p>轻量版对话已就绪，试试：</p>
-          <div className="chat-empty-chips">
-            {suggestions.map((s) => (
-              <button key={s} className="chat-empty-chip" onClick={() => startWith(s)}>{s}</button>
-            ))}
-          </div>
-          <div className="chat-empty-lead" aria-hidden="true" />
-        </div>
+        <EmptyState variant="no-session" />
+      </div>
+    );
+  }
+
+  // 空态二：会话已建但还没有消息（点「+ 新会话」后的一屏）——
+  // 原实现这里直接渲染空容器，用户看到纯黑，不知道下一步该做什么
+  if (session.messages.length === 0) {
+    return (
+      <div className="chat-stream" data-testid="message-stream">
+        <EmptyState variant="no-message" />
       </div>
     );
   }
@@ -63,8 +57,8 @@ export function MessageStream() {
       {session.messages.map((m) => (
         <div key={m.id} className={`chat-msg ${m.role}`}>
           <div className="chat-avatar">{m.role === 'user' ? '你' : 'AI'}</div>
-          <div className="chat-bubble">
-            {m.content}
+          <div className={`chat-bubble ${m.role === 'assistant' ? 'markdown' : ''}`}>
+            {m.role === 'assistant' ? <Markdown text={m.content} /> : m.content}
             {m.streaming && <span className="cursor" />}
           </div>
         </div>

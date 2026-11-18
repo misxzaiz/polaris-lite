@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { LitePlugin, SlotHostApi } from '@sdk';
+import './cap-panel.css';
 
 let api: SlotHostApi | null = null;
 
