@@ -11,8 +11,11 @@
 import { CapBus } from './bus';
 import type { CapabilityHandler, StreamCapabilityHandler } from './bus';
 import { SlotRegistry } from './slotRegistry';
-import type { CapResponse, LiteManifest, LitePlugin, SlotHostApi } from './types';
+import type { CapResponse, LiteManifest, LitePlugin, SlotHostApi, WorkspaceApi } from './types';
 import { resolvePolicy, type EffectivePolicy } from './policy';
+import { setDrawer } from './shellState';
+import { CAP_UI_LAYOUT } from './workspace/layoutCap';
+import { viewRegistry } from './workspace/viewRegistry';
 
 interface RegisteredPlugin {
   manifest: LiteManifest;
@@ -54,6 +57,9 @@ export class HostRuntime {
 
   private static readonly THEME_KEY = 'plite.theme';
 
+  /** 视图声明被拒的记录（启动时由调用方展示，避免「插件没生效但没人知道」） */
+  private viewWarnings: string[] = [];
+
   /** 注册插件（构建期静态 import，或运行时动态注册均可）；重复注册幂等跳过。
    *  policy 缺省时按 manifest 自声明解析（unlisted 语义），由调用方负责告警。 */
   async registerPlugin(plugin: LitePlugin, policy?: EffectivePolicy): Promise<void> {
@@ -63,8 +69,19 @@ export class HostRuntime {
     this.plugins.set(id, { manifest: plugin.manifest, instance: plugin, policy: effective });
     this.slots.register(id, plugin.manifest.contributes?.slots ?? []);
 
+    // 视图声明走独立注册表（布局树只能引用注册过的 viewType）。
+    // 注册失败必须可见：视图没登记时，插件声明的工作区会静默变成空壳。
+    const views = viewRegistry.registerFromManifest(id, plugin.manifest.contributes?.views);
+    for (const r of views.rejected) {
+      this.viewWarnings.push(`插件 ${id} 的视图 ${r.viewType} 未被接受：${r.reason}`);
+    }
+
     const api = this.createApi(plugin.manifest, effective);
     await plugin.setup?.(api);
+  }
+
+  getViewWarnings(): string[] {
+    return [...this.viewWarnings];
   }
 
   getPluginIds(): string[] {
@@ -82,7 +99,7 @@ export class HostRuntime {
 
   createApi(manifest: LiteManifest, policy: EffectivePolicy = resolvePolicy(manifest, null)): SlotHostApi {
     const runtime = this;
-    return {
+    const api: SlotHostApi = {
       dispatch: <T,>(req: Parameters<SlotHostApi['dispatch']>[0]): Promise<CapResponse<T>> => {
         // 流式能力：动作命中已注册的 streaming cap 时，走 dispatchStream 定向投递，
         // 事件同时镜像到宿主事件总线供 UI 层消费。
@@ -164,9 +181,35 @@ export class HostRuntime {
           return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
         },
         openDrawer: (which) => {
-          void import('./SlotLayout').then((m) => m.setDrawer(which));
+          setDrawer(which);
         },
       },
+    };
+
+    // 布局能力 fail-closed：没有 cap.ui.layout 授权时该字段**不存在**（不是存在但报错）。
+    // 「存在但报错」会让插件以为自己有权限，写出依赖 getTree() 的代码后在别处崩掉。
+    if (policy.capabilities.includes(CAP_UI_LAYOUT)) {
+      api.workspace = this.createWorkspaceApi(manifest.id, policy);
+    }
+    return api;
+  }
+
+  /** 布局门面：只做参数整形，权限/归属/审计全在总线的 cap.ui.layout 处理器里 */
+  private createWorkspaceApi(pluginId: string, policy: EffectivePolicy): WorkspaceApi {
+    const call = <T,>(action: string, payload?: unknown): Promise<CapResponse<T>> =>
+      this.bus.dispatch(pluginId, policy.capabilities, { target: CAP_UI_LAYOUT, action, payload }) as Promise<
+        CapResponse<T>
+      >;
+
+    return {
+      open: (viewType, opts) => call('open', { viewType, ...opts }),
+      close: (nodeId) => call('close', { nodeId }),
+      split: (nodeId, dir, viewType) => call('split', { nodeId, dir, viewType }),
+      move: (nodeId, tabsId, index) => call('move', { nodeId, tabsId, index }),
+      getTree: () => call('getTree'),
+      listViews: () => call('listViews'),
+      applyTree: (tree) => call('applyTree', { tree }),
+      reset: () => call('reset'),
     };
   }
 

@@ -79,6 +79,24 @@ export interface SlotDescriptor {
   title?: string;
 }
 
+/**
+ * 视图贡献描述：插件声明「我有哪些可被摆放的界面」。
+ *
+ * 与 `SlotDescriptor` 的区别：槽位贡献回答「填哪个固定位置」，视图贡献回答
+ * 「可以被摆到任意位置」。工作区树里的叶子只引用 `viewType`，由宿主的视图注册表
+ * 解析成组件——宿主因此不需要认识任何具体插件。
+ */
+export interface ViewDescriptor {
+  /** 全局唯一，必须形如 `<manifest.id>.<local>` */
+  viewType: string;
+  /** 插件模块里的组件导出名 */
+  component: string;
+  /** 用户可见名（必填：无标题的控件无法拥有可访问名） */
+  title: string;
+  /** 打开时的默认落位锚点，缺省 'panel' */
+  defaultAnchor?: AnchorId;
+}
+
 /** 插件 manifest（Polaris manifest 的瘦身版） */
 export interface LiteManifest {
   id: string;
@@ -94,6 +112,8 @@ export interface LiteManifest {
   requires?: string[];
   contributes?: {
     slots?: SlotDescriptor[];
+    /** 可被工作区树摆放的视图（新契约；与 slots 并存，二者都由宿主统一渲染） */
+    views?: ViewDescriptor[];
   };
 }
 
@@ -110,8 +130,7 @@ export interface CapResponse<T = unknown> {
   error?: { code: string; message: string };
 }
 
-/** 流式事件（对齐 Polaris chat-event） */
-export interface StreamEvent {
+/** 流式事件（对齐 Polaris chat-event） */export interface StreamEvent {
   kind: string; // 'message.delta' | 'message.done' | 'status' | 'error' ...
   payload: unknown;
   seq: number;
@@ -138,8 +157,40 @@ export interface ChatSession {
 }
 
 import type { CapabilityHandler, StreamCapabilityHandler } from './bus';
+import type { AnchorId, WorkspaceNode } from './workspace/schema';
 
 export type { CapabilityHandler, StreamCapabilityHandler };
+
+/** 视图落位方式：进已有 tab 组 / 向右拆 / 向下拆 */
+export type LayoutPlacement = 'tab' | 'split-right' | 'split-bottom';
+
+/**
+ * 工作区布局能力（插件侧门面）。
+ *
+ * 所有方法都只是 `dispatch({ target: 'cap.ui.layout', ... })` 的薄包装——**权限校验、
+ * 归属校验与审计都发生在总线里**，不在门面里。这是刻意设计：如果门面自己判断权限，
+ * 就会出现第二条无审计的写入通道，这类「第二个入口」最终一定会绕过治理。
+ *
+ * 未获得 `cap.ui.layout` 授权时，`api.workspace` **整个字段不存在**（fail-closed）。
+ * 不做「存在但调用报错」——插件会以为自己有布局权，写出依赖 getTree() 的代码后
+ * 在别处崩掉，排查成本极高。
+ */
+export interface WorkspaceApi {
+  open(
+    viewType: string,
+    opts?: { where?: LayoutPlacement; anchor?: AnchorId; allowMultiple?: boolean },
+  ): Promise<CapResponse<{ id?: string }>>;
+  close(nodeId: string): Promise<CapResponse>;
+  split(nodeId: string, dir: 'row' | 'col', viewType: string): Promise<CapResponse<{ id?: string }>>;
+  move(nodeId: string, tabsId: string, index: number): Promise<CapResponse>;
+  /** 只读快照（深拷贝），插件拿不到内部引用 */
+  getTree(): Promise<CapResponse<WorkspaceNode>>;
+  listViews(): Promise<CapResponse<{ viewType: string; title: string; pluginId: string }[]>>;
+  /** 整体替换布局（预设/透视）。需要 cap.ui.layout.global 授权 */
+  applyTree(tree: WorkspaceNode): Promise<CapResponse>;
+  /** 恢复默认布局。需要 cap.ui.layout.global 授权 */
+  reset(): Promise<CapResponse>;
+}
 
 /** 受控能力注册器：插件只能在 setup 内经它注册 manifest.provides 声明过的能力 */
 export type CapabilityRegistrar = {
@@ -169,6 +220,8 @@ export interface SlotHostApi {
     readonly isMobile: boolean;
     openDrawer(which: 'sidebar' | 'panel' | 'none'): void;
   };
+  /** 工作区布局能力（需 cap.ui.layout 授权；未授权时该字段不存在） */
+  workspace?: WorkspaceApi;
 }
 
 /** 插件模块导出形态 */

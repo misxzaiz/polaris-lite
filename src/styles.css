@@ -17,10 +17,12 @@ button, input, textarea, select { font-family: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 ::selection { color: var(--text); background: rgba(var(--accent-rgb), 0.22); }
 
-/* ===== 四槽布局壳：曜石底 + 细金属分隔线 ===== */
+/* ===== 壳：纵向 flex（顶栏 + 工作区树 + 抽屉遮罩） =====
+ * 由 grid 改为 flex 的原因：布局现在是**可嵌套的树**，Grid 模板必须一次性知道所有
+ * 轨道，嵌套 split 时要拼接字符串；flex 每层独立解析，拖动时只改一个 flex-basis。 */
 .polaris-lite-shell {
-  display: grid;
-  grid-template-columns: 252px minmax(0, 1fr) 320px;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -29,12 +31,157 @@ button { -webkit-tap-highlight-color: transparent; }
     var(--bg);
 }
 
+.shell-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ===== 工作区树：split / pane / splitter ===== */
+.ws-root,
+.ws-split {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.ws-root { flex-direction: column; }
+.ws-split-row { flex-direction: row; }
+.ws-split-col { flex-direction: column; }
+
+.ws-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* 窗格内容自己撑满：锚点依赖这条才能像原来的 grid 项一样拉伸 */
+.ws-pane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+/* 分隔条占 0 宽（不改变既有 1px 细线视觉），靠伪元素扩出 9px 命中区 */
+.ws-splitter {
+  position: relative;
+  flex: 0 0 0;
+  z-index: 3;
+  touch-action: none;
+  outline: none;
+}
+.ws-splitter[data-dir='row'] { cursor: col-resize; }
+.ws-splitter[data-dir='col'] { cursor: row-resize; }
+.ws-splitter::before {
+  content: '';
+  position: absolute;
+}
+.ws-splitter[data-dir='row']::before { top: 0; bottom: 0; left: -4px; width: 9px; }
+.ws-splitter[data-dir='col']::before { left: 0; right: 0; top: -4px; height: 9px; }
+.ws-splitter::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  transition: background var(--plite-dur) var(--plite-ease);
+}
+.ws-splitter[data-dir='row']::after { top: 0; bottom: 0; left: 0; width: 1px; }
+.ws-splitter[data-dir='col']::after { left: 0; right: 0; top: 0; height: 1px; }
+.ws-splitter:hover::after,
+.ws-splitter:focus-visible::after { background: var(--accent); }
+.ws-splitter:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* 拖动中：全局禁选 + 光标跟随方向（拖动会掠过 iframe / textarea，必须整体收口） */
+body[data-ws-resize] { user-select: none; }
+body[data-ws-resize='row'] { cursor: col-resize; }
+body[data-ws-resize='col'] { cursor: row-resize; }
+
+/* 窗格关闭按钮：默认隐形，悬停/聚焦才出现，避免干扰插件内容 */
+.ws-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--plite-dur) var(--plite-ease), color var(--plite-dur), border-color var(--plite-dur);
+  backdrop-filter: blur(8px);
+}
+.ws-pane:hover > .ws-close,
+.ws-close:focus-visible { opacity: 1; }
+.ws-close:hover { color: var(--text); border-color: var(--border-strong); }
+.ws-close svg { width: 13px; height: 13px; }
+
+/* 没有 hover 的设备（触屏平板 > 断点）上，hover 揭示等于永不显示 —— 直接常驻 */
+@media (hover: none) {
+  .ws-close { opacity: 1; }
+}
+
+/* tab 拖拽：ghost 跟手，pointer-events 必须关掉，否则 elementFromPoint 命不中容器 */
+.ws-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: var(--plite-shadow-1);
+}
+body.ws-dragging-tab { cursor: grabbing; }
+[data-drop-before='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+}
+.ws-drop-tail {
+  display: block;
+  width: 2px;
+  margin: 8px 0;
+  background: var(--accent);
+}
+
+/* 锚点显式子树的容器（预设用） */
+.ws-anchor-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 宿主槽位视图（host.slot.<anchor>）作为 tabs 窗格时的容器：
+   必须撑满，否则 SlotOutlet 里的 tabbody 拿不到高度，面板内容会被压成一行 */
+.ws-slot-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ws-slot-body > .slot-tabs { flex: 1 1 auto; min-height: 0; }
+
+/* ===== 四个锚点（沿用原四槽的视觉，类名不变） ===== */
 .shell-sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: var(--bg-translucent);
-  border-right: 1px solid var(--border);
 }
 
 .shell-brand {
@@ -75,13 +222,6 @@ button { -webkit-tap-highlight-color: transparent; }
   text-transform: uppercase;
 }
 
-.shell-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
 .shell-stream {
   flex: 1;
   min-height: 0;
@@ -112,13 +252,13 @@ button { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   gap: 0;
   background: var(--bg-translucent);
-  border-left: 1px solid var(--border);
 }
 .shell-panel > .slot { border-bottom: 1px solid var(--border); }
 .shell-panel > .slot:last-child { border-bottom: none; }
 
 /* ===== 多面板 Tab ===== */
 .slot-tabs { display: flex; flex-direction: column; min-height: 0; }
+.ws-tabs { flex: 1 1 auto; }
 .slot-tabbar {
   display: flex;
   min-height: 55px;
@@ -163,9 +303,19 @@ button { -webkit-tap-highlight-color: transparent; }
 .slot-tab:hover { color: var(--text-dim); }
 .slot-tab.active { color: var(--accent-bright); }
 .slot-tab.active::after { transform: scaleX(1); }
-.slot-tabbody { min-height: 0; }
+.slot-tabbody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+.slot-tabpanel,
+.ws-tabpanel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 
 /* ===== auth 门禁 ===== */
+/* 登录墙外层：允许顶部叠加启动告警（告警占位，登录页占剩余高度） */
+.shell-gate-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.shell-gate-wrap > .shell-gate { flex: 1 1 auto; }
+
 .shell-gate {
   position: relative;
   min-height: 100dvh;
@@ -252,20 +402,77 @@ button { -webkit-tap-highlight-color: transparent; }
 .slot-error { color: var(--plite-danger); }
 
 /* 插件业务样式随插件走；核心只持有 .shell-* 与 .slot-* */
+/* 启动告警：壳层第一行的**占位**元素，不是浮层。
+   浮层会盖住侧栏品牌与面板 tab 条——而出问题的时候恰恰最需要看清界面。 */
+.plite-boot-notices {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 60;
+}
 .plite-load-warning {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 999;
-  padding: 10px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 14px 9px 18px;
   background: var(--bg-elevated);
   color: var(--plite-danger);
   border-bottom: 1px solid var(--border-strong);
   font-size: 12px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   backdrop-filter: blur(16px);
 }
+.plite-load-warning-text { flex: 1 1 auto; min-width: 0; }
+.plite-load-warning-close {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.plite-load-warning-close:hover { color: var(--text); background: var(--bg-hover); }
+.plite-load-warning-close svg { width: 12px; height: 12px; }
+
+/* 布局快照损坏 / 部分视图不可用时的非阻塞提示 */
+.plite-layout-notice {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 998;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(72vw, 460px);
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--bg-elevated);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: var(--plite-shadow-1);
+  backdrop-filter: blur(16px);
+}
+.plite-layout-notice button {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.plite-layout-notice button:hover { border-color: var(--accent); color: var(--accent-bright); }
 
 @supports (scrollbar-width: thin) {
   .shell-panel, .shell-input { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
@@ -283,14 +490,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 @media (max-width: 768px) {
   :root { font-size: 15px; }
-  .polaris-lite-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-    grid-template-areas: 'topbar' 'main';
-    height: 100dvh;
-  }
   .shell-topbar {
-    grid-area: topbar;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -327,8 +527,14 @@ button { -webkit-tap-highlight-color: transparent; }
     letter-spacing: 0.16em;
     text-transform: uppercase;
   }
+
+  /* 窄屏一律单列：所有 split 纵向堆叠（渲染器已把窗格设为 display:contents） */
+  .ws-split-row, .ws-split-col { flex-direction: column; }
+  .ws-splitter { display: none; }
+  .ws-close { display: none; }
+  .ws-pane { flex: 1 1 auto; }
+
   .shell-sidebar {
-    grid-area: main;
     position: fixed;
     top: 0;
     bottom: 0;
@@ -367,10 +573,10 @@ button { -webkit-tap-highlight-color: transparent; }
     animation: mask-in var(--plite-dur-slow) ease-out;
   }
   @keyframes mask-in { from { opacity: 0; } to { opacity: 1; } }
-  .shell-main { grid-area: main; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .shell-input { padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
   .shell-gate::before { inset: 10px; }
   .shell-gate .slot-auth { padding: 32px 24px 28px; }
+  .plite-layout-notice { left: 12px; right: 12px; bottom: 12px; max-width: none; }
 }
 
 @media (max-width: 360px) {

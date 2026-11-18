@@ -45,6 +45,7 @@ import {
 } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseViewContributions, validateViews, isExported } from './manifest-views.mjs';
 
 const pluginsRoot = dirname(fileURLToPath(import.meta.url));
 const hostRoot = resolve(pluginsRoot, '..');
@@ -276,7 +277,14 @@ function lintPluginCss(cssText, label) {
   return { errors, warnings };
 }
 
-/** 解析插件源码 manifest：id / version / capabilities / provides / requires / events / slots */
+/** contributes.views 的解析（解析错误直接中止构建：manifest 必须静态可判） */
+function parseViews(literal, pluginId) {
+  const { items, errors } = parseViewContributions(literal, pluginId);
+  if (errors.length) fail(errors.join('\n      '));
+  return items;
+}
+
+/** 解析插件源码 manifest：id / version / capabilities / provides / requires / events / slots / views */
 function readSourceManifest(p) {
   const dir = resolve(pluginsRoot, p.id);
   const entry = ['index.ts', 'index.tsx'].find((f) => existsSync(resolve(dir, f)));
@@ -307,6 +315,7 @@ function readSourceManifest(p) {
     requires: list('requires'),
     events: list('events'),
     slots: readSlotContributions(literal, p.id),
+    views: parseViews(literal, p.id),
   };
 }
 
@@ -418,6 +427,19 @@ function preflight() {
     }
   }
   ok(`槽位贡献 ${bySlot.size} 项：order 唯一，panel 槽均有 title`);
+
+  // 视图贡献：布局树里的每个叶子都靠 viewType 解析成组件，所以必须挡在构建期。
+  // 判定逻辑在 plugins/manifest-views.mjs（纯函数，测试可直接跑负例）。
+  const viewSeen = new Map();
+  let viewCount = 0;
+  for (const p of plugins) {
+    const mf = manifests.get(p.id);
+    const entrySrc = readFileSync(resolve(pluginsRoot, p.id, mf.entry), 'utf8');
+    const errors = validateViews({ pluginId: p.id, entrySrc, views: mf.views, seen: viewSeen });
+    if (errors.length) fail(errors.join('\n      '));
+    viewCount += mf.views.length;
+  }
+  ok(`视图贡献 ${viewCount} 项：viewType 前缀与唯一性、title、组件导出均已校验`);
 
   // 插件样式门禁（源文件级）。样式逃逸是布局自由度提升后第一个会爆的地方：
   // 插件 CSS 全局注入、无隔离，一份 `.slot-tab{display:none}` 就能改掉宿主 tab 栏。

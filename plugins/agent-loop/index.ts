@@ -1,5 +1,5 @@
 /**
- * agent-loop 插件：AI 对话编排器（模型 ↔ 工具循环）。
+ * agent-loop 插件：AI 对话编排器（模型与工具的循环调用）。
  *
  * 职责：
  * - 聚合工具描述（cap.tool.* /describe + tool-registered 事件）→ 组装 OpenAI tools 数组；
@@ -420,7 +420,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       return;
     }
     if (turn >= MAX_TURNS) {
-      emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta: '\n\n⚠️ 已达工具循环轮次上限（8），停止继续执行。' });
+      emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta: '\n\n已达工具循环轮次上限（8），停止继续执行。' });
     }
     emitTo(emit, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
     emitTo(emit, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });

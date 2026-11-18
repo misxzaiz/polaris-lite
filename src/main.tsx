@@ -10,17 +10,17 @@ import { createRoot } from 'react-dom/client';
 import { host } from '@/core/hostRuntime';
 import { SlotLayout } from '@/core/SlotLayout';
 import { installMetaCapability } from '@/core/metaCapability';
+import { installLayoutCapability } from '@/core/workspace/layoutCap';
+import { registerHostSlotViews } from '@/core/workspace/hostViews';
+import { workspaceStore, viewRegistry } from '@/core/workspace/hostStore';
+import { pushNotice } from '@/core/shellState';
 import { loadExternalPlugins } from '@/core/externalPlugins';
 import '@/plite-tokens.css';
 import '@/styles.css';
 
-/** 可见的启动告警条（仅 console 会让「插件没装成功」变成静默故障） */
+/** 可见的启动告警（渲染在壳层第一行；仅 console 会让「插件没装成功」变成静默故障） */
 function showBootNotice(title: string, lines: string[]): void {
-  if (lines.length === 0) return;
-  const box = document.createElement('div');
-  box.className = 'plite-load-warning';
-  box.textContent = `${title}：${lines.join('；')}`;
-  document.body.appendChild(box);
+  pushNotice(title, lines);
 }
 
 async function bootstrap(): Promise<void> {
@@ -31,10 +31,21 @@ async function bootstrap(): Promise<void> {
     await import('react')
   ).default ?? (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT__;
 
-  // 1. 安装核心内建能力（meta 是核心自有 cap，不属于任何业务插件）
+  // 1. 安装核心内建能力（meta 与 layout 都是核心自有 cap，不属于任何业务插件）
   installMetaCapability(host.bus, () => host.policyTable());
+  // 布局能力走总线：授权、归属校验、审计都复用既有机制，不开第二写通道
+  installLayoutCapability(host.bus, { store: workspaceStore, registry: viewRegistry });
+  // 宿主槽位视图（host.slot.<anchor>）：把四个锚点原有的槽位内容变成可被布局树引用的视图，
+  // 否则预设一旦给锚点写了 children，面板里的槽位面板就整片消失。必须在 restore 之前注册。
+  registerHostSlotViews();
 
-  // 2. 外部注册：registry 决定「装哪些」，grants 决定「能干什么」（发现失败不阻断壳渲染）
+  // 2. 先恢复工作区布局，再加载插件——顺序不能反。
+  //    插件在 setup() 里就会调 cap.ui.layout 装配自己的视图；若 restore 放在插件之后，
+  //    restore 会整体替换树，把这些「刚打开」的视图全部抹掉（表现为 open 返回 ok 但界面没有）。
+  //    此阶段只做「读 + 校验」，折叠死视图留给插件加载后的 pruneDeadViews()。
+  workspaceStore.restore();
+
+  // 3. 外部注册：registry 决定「装哪些」，grants 决定「能干什么」（发现失败不阻断壳渲染）
   const { loaded, failed, policyWarnings } = await loadExternalPlugins(
     '/plugins/registry.json',
     '/grants.json',
@@ -44,13 +55,17 @@ async function bootstrap(): Promise<void> {
     console.warn('[polaris-lite] some plugins failed to load:', failed);
     showBootNotice('插件加载失败', failed.map((f) => `${f.id}（${f.error}）`));
   }
-  if (policyWarnings.length) {
-    console.warn('[polaris-lite] policy warnings:', policyWarnings);
-    showBootNotice('权限告警', policyWarnings);
+  const allWarnings = [...policyWarnings, ...host.getViewWarnings()];
+  if (allWarnings.length) {
+    console.warn('[polaris-lite] policy warnings:', allWarnings);
+    showBootNotice('权限告警', allWarnings);
   }
   console.info(`[polaris-lite] ${loaded.length} external plugin(s) loaded:`, loaded);
 
-  // 3. 渲染四槽布局壳
+  // 4. 视图注册表已齐 → 折叠孤儿视图（插件下线/禁用后留下的空洞）
+  workspaceStore.pruneDeadViews();
+
+  // 5. 渲染壳层（内部按工作区树渲染四个锚点）
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <SlotLayout />

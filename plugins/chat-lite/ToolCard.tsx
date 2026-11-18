@@ -14,15 +14,45 @@ import type { ToolCardData, ToolCardMessage } from './store';
 /** 分类色（Polaris：execute=purple；lite 不引图标库，用左缘色条 + 字母块） */
 const CARD_ACCENT = '#a78bfa';
 
-function statusIcon(status: ToolCardData['status']): string {
+/**
+ * 状态图标：统一 SVG 细线（项目约定：不用 emoji / 符号字符，符号字符在各平台字体里
+ * 宽度与基线都不一致，且读屏会念出符号名）。
+ * `spin` 类仍挂在外层 span 上，旋转动画对 SVG 同样生效。
+ */
+function StatusIcon({ status }: { status: ToolCardData['status'] }) {
+  const box = { viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true } as const;
+  const line = (d: string) => (
+    <path d={d} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  );
   switch (status) {
-    case 'running': return '◐';
-    case 'done': return '✓';
-    case 'error': return '✕';
-    case 'denied': return '⊘';
-    case 'awaiting': return '⏸';
-    case 'resolved': return '✓';
+    case 'running':
+      return <svg {...box}><path d="M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>;
+    case 'done':
+    case 'resolved':
+      return <svg {...box}>{line('M5 13l4 4L19 7')}</svg>;
+    case 'error':
+      return <svg {...box}>{line('M6 6l12 12')}{line('M18 6L6 18')}</svg>;
+    case 'denied':
+      return (
+        <svg {...box}>
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
+          {line('M6.5 17.5l11-11')}
+        </svg>
+      );
+    case 'awaiting':
+      return <svg {...box}>{line('M9.5 6v12')}{line('M14.5 6v12')}</svg>;
   }
+}
+
+/** 审批卡的警示图标（比把感叹号字符塞进文本更可控：可着色、可对齐、读屏不念符号） */
+function AlertIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="tc-approval-icon">
+      <path d="M12 4.5 21 20H3L12 4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M12 10v4.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="12" cy="17.1" r="0.9" fill="currentColor" />
+    </svg>
+  );
 }
 
 function statusLabel(data: ToolCardData): string {
@@ -55,7 +85,7 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
       <div className="chat-msg tool">
         <div className="chat-avatar" aria-hidden="true"><span className="tc-letter">{tool.name.slice(0, 1).toUpperCase()}</span></div>
         <div className="tc-approval" data-testid={`tc-approval-${tool.callId}`}>
-          <div className="tc-approval-head">⚠ 工具请求执行（{tool.name}）</div>
+          <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
           <pre className="tc-cmd">{tool.command}</pre>
           <div className="tc-approval-btns">
             <button className="tc-btn primary" onClick={() => resolveApproval(tool.callId, 'once')}>允许一次</button>
@@ -76,7 +106,7 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
         style={{ borderLeftColor: CARD_ACCENT }}
       >
         <button className="tc-head" onClick={() => hasBody && setOpen(!open)} disabled={!hasBody}>
-          <span className={`tc-status ${spin ? 'spin' : ''}`} aria-hidden="true">{statusIcon(tool.status)}</span>
+          <span className={`tc-status ${spin ? 'spin' : ''}`} aria-hidden="true"><StatusIcon status={tool.status} /></span>
           <span className="tc-name">{tool.name}</span>
           <span className="tc-summary">{oneLine(tool.command) || statusLabel(tool)}</span>
           {tool.durationMs !== undefined && tool.durationMs > 1000 && (

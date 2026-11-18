@@ -1,22 +1,31 @@
 /**
  * 工作区树契约（Workspace Tree）—— 布局的唯一数据模型与校验器。
  *
- * 为什么需要它：当前布局是「四槽固定结构 + 每个槽内的 tab」，槽位与 tab 数一多就
+ * 为什么需要它：原先布局是「四槽固定结构 + 每个槽内的 tab」，槽位与 tab 数一多就
  * 无处可扩（4 个面板时每格只剩 74px，再多只能截断）。要允许插件自由定义布局，
  * 必须把布局变成**可校验的数据**，而不是散落在 CSS 与 JSX 里的硬编码。
  *
- * 三条设计取舍（评审结论，改动前请先读）：
+ * 四种节点（改动前请先读这几条取舍）：
  *
- * 1. `split` 严格二分（`children: [Node, Node]`）。早期草案是 `children: Node[]` +
- *    单个 `ratio`，但"多子节点只给一个比例"无法定义语义，也无法校验求和。
- *    三栏及以上用嵌套表达——这也是 CSS Grid 与 IDE 类产品的通行做法。
- * 2. 尺寸有两种模式：`ratio`（可拖动）与 `px`（固定，用于复现现状的 252px 侧栏与
- *    320px 面板）。只有比例的话，1920px 屏上侧栏会被拉成 380px，视觉直接回退。
- * 3. 视图节点拆成 `id`（实例）与 `viewType`（类型）。合成一个字段会导致同一视图
- *    无法在两处打开，且 `tabs.active` 在重排后会指向不明。
+ * - `anchor` 保留锚点：sidebar / stream / input / panel。**auth 不是锚点**——它是门禁
+ *   的独立渲染路径（未登录时整个壳层都不渲染），一旦进入树，未登录用户会看到壳骨架。
+ *   锚点不填 `children` 时按原有槽位贡献渲染（因此存量插件零改动）；填了 `children`
+ *   则渲染显式子子树（插件预设可以借此把某个区域换成任意结构）。
+ * - `split` 严格二分（`children: [Node, Node]`）。早期草案是 `children: Node[]` + 单个
+ *   `ratio`，但"多子节点只给一个比例"无法定义语义，也无法校验求和。三栏及以上用嵌套。
+ * - `tabs` 标签组，`active` 指向**直接子节点 id**（不是下标、不是 viewType）。用下标
+ *   会在关闭/重排后把激活态漂到别的视图上。
+ * - `view` 视图叶子，`id` 是实例标识，`viewType` 指向插件注册的视图类型。
  *
- * 本文件是**纯函数、零 DOM、零 React、零副作用**，被三处共用（运行时应用 / 反序列化 /
- * 构建期校验预设），因此不允许出现任何依赖宿主的 import。
+ * 尺寸三种模式 + 作用侧：
+ * - `ratio` 可拖动的比例；`px` 固定像素（复现 252px 侧栏 / 320px 面板，只有比例的话
+ *   1920px 屏上侧栏会被拉成 380px）；`auto` 取内容自然尺寸（复现输入区随内容长高）。
+ * - `of` 指明尺寸作用在第一个还是第二个子节点（缺省 first）。两者都需要：侧栏是
+ *   第一个子节点固定宽，而面板是第二个子节点固定宽；没有 `of` 就只能反转 DOM 顺序，
+ *   那会破坏阅读顺序与焦点顺序。
+ *
+ * 本文件是**纯函数、零 DOM、零 React、零副作用**，被四处共用（运行时应用 / 反序列化 /
+ * 预设校验 / 单测），因此不允许出现任何依赖宿主的 import。
  */
 
 // ============================================================================
@@ -28,7 +37,7 @@ export const WORKSPACE_LIMITS = {
   maxDepth: 8,
   /** 叶子（视图实例）总数上限。每个叶子是活的 React 子树 + 可能的订阅 */
   maxLeaves: 16,
-  /** 节点总数上限（含 split / tabs 容器），防止满二叉树把主线程打死 */
+  /** 节点总数上限（含 split / tabs / anchor 容器），防止满二叉树把主线程打死 */
   maxNodes: 64,
   /** 单个 tabs 组的子项上限 */
   maxTabsChildren: 12,
@@ -36,7 +45,7 @@ export const WORKSPACE_LIMITS = {
   minRatio: 0.05,
   maxRatio: 0.95,
   /** 固定像素尺寸的合法区间 */
-  minPx: 40,
+  minPx: 120,
   maxPx: 2000,
   /** 持久化体积上限：必须在 JSON.parse **之前**判断，否则超大串会同步阻塞主线程 */
   maxSerializedBytes: 256 * 1024,
@@ -53,33 +62,46 @@ export const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export type SplitDir = 'row' | 'col';
 
+/** 尺寸作用在哪个子节点上 */
+export type SplitSide = 'first' | 'second';
+
 /**
- * 子项尺寸。`ratio` 表示第一个子项占比（第二个取剩余），`px` 表示第一个子项固定宽度。
- * 固定宽用于侧栏/面板这类「不该随窗口等比例放大」的锚点。
+ * 子项尺寸。`ratio`/`px`/`auto` 都描述**其中一个**子节点的尺寸，另一个占据剩余空间。
+ * 用 `of` 指定作用侧，缺省为 'first'。
  */
 export type SplitSize =
-  | { mode: 'ratio'; value: number }
-  | { mode: 'px'; value: number };
+  | { mode: 'ratio'; value: number; of?: SplitSide }
+  | { mode: 'px'; value: number; of?: SplitSide }
+  | { mode: 'auto'; of?: SplitSide };
 
-/** 分割容器：恰好两个子节点（三元组从类型层面强制，杜绝 children 与 ratio 失配） */
+/** 分割容器：恰好两个子节点（从类型层面杜绝 children 与 size 失配） */
 export interface SplitNode {
   kind: 'split';
   id: string;
   dir: SplitDir;
-  /** 第一个子节点的尺寸；第二个子节点占据剩余空间 */
+  /** 其中一个子节点的尺寸；另一个占据剩余空间 */
   size: SplitSize;
   children: [WorkspaceNode, WorkspaceNode];
 }
 
 /**
  * 标签组。`active` 指向**某个直接子节点的 id**（不是数组下标，也不是 viewType）——
- * 用下标会在关闭/重排后把激活态漂到别的视图上，这正是当前 activeIdx 的隐患。
+ * 用下标会在关闭/重排后把激活态漂到别的视图上，这正是旧 activeIdx 的隐患。
  */
 export interface TabsNode {
   kind: 'tabs';
   id: string;
   active: string;
   children: WorkspaceNode[];
+}
+
+/** 保留锚点：内容默认来自该槽位的插件贡献 */
+export interface AnchorNode {
+  kind: 'anchor';
+  id: string;
+  anchor: AnchorId;
+  /** 显式子子树（预设可用）；缺省时渲染该锚点的槽位贡献 */
+  children?: WorkspaceNode[];
 }
 
 /** 视图叶子：id 是实例标识，viewType 指向插件注册的视图类型 */
@@ -89,7 +111,14 @@ export interface ViewLeaf {
   viewType: string;
 }
 
-export type WorkspaceNode = SplitNode | TabsNode | ViewLeaf;
+export type WorkspaceNode = SplitNode | TabsNode | AnchorNode | ViewLeaf;
+
+/** 可渲染的最小单元（移动端单列降级用） */
+export type RenderableLeaf = ViewLeaf | (AnchorNode & { children?: undefined });
+
+/** 保留锚点：auth 显式排除（门禁渲染路径独立于树） */
+export type AnchorId = 'sidebar' | 'stream' | 'input' | 'panel';
+export const ANCHOR_IDS: readonly AnchorId[] = ['sidebar', 'stream', 'input', 'panel'];
 
 /** tabs 组至少要两个子项才有存在意义；只有一个时由调用方折叠掉 */
 export const MIN_TABS_CHILDREN = 2;
@@ -104,6 +133,8 @@ export type WorkspaceErrorCode =
   | 'forbidden_key'
   | 'bad_id'
   | 'duplicate_id'
+  | 'bad_anchor'
+  | 'duplicate_anchor'
   | 'bad_dir'
   | 'bad_size'
   | 'bad_ratio'
@@ -131,6 +162,11 @@ export interface ValidateOptions {
   knownViewTypes?: ReadonlySet<string>;
   /** 是否要求每个 viewType 都已注册。关闭时只校验格式，用于反序列化后的降级路径 */
   requireKnownViews?: boolean;
+  /**
+   * 是否要求四个锚点全部存在。移动端抽屉靠锚点定位，缺一个会「点按钮没反应」。
+   * 缺省 false（预设可以刻意只显示部分锚点）。
+   */
+  requireAllAnchors?: boolean;
 }
 
 /** 形如 root.children[1].children[0] 的定位串，排障时直接指到出问题的节点 */
@@ -153,6 +189,10 @@ function fail(code: WorkspaceErrorCode, path: Path, message: string): WorkspaceV
   return { ok: false, code, path, message };
 }
 
+function isValidAnchor(v: unknown): v is AnchorId {
+  return typeof v === 'string' && (ANCHOR_IDS as readonly string[]).includes(v);
+}
+
 /**
  * 校验一棵工作区树。纯函数：不修改入参，不抛异常（除栈溢出外的所有问题都以返回值表达）。
  *
@@ -163,6 +203,7 @@ function fail(code: WorkspaceErrorCode, path: Path, message: string): WorkspaceV
 export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): WorkspaceValidation {
   const seen = new WeakSet<object>();
   const ids = new Set<string>();
+  const anchors = new Set<string>();
   const counters: WorkspaceStats = { nodes: 0, leaves: 0, depth: 0 };
 
   const walk = (node: unknown, path: Path, depth: number): WorkspaceValidation | null => {
@@ -181,7 +222,7 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
     if (depth > counters.depth) counters.depth = depth;
 
     const kind = node.kind;
-    if (kind !== 'split' && kind !== 'tabs' && kind !== 'view') {
+    if (kind !== 'split' && kind !== 'tabs' && kind !== 'view' && kind !== 'anchor') {
       return fail('bad_kind', path, `未知节点类型 ${JSON.stringify(kind)}`);
     }
 
@@ -209,6 +250,33 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
       return null;
     }
 
+    if (kind === 'anchor') {
+      const anchor = node.anchor;
+      if (!isValidAnchor(anchor)) {
+        return fail('bad_anchor', path, `anchor 只能是 ${ANCHOR_IDS.join(' / ')}（auth 不属于树）`);
+      }
+      if (anchors.has(anchor)) return fail('duplicate_anchor', path, `锚点 ${anchor} 在树中出现多次`);
+      anchors.add(anchor);
+
+      const children = node.children;
+      if (children === undefined) {
+        // 无子节点 = 按槽位贡献渲染，这里算一个叶子
+        counters.leaves += 1;
+        if (counters.leaves > WORKSPACE_LIMITS.maxLeaves) {
+          return fail('too_many_leaves', path, `叶子数量超过 ${WORKSPACE_LIMITS.maxLeaves}`);
+        }
+        return null;
+      }
+      if (!Array.isArray(children) || children.length === 0) {
+        return fail('bad_children', path, 'anchor.children 若存在必须是非空数组（不需要时请省略该字段）');
+      }
+      for (let i = 0; i < children.length; i += 1) {
+        const err = walk(children[i], `${path}.children[${i}]`, depth + 1);
+        if (err) return err;
+      }
+      return null;
+    }
+
     const children = node.children;
     if (!Array.isArray(children)) return fail('bad_children', path, `${kind} 节点必须有 children 数组`);
 
@@ -220,21 +288,26 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
         return fail('bad_children', path, `split 必须恰好两个子节点（当前 ${children.length}），多栏请嵌套`);
       }
       const size = node.size;
-      if (!isPlainObject(size)) return fail('bad_size', path, 'split.size 必须是 { mode, value }');
-      const value = size.value;
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return fail('bad_size', path, 'split.size.value 必须是有限数字（NaN / Infinity 会让整行塌陷）');
+      if (!isPlainObject(size)) return fail('bad_size', path, 'split.size 必须是 { mode, of?, value? }');
+      if (size.of !== undefined && size.of !== 'first' && size.of !== 'second') {
+        return fail('bad_size', path, "split.size.of 只能是 'first' 或 'second'");
       }
-      if (size.mode === 'ratio') {
-        if (value < WORKSPACE_LIMITS.minRatio || value > WORKSPACE_LIMITS.maxRatio) {
-          return fail(
-            'bad_ratio',
-            `${path}.size.value`,
-            `比例必须在 ${WORKSPACE_LIMITS.minRatio}–${WORKSPACE_LIMITS.maxRatio} 之间（当前 ${value}）`,
-          );
+      if (size.mode === 'auto') {
+        if ('value' in size) return fail('bad_size', path, 'auto 模式不接受 value（请直接写 { mode: "auto" }）');
+      } else if (size.mode === 'ratio' || size.mode === 'px') {
+        const value = size.value;
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          return fail('bad_size', `${path}.size.value`, 'size.value 必须是有限数字（NaN / Infinity 会让整行塌陷）');
         }
-      } else if (size.mode === 'px') {
-        if (value < WORKSPACE_LIMITS.minPx || value > WORKSPACE_LIMITS.maxPx) {
+        if (size.mode === 'ratio') {
+          if (value < WORKSPACE_LIMITS.minRatio || value > WORKSPACE_LIMITS.maxRatio) {
+            return fail(
+              'bad_ratio',
+              `${path}.size.value`,
+              `比例必须在 ${WORKSPACE_LIMITS.minRatio}–${WORKSPACE_LIMITS.maxRatio} 之间（当前 ${value}）`,
+            );
+          }
+        } else if (value < WORKSPACE_LIMITS.minPx || value > WORKSPACE_LIMITS.maxPx) {
           return fail(
             'bad_px',
             `${path}.size.value`,
@@ -242,7 +315,7 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
           );
         }
       } else {
-        return fail('bad_size', path, `split.size.mode 只能是 ratio 或 px（当前 ${JSON.stringify(size.mode)}）`);
+        return fail('bad_size', path, `size.mode 只能是 ratio / px / auto（当前 ${JSON.stringify(size.mode)}）`);
       }
     } else {
       // tabs
@@ -279,6 +352,13 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
 
   const result = walk(root, 'root', 0);
   if (result) return result;
+
+  if (opts.requireAllAnchors) {
+    const missing = ANCHOR_IDS.filter((a) => !anchors.has(a));
+    if (missing.length > 0) {
+      return fail('bad_anchor', 'root', `缺少必需锚点：${missing.join('、')}（移动端抽屉依赖它们定位）`);
+    }
+  }
   return { ok: true, stats: counters };
 }
 
@@ -287,20 +367,43 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
 // ============================================================================
 
 /**
- * 把任意树压平成「深度优先的叶子序列」。移动端（≤768px）不做分栏，
- * 而是把全部视图收进一条 tab 序列——数据不变、只改呈现，断点来回切不污染持久化。
+ * 把任意树压平成「深度优先的可渲染单元序列」。移动端（≤768px）不做分栏，
+ * 而是把全部视图收进一条序列——数据不变、只改呈现，断点来回切不污染持久化。
  */
-export function flattenLeaves(node: WorkspaceNode): ViewLeaf[] {
-  if (node.kind === 'view') return [node];
-  return node.children.flatMap(flattenLeaves);
+export function flattenLeaves(node: WorkspaceNode, out: RenderableLeaf[] = []): RenderableLeaf[] {
+  if (node.kind === 'view') {
+    out.push(node);
+    return out;
+  }
+  if (node.kind === 'anchor') {
+    if (!node.children || node.children.length === 0) {
+      out.push(node as RenderableLeaf);
+      return out;
+    }
+    node.children.forEach((c) => flattenLeaves(c, out));
+    return out;
+  }
+  node.children.forEach((c) => flattenLeaves(c, out));
+  return out;
 }
 
 /** 按 id 查找节点（含自身），用于激活态恢复与焦点定位 */
 export function findNode(node: WorkspaceNode, id: string): WorkspaceNode | null {
   if (node.id === id) return node;
   if (node.kind === 'view') return null;
-  for (const child of node.children) {
+  for (const child of node.children ?? []) {
     const hit = findNode(child, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** 查找父节点（根返回 null） */
+export function findParent(node: WorkspaceNode, id: string): WorkspaceNode | null {
+  if (node.kind === 'view') return null;
+  for (const child of node.children ?? []) {
+    if (child.id === id) return node;
+    const hit = findParent(child, id);
     if (hit) return hit;
   }
   return null;
@@ -309,6 +412,13 @@ export function findNode(node: WorkspaceNode, id: string): WorkspaceNode | null 
 /** 统计叶子对应的视图类型集合，供「插件下线后哪些视图变孤儿」的诊断使用 */
 export function collectViewTypes(node: WorkspaceNode, out = new Set<string>()): Set<string> {
   if (node.kind === 'view') out.add(node.viewType);
-  else node.children.forEach((c) => collectViewTypes(c, out));
+  else node.children?.forEach((c) => collectViewTypes(c, out));
   return out;
+}
+
+/** 收集全部节点（预设对比、孤儿扫描、调试用） */
+export function walkNodes(node: WorkspaceNode, visit: (n: WorkspaceNode) => void): void {
+  visit(node);
+  if (node.kind === 'view') return;
+  node.children?.forEach((c) => walkNodes(c, visit));
 }

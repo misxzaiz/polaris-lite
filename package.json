@@ -7,7 +7,7 @@
     "dev": "vite --port 9825 --strictPort --host 0.0.0.0",
     "build": "npm run typecheck && npm run check:plugins && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.plugins.json --noEmit",
-    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/server.test.mjs tests/build.test.mjs tests/arch.test.mjs tests/markdown.test.mjs tests/workspace.test.mjs",
+    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/server.test.mjs tests/build.test.mjs tests/arch.test.mjs tests/markdown.test.mjs tests/workspace.test.mjs tests/workspace-store.test.mjs tests/workspace-cap.test.mjs tests/host-views.test.mjs tests/manifest-views.test.mjs",
     "build:plugins": "node plugins/build-plugins.mjs",
     "check:plugins": "node plugins/build-plugins.mjs --check",
     "preview": "vite preview --port 9825 --strictPort --host 127.0.0.1",

@@ -12,7 +12,18 @@
  */
 import type { CapRequest, CapResponse, StreamEvent } from './types';
 
-export type CapabilityHandler = (req: CapRequest) => Promise<unknown> | unknown;
+/**
+ * 处理器上下文：由宿主在调用时注入，插件无法伪造。
+ * - `pluginId`：用于「只能动自己东西」这类归属校验（布局能力的 close/move 依赖它）。
+ * - `capabilities`：该插件**实际生效**的权限（manifest ∩ grants），供处理器做二级判定
+ *   （例如是否具备全局布局权）。
+ */
+export interface CapContext {
+  pluginId: string;
+  capabilities: string[];
+}
+
+export type CapabilityHandler = (req: CapRequest, ctx: CapContext) => Promise<unknown> | unknown;
 export type StreamCapabilityHandler = (
   req: CapRequest,
   emit: (ev: Omit<StreamEvent, 'seq'>) => void,
@@ -53,11 +64,24 @@ export class CapBus {
   }
 
   /**
-   * 免登录能力（严格最小集）：cap.auth（认证自身）、cap.meta（能力自省，无敏感数据）。
-   * cap.config 不豁免——未登录读写任意命名空间属于 V2 漏洞（评审确认）。
+   * 是否免登录。**豁免集必须逐条给理由**，否则迟早变成「反正都能过」。
+   *
+   * - `cap.auth` / `cap.auth.interrupt`：认证自身，未登录时唯一的合法入口。
+   * - `cap.meta`：能力自省（describe/list），返回的是静态声明，无用户数据。
+   * - `cap.ui.layout`：**纯客户端布局**。插件在 setup 期（登录之前）就要装配自己的视图，
+   *   若这里拦住，插件视图只能等到用户登录后才出现——外壳自己的固定槽位却不经过总线，
+   *   等于「宿主的 UI 权利 > 插件的 UI 权利」，与「核心零业务、一切皆插件」直接冲突。
+   *   但**只放行读与动自己东西**：`applyTree`（整体替换预设）与 `reset` 会波及他人视图，
+   *   未登录一律拒绝；且这两个动作另需 `cap.ui.layout.global` 静态授权（manifest ∩ grants），
+   *   两道锁叠加。
+   *
+   * 不豁免：`cap.config`（未登录读写任意命名空间属于 V2 漏洞，评审确认）、
+   * `cap.ui.badge`（角标常承载未读数/告警，属信息泄漏面）。
    */
-  private isPublicCap(target: string): boolean {
-    return target === 'cap.auth' || target === 'cap.auth.interrupt' || target === 'cap.meta';
+  private isPublicCap(target: string, action: string): boolean {
+    if (target === 'cap.auth' || target === 'cap.auth.interrupt' || target === 'cap.meta') return true;
+    if (target === 'cap.ui.layout') return action !== 'applyTree' && action !== 'reset';
+    return false;
   }
 
   /**
@@ -109,7 +133,7 @@ export class CapBus {
     const entry = audit ? this.auditEntry(pluginId, req) : null;
     try {
       // 接口级鉴权（总线级 UserGuard）：未登录访问受保护 cap 直接拒绝
-      if (this.authGuard && !this.isPublicCap(req.target)) {
+      if (this.authGuard && !this.isPublicCap(req.target, req.action)) {
         const allowed = await this.authGuard(req);
         if (!allowed) {
           throw new Error('未登录或权限不足（cap.auth 校验未通过）');
@@ -118,7 +142,7 @@ export class CapBus {
       this.assertAllowed(pluginId, declared, req.target);
       const reg = this.caps.get(req.target);
       if (!reg) throw new Error(`unknown cap: ${req.target}`);
-      const data = await reg.handler(req);
+      const data = await reg.handler(req, { pluginId, capabilities: declared ?? [] });
       if (entry) entry.ok = true;
       return { ok: true, data };
     } catch (err) {
@@ -154,7 +178,7 @@ export class CapBus {
       const entry = this.auditEntry(pluginId, req);
       try {
         // 接口级鉴权（与 dispatch 一致）
-        if (this.authGuard && !this.isPublicCap(req.target)) {
+        if (this.authGuard && !this.isPublicCap(req.target, req.action)) {
           const allowed = await this.authGuard(req);
           if (!allowed) {
             throw new Error('未登录或权限不足（cap.auth 校验未通过）');
