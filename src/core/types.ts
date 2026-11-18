@@ -125,8 +125,8 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   createdAt: number;
-  /** 待发送队列（流式预输入）：流结束后自动逐条发送 */
-  pending?: string[];
+  // 注：待发队列（流式预输入）属于对话 UI 的实现细节，不放核心契约，
+  // 由 chat-lite 自己的 store 持有（见 plugins/chat-lite/store.ts）。
 }
 
 import type { CapabilityHandler, StreamCapabilityHandler } from './bus';

@@ -75,6 +75,22 @@ test('只读自省（cap.meta describe/list）不入审计链', async () => {
   assert.equal(bus.tailAudit(10).length, 1);
 });
 
+test('流结束后回收订阅槽（不随消息数增长）', async () => {
+  const bus = new CapBus();
+  bus.registerStreaming('cap.echo', async (_req, emit) => {
+    emit({ kind: 'delta', payload: { ch: 'x' } });
+  });
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((resolve) => {
+      bus.dispatchStream('p', ['cap.echo'], { target: 'cap.echo', action: 'run', payload: {} }, (ev) => {
+        if (ev.kind === 'delta') resolve();
+      });
+    });
+  }
+  await tick();
+  assert.equal(bus.activeStreams(), 0, '流结束后不应残留订阅槽');
+});
+
 test('重复注册同一 cap 抛错（防止提供方互相覆盖）', () => {
   const bus = new CapBus();
   bus.register('cap.a', () => 1);

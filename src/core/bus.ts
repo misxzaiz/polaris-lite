@@ -176,6 +176,9 @@ export class CapBus {
           payload: { message: err instanceof Error ? err.message : String(err) },
         });
         broadcast?.({ kind: 'stream.error', payload: { message: err instanceof Error ? err.message : String(err) } });
+      } finally {
+        // 流生命周期结束即回收订阅槽：此前只增不删，每条消息泄漏一个 Set + 闭包
+        this.streamSubs.delete(key);
       }
     })();
 
@@ -198,6 +201,11 @@ export class CapBus {
 
   tailAudit(n = 20): AuditEntry[] {
     return this.audit.slice(-n);
+  }
+
+  /** 当前在途流订阅数（可观测性：>0 表示有未收敛的流，泄漏时下不来） */
+  activeStreams(): number {
+    return this.streamSubs.size;
   }
 }
 

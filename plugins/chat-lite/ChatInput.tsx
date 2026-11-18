@@ -11,7 +11,7 @@
  * - ↑↓ prompt 历史召回（localStorage，空输入/浏览态才接管方向键，不污染草稿）
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
-import { sendUserMessage, interruptChat, enqueuePending } from './index';
+import { sendUserMessage, interruptChat, enqueuePending, clearPending } from './index';
 import { useSessionStore } from './store';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
@@ -83,6 +83,7 @@ export function ChatInput() {
   const streaming = useSessionStore((s) =>
     s.sessions.find((x) => x.id === s.activeId)?.messages.some((m) => m.streaming),
   );
+  const queueLen = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId]?.length ?? 0) : 0));
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;
 
@@ -200,11 +201,8 @@ export function ChatInput() {
     if (!hasContent || tooLong) return;
     const carryAttachments = attachments;
     if (streaming) {
-      // 流式中有草稿 → 入队（待发队列）；附件随队列文本合并说明（简化：队列项携带附件描述）
-      const label = carryAttachments.length > 0
-        ? `${t}\n[附件: ${carryAttachments.map((a) => a.name).join(', ')}]`
-        : t;
-      enqueuePending(label);
+      // 流式中有草稿 → 入队（附件随队列项完整保留，不再压成文本）
+      enqueuePending(t, carryAttachments);
       setText('');
       setAttachments([]);
       setHistoryIndex(null);
@@ -304,6 +302,12 @@ export function ChatInput() {
       onDrop={handleDrop}
     >
       {attachErr && <div className="chat-input-warn">{attachErr}</div>}
+      {queueLen > 0 && (
+        <div className="chat-queue-hint">
+          <span>已排队 {queueLen} 条，本次回复结束后自动发送</span>
+          <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
+        </div>
+      )}
       <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
       <textarea
         ref={taRef}
