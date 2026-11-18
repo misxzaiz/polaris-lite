@@ -1,46 +1,107 @@
 {
-  "version": 2,
+  "version": 3,
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
       "capabilities": [],
-      "provides": ["cap.config"],
-      "events": ["config-changed"]
+      "provides": [
+        "cap.config"
+      ],
+      "events": [
+        "config-changed"
+      ]
     },
     "chat-lite": {
-      "capabilities": ["cap.ai.chat", "cap.ai.chat.interrupt"],
+      "capabilities": [
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt",
+        "cap.agent.loop",
+        "cap.meta"
+      ],
       "provides": [],
-      "events": ["cap.ai.chat:event"]
+      "events": [
+        "cap.ai.chat:event",
+        "cap.agent.loop:event"
+      ]
     },
     "model-admin": {
-      "capabilities": ["cap.model.admin"],
-      "provides": ["cap.model.admin"],
-      "events": ["model-config-changed"]
+      "capabilities": [
+        "cap.model.admin"
+      ],
+      "provides": [
+        "cap.model.admin"
+      ],
+      "events": [
+        "model-config-changed"
+      ]
     },
     "real-engine": {
-      "capabilities": ["cap.model.admin"],
-      "provides": ["cap.ai.chat", "cap.ai.chat.interrupt"],
-      "events": ["model-config-changed", "auth-changed"]
+      "capabilities": [
+        "cap.model.admin"
+      ],
+      "provides": [
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt"
+      ],
+      "events": [
+        "model-config-changed",
+        "auth-changed"
+      ]
     },
     "cap-panel": {
-      "capabilities": ["cap.meta"],
+      "capabilities": [
+        "cap.meta"
+      ],
       "provides": [],
       "events": []
     },
     "mock-auth": {
-      "capabilities": ["cap.auth"],
-      "provides": ["cap.auth"],
-      "events": ["auth-changed"]
+      "capabilities": [
+        "cap.auth"
+      ],
+      "provides": [
+        "cap.auth"
+      ],
+      "events": [
+        "auth-changed"
+      ]
     },
     "mock-engine": {
       "capabilities": [],
-      "provides": ["cap.ai.chat", "cap.ai.chat.interrupt"],
+      "provides": [
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt"
+      ],
       "events": []
     },
     "theme-switcher": {
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "agent-bash": {
+      "capabilities": [],
+      "provides": [
+        "cap.tool.bash"
+      ],
+      "events": [
+        "tool-registered"
+      ]
+    },
+    "agent-loop": {
+      "capabilities": [
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt",
+        "cap.tool.bash",
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.agent.loop"
+      ],
+      "events": [
+        "cap.ai.chat:event",
+        "tool-registered"
+      ]
     }
   }
 }

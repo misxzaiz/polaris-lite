@@ -66,10 +66,12 @@ const plugins = [
   { id: 'chat-lite', config: 'chat-lite/vite.config.ts', dist: 'chat-lite/dist', order: 2 },
   { id: 'model-admin', config: 'model-admin/vite.config.ts', dist: 'model-admin/dist', order: 3 },
   { id: 'real-engine', config: 'real-engine/vite.config.ts', dist: 'real-engine/dist', order: 4 },
-  { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 5 },
-  { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 6 },
-  { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 7, enabled: false },
-  { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 8 },
+  { id: 'agent-bash', config: 'agent-bash/vite.config.ts', dist: 'agent-bash/dist', order: 5 },
+  { id: 'agent-loop', config: 'agent-loop/vite.config.ts', dist: 'agent-loop/dist', order: 6 },
+  { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 7 },
+  { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 8 },
+  { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 9, enabled: false },
+  { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 10 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
@@ -132,6 +134,149 @@ function extractBalanced(src, startIdx) {
 }
 
 /** 解析插件源码 manifest：id / version / capabilities / provides / requires / events */
+/**
+ * 配对提取「含方括号或花括号」的一段源码。
+ *
+ * 为什么不复用 extractBalanced：它只认 `{}`。传入 `[` 时 depth 一直是 0，
+ * 遇到数组里第一个对象的 `}` 就提前返回，拿到半截内容——静默解析错比解析失败更糟。
+ * contributes.slots 是「对象数组」，两种括号必然交错，所以这里对 `[]` 与 `{}` 统一计数。
+ */
+function extractBracketed(src, startIdx) {
+  const opener = src[startIdx];
+  if (opener !== '[' && opener !== '{') return null;
+  let depth = 0;
+  let quote = null;
+  let inLine = false;
+  let inBlock = false;
+  for (let i = startIdx; i < src.length; i += 1) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (inLine) {
+      if (c === '\n') inLine = false;
+      continue;
+    }
+    if (inBlock) {
+      if (c === '*' && n === '/') {
+        inBlock = false;
+        i += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (c === '\\') {
+        i += 1;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '/' && n === '/') {
+      inLine = true;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      inBlock = true;
+      i += 1;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+      continue;
+    }
+    if (c === '{' || c === '[') depth += 1;
+    else if (c === '}' || c === ']') {
+      depth -= 1;
+      if (depth === 0) return src.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 解析 manifest.contributes.slots[]（对象数组）。
+ *
+ * 为什么必须在构建期读到：槽位与顺序是「多插件共存」的唯一秩序来源。等到运行时才发现
+ * 「两个插件抢同一个 order」或「panel 槽没写 title」，症状是 tab 顺序随机漂移、tab 名被
+ * 截断成乱码，而那时已经排不动了。
+ *
+ * 约定：slots 项必须是对象字面量、字段值必须是字面量。写成变量或函数调用会解析失败，
+ * 这是有意的——manifest 要能被静态校验，就不能是运行时算出来的。
+ */
+function readSlotContributions(literal, pluginId) {
+  const at = /\bcontributes\s*:\s*\{/.exec(literal);
+  if (!at) return [];
+  const contributes = extractBracketed(literal, at.index + at[0].length - 1);
+  if (!contributes) fail(`插件 ${pluginId}：manifest.contributes 括号不闭合`);
+
+  const slotsAt = /\bslots\s*:\s*\[/.exec(contributes);
+  if (!slotsAt) return [];
+  const arr = extractBracketed(contributes, slotsAt.index + slotsAt[0].length - 1);
+  if (!arr) fail(`插件 ${pluginId}：manifest.contributes.slots 方括号不闭合`);
+
+  const items = [];
+  let i = 0;
+  while (i < arr.length) {
+    if (arr[i] === '{') {
+      const body = extractBracketed(arr, i);
+      if (!body) fail(`插件 ${pluginId}：contributes.slots 里有不闭合的对象字面量`);
+      const str = (field) => {
+        const m = new RegExp(`\\b${field}\\s*:\\s*['"\`]([^'"\`]*)['"\`]`).exec(body);
+        return m ? m[1] : undefined;
+      };
+      const num = (field) => {
+        const m = new RegExp(`\\b${field}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`).exec(body);
+        return m ? Number(m[1]) : undefined;
+      };
+      items.push({ slot: str('slot'), component: str('component'), order: num('order'), title: str('title') });
+      i += body.length;
+      continue;
+    }
+    i += 1;
+  }
+  return items;
+}
+
+/**
+ * 插件样式门禁：静态扫描 CSS 文本。
+ *
+ * 背景：插件 CSS 目前是全局注入（无隔离），一份 `.slot-tab { display:none }` 就能改掉
+ * 宿主 tab 栏。布局自由度越高、同屏插件越多，这个口子越致命。约束只能靠文本层面的
+ * 静态判定来强制——它能给出确定结论，不依赖运行时。
+ *
+ * 返回 { errors, warnings }：errors 直接中止构建；warnings 只提示（存量问题逐步清零）。
+ */
+function lintPluginCss(cssText, label) {
+  const errors = [];
+  const warnings = [];
+  const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  const forbidden = [
+    { re: /(^|[\s,{}]):root\b/, msg: ':root 只属于宿主令牌层，插件不得改写全局主题变量' },
+    { re: /(^|[\s,{}])html\b(?![\w-])/, msg: 'html 选择器会越过宿主命名空间' },
+    { re: /(^|[\s,{}])body\b(?![\w-])/, msg: 'body 选择器会越过宿主命名空间（滚动锁等请走宿主 API）' },
+    { re: /#root\b/, msg: '#root 是宿主挂载点' },
+    { re: /@import\b/, msg: '禁止 @import（会引入不受门禁约束的外部样式）' },
+    { re: /(^|[\s,{}])\*\s*[,{]/, msg: '禁止裸 * 选择器（只允许作用于自身容器内）' },
+    { re: /position\s*:\s*fixed/, msg: 'position: fixed 会逃出窗格并盖住分隔条与抽屉，需要浮层请申请 cap.ui.overlay' },
+    { re: /\.(slot|shell|polaris-lite-shell)[\w-]*/, msg: '插件不得选中宿主类名（.slot-* / .shell-* / .polaris-lite-shell）' },
+  ];
+
+  for (const rule of forbidden) {
+    if (rule.re.test(stripped)) errors.push(`${label}：${rule.msg}`);
+  }
+
+  // !important 一律降为 warning：reduced-motion 下的 `animation: none !important` 是正当用法，
+  // 但 `margin: 0 !important` 这类会随样式顺序变化而反复失效，应改用提高特异性。
+  const bangs = stripped.split('\n').filter((line) => line.includes('!important'));
+  for (const line of bangs) {
+    warnings.push(`${label}：出现 !important（仅 reduced-motion 例外）：${line.trim().slice(0, 60)}`);
+  }
+
+  return { errors, warnings };
+}
+
+/** 解析插件源码 manifest：id / version / capabilities / provides / requires / events / slots */
 function readSourceManifest(p) {
   const dir = resolve(pluginsRoot, p.id);
   const entry = ['index.ts', 'index.tsx'].find((f) => existsSync(resolve(dir, f)));
@@ -161,6 +306,7 @@ function readSourceManifest(p) {
     provides: list('provides'),
     requires: list('requires'),
     events: list('events'),
+    slots: readSlotContributions(literal, p.id),
   };
 }
 
@@ -250,6 +396,46 @@ function preflight() {
   if (stale.length) console.warn(`  warn public/grants.json 存在已下线插件的条目：${stale.join('、')}`);
   ok('public/grants.json 覆盖全部插件，且无越权申请');
 
+  // 槽位秩序：同一槽位内的 order 必须唯一。
+  // 并列 order 会让顺序取决于插件加载时序（registry 顺序 + 依赖拓扑序），
+  // 表现为「tab 顺序偶尔变化」——最难复现、最难排查的一类问题。
+  const bySlot = new Map();
+  for (const p of plugins) {
+    for (const s of manifests.get(p.id).slots) {
+      if (!s.slot) fail(`插件 ${p.id}：contributes.slots 项缺少 slot 字段`);
+      if (!s.component) fail(`插件 ${p.id}：contributes.slots 项缺少 component 字段`);
+      const order = s.order ?? 0;
+      const key = `${s.slot}#${order}`;
+      const prev = bySlot.get(key);
+      if (prev) {
+        fail(`槽位 ${s.slot} 的 order=${order} 被 ${prev} 与 ${p.id} 同时占用（顺序会随加载时序漂移），请改用唯一 order`);
+      }
+      bySlot.set(key, p.id);
+      // panel 槽的 title 是 tab 文本；缺省回退插件名，长度不可控（等分宽度下会被截断）
+      if (s.slot === 'panel' && !s.title) {
+        fail(`插件 ${p.id}：panel 槽必须声明 title（tab 等分后全名必被截断，回退插件名不可控）`);
+      }
+    }
+  }
+  ok(`槽位贡献 ${bySlot.size} 项：order 唯一，panel 槽均有 title`);
+
+  // 插件样式门禁（源文件级）。样式逃逸是布局自由度提升后第一个会爆的地方：
+  // 插件 CSS 全局注入、无隔离，一份 `.slot-tab{display:none}` 就能改掉宿主 tab 栏。
+  let cssWarnings = 0;
+  for (const p of plugins) {
+    const dir = resolve(pluginsRoot, p.id);
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.css'))) {
+      const label = `plugins/${p.id}/${file}`;
+      const { errors, warnings } = lintPluginCss(readFileSync(resolve(dir, file), 'utf8'), label);
+      if (errors.length) fail(errors.join('\n      '));
+      for (const w of warnings) {
+        console.warn(`  warn ${w}`);
+        cssWarnings += 1;
+      }
+    }
+  }
+  ok(`插件样式门禁通过${cssWarnings ? `（${cssWarnings} 条提示）` : ''}`);
+
   return manifests;
 }
 
@@ -292,7 +478,14 @@ function publishOne(p) {
   }
 
   // 只有真实存在 CSS 产物时才声明 style，宿主据此决定是否注入 <link>（不再靠 404 + onerror 兜底）
-  const hasStyle = existsSync(resolve(distDir, 'style.css'));
+  // 同时对**产物**再过一遍样式门禁：源文件合规不等于打包产物合规（压平、合并可能引入新选择器）
+  const styleFile = resolve(distDir, 'style.css');
+  const hasStyle = existsSync(styleFile);
+  if (hasStyle) {
+    const { errors, warnings } = lintPluginCss(readFileSync(styleFile, 'utf8'), `${p.dist}/style.css`);
+    if (errors.length) fail(errors.join('\n      '));
+    warnings.forEach((w) => console.warn(`  warn ${w}`));
+  }
   const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js`, enabled: p.enabled ?? true };
   if (hasStyle) manifest.style = `/plugins/${p.id}/style.css`;
   const manifestFile = resolve(dest, 'plugin.json');

@@ -8,6 +8,7 @@ import { createAuthMiddleware } from './auth-session.mjs';
 import { createProviderStore } from './provider-store.mjs';
 import { createProvidersApi } from './providers-api.mjs';
 import { createRelayMiddleware } from './relay-core.mjs';
+import { createToolExecMiddleware } from './tool-exec.mjs';
 import { createHostPolicy } from './upstream-policy.mjs';
 
 export function createHost({ dataDir = '.polaris-lite', secureCookies = false, policyOptions } = {}) {
@@ -16,9 +17,11 @@ export function createHost({ dataDir = '.polaris-lite', secureCookies = false, p
   const auth = createAuthMiddleware({ dataDir, secureCookies });
   const providers = createProvidersApi({ store, policy, getSession: auth.getSession });
   const relay = createRelayMiddleware({ store, policy, getSession: auth.getSession });
+  // AI 工具执行通道（bash 等；会话 cookie 门禁 + denylist + 审计，见 tool-exec.mjs）
+  const toolExec = createToolExecMiddleware({ dataDir, getSession: auth.getSession });
 
   /** 顺序敏感的中间件链（connect 风格：每个 handler 自行决定是否 next） */
-  const middlewares = [auth.middleware, providers, relay];
+  const middlewares = [auth.middleware, providers, relay, toolExec];
 
   return { store, policy, auth, middlewares };
 }

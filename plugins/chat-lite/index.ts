@@ -11,12 +11,12 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
-import { useSessionStore } from './store';
+import { useSessionStore, isToolCard, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
-// 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown（原先散落在宿主 src/styles.css）
+// 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown / 工具卡（原先散落在宿主 src/styles.css）
 import './chat.css';
 
 /** 与 mock-auth 的会话镜像键保持一致（跨插件约定） */
@@ -24,6 +24,8 @@ const MOCK_AUTH_SESSION_KEY = 'mock-auth.session.v1';
 
 /** 看门狗：流式期间超过该时长没有任何增量，强制收敛（防按钮永久卡在「停止」） */
 const STREAM_IDLE_TIMEOUT_MS = 30_000;
+/** 工具阶段（执行/审批挂起）看门狗：审批上限 120s + 执行余量 */
+const TOOL_PHASE_TIMEOUT_MS = 180_000;
 
 /** 空态快捷建议 → 输入框的填写通道（避免为一句「填入草稿」在组件间拉一条状态） */
 type ComposeListener = (text: string) => void;
@@ -67,11 +69,11 @@ export const chatLitePlugin: LitePlugin = {
   manifest: {
     id: 'chat-lite',
     name: '对话',
-    version: '0.2.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
+    version: '0.3.0',
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.agent.loop', 'cap.meta'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
-    events: ['cap.ai.chat:event'],
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -85,15 +87,104 @@ export const chatLitePlugin: LitePlugin = {
   },
 };
 
+/** agent-loop 可用性缓存（每次发送时经 cap.meta 刷新，避免装配顺序竞态） */
+let loopAvailable: boolean | null = null;
+
+async function detectLoop(): Promise<boolean> {
+  if (!hostApi) return false;
+  if (loopAvailable !== null) return loopAvailable;
+  try {
+    const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
+    loopAvailable = (res.data?.capabilities ?? []).includes('cap.agent.loop');
+  } catch {
+    loopAvailable = false;
+  }
+  return loopAvailable;
+}
+
 interface StreamEnvelope {
   kind: string;
   payload?: {
     sessionId?: string;
     messageId?: string;
     delta?: string;
-    source?: string;
+    message?: string;
+    interrupted?: boolean;
+    finishReason?: string;
+    // 工具卡事件（cap.agent.loop:event；source='agent-loop' 宿主注入不可伪造）
+    callId?: string;
+    name?: string;
+    command?: string;
+    argsJson?: string;
+    status?: 'done' | 'error' | 'denied';
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number;
+    durationMs?: number;
+    truncated?: boolean;
+    decision?: 'once' | 'always' | 'deny';
+    turns?: number;
   };
   source?: string;
+}
+
+/** 工具卡事件处理（仅 loop 模式；按 callId 幂等建卡/更新） */
+function handleToolEvent(kind: string, inner: NonNullable<StreamEnvelope['payload']>, sid: string, armLongWatchdog: () => void): void {
+  const st = useSessionStore.getState();
+  // 工具阶段（执行/审批）无 delta 流，看门狗须用长时限，否则 30s 就误杀在途编排
+  armLongWatchdog();
+  if (kind === 'tool.card' || kind === 'tool.approval.required') {
+    const cardId = `card-${inner.callId}`;
+    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
+    if (existing) {
+      // 卡已存在（tool.card 先到）：approval.required 把卡片升级为「等待审批」
+      if (kind === 'tool.approval.required') {
+        st.updateMessage(sid, cardId, { tool: { ...existing.tool, status: 'awaiting' } } as Partial<StoreMessage>);
+      }
+      return;
+    }
+    const tool: ToolCardData = {
+      callId: inner.callId ?? '',
+      name: inner.name ?? 'tool',
+      command: inner.command ?? inner.argsJson,
+      status: kind === 'tool.card' ? 'running' : 'awaiting',
+    };
+    st.appendMessage(sid, {
+      id: cardId,
+      role: 'tool',
+      content: tool.command ?? '',
+      createdAt: Date.now(),
+      tool,
+    } as unknown as StoreMessage);
+    return;
+  }
+  if (kind === 'tool.approval.resolved') {
+    const cardId = `card-${inner.callId}`;
+    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
+    if (!existing) return;
+    // once/always → 后续 tool.result 会更新为终态；deny → 直接收敛为拒绝
+    st.updateMessage(sid, cardId, {
+      tool: { ...existing.tool, status: inner.decision === 'deny' ? 'denied' : 'resolved', decision: inner.decision },
+    } as Partial<StoreMessage>);
+    return;
+  }
+  if (kind === 'tool.result') {
+    const cardId = `card-${inner.callId}`;
+    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
+    if (!existing) return;
+    st.updateMessage(sid, cardId, {
+      tool: {
+        ...existing.tool,
+        status: inner.status ?? 'error',
+        stdout: inner.stdout,
+        stderr: inner.stderr,
+        exitCode: inner.exitCode,
+        durationMs: inner.durationMs,
+        truncated: inner.truncated,
+      },
+    } as Partial<StoreMessage>);
+    return;
+  }
 }
 
 /** 由 ChatInput / 快捷建议 / 队列泵调用：发送用户消息并触发流式回复 */
@@ -106,11 +197,20 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   if (!sessionId) sessionId = store.createSession();
   const sid: string = sessionId;
 
-  // 上下文 = 本次提问之前的全部消息（避免把本条也塞进去，造成上游收到重复两条）
+  // 上下文 = 本次提问之前的全部消息（排除工具卡：协议上下文由 agent-loop 的 shadow transcript 自持）
   const history = store.sessions
     .find((s) => s.id === sid)
-    ?.messages.filter((m) => !m.streaming)
+    ?.messages.filter((m) => !m.streaming && !isToolCard(m))
     .map((m) => ({ role: m.role, content: m.content }));
+
+  // 新消息即过期：本会话挂着的审批卡直接置为拒绝（Polaris 语义；loop 侧 120s 超时兜底）
+  const expired = store.sessions
+    .find((s) => s.id === sid)
+    ?.messages.filter(isToolCard)
+    .filter((m) => (m as ToolCardMessage).tool.status === 'awaiting') ?? [];
+  for (const m of expired) {
+    store.updateMessage(sid, m.id, { tool: { ...(m as ToolCardMessage).tool, status: 'denied', decision: 'deny' } } as Partial<StoreMessage>);
+  }
 
   store.appendMessage(sid, {
     id: nextMsgId(),
@@ -127,6 +227,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     createdAt: Date.now(),
     streaming: true,
   } satisfies ChatMessage);
+
+  // loop 模式探测：cap.agent.loop 存在（已启用）则走编排通道，否则回落纯引擎
+  const useLoop = await detectLoop();
 
   const readContent = (): string =>
     useSessionStore.getState().sessions
@@ -183,15 +286,34 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     }, STREAM_IDLE_TIMEOUT_MS);
   };
 
-  const off = api.listen('cap.ai.chat:event', (payload) => {
+  /** 工具阶段（执行/审批挂起）用长看门狗：无 delta 流是常态，30s 会误杀在途编排 */
+  const armLongWatchdog = (): void => {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      if (settled) return;
+      const prev = readContent();
+      useSessionStore.getState().updateMessage(sid, assistantId, {
+        content: `${prev}${prev ? '\n\n' : ''}响应超时（${TOOL_PHASE_TIMEOUT_MS / 1000}s 无新内容），已结束本次编排`,
+      });
+      settle();
+    }, TOOL_PHASE_TIMEOUT_MS);
+  };
+
+  const handleEnvelope = (payload: unknown): void => {
     const envelope = payload as StreamEnvelope;
-    // 来源由宿主取「cap.ai.chat 的提供方插件 id」后注入，插件无法伪造；
-    // 无来源的事件一律不认（避免核心内部广播或未来新增事件被误当流式事件处理）。
+    // 来源由宿主取「该 cap 的提供方插件 id」后注入，插件无法伪造；
+    // 无来源的事件一律不认（避免核心内部广播被误当流式事件处理）。
     if (!envelope.source) return;
     const inner = envelope.payload ?? {};
-    // 精确匹配：会话 + 消息 双重过滤（并发流不串台）
+    // 精确匹配：会话 + 消息 双重过滤（并发流不串台；loop 的内部轮次 messageId 不同不会误入）
     if (inner.sessionId && inner.sessionId !== sid) return;
     if (inner.messageId && inner.messageId !== assistantId) return;
+
+    // 工具卡事件（loop 模式专属）
+    if (envelope.kind.startsWith('tool.')) {
+      handleToolEvent(envelope.kind, inner, sid, armLongWatchdog);
+      return;
+    }
 
     if (envelope.kind === 'message.delta' && inner.delta) {
       armWatchdog();
@@ -213,12 +335,20 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       });
       settle();
     }
-  });
-  unbind = off;
+  };
+
+  // 双通道订阅：普通模式收 cap.ai.chat:event（引擎直达）；
+  // loop 模式收 cap.agent.loop:event（loop 转发）。loop 的内部轮次 messageId 不同，不会串台。
+  const off = api.listen('cap.ai.chat:event', handleEnvelope);
+  const offLoop = useLoop ? api.listen('cap.agent.loop:event', handleEnvelope) : null;
+  unbind = () => {
+    off();
+    offLoop?.();
+  };
   armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
 
   await api.dispatch({
-    target: 'cap.ai.chat',
+    target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
     action: 'start',
     payload: {
       sessionId: sid,
@@ -230,18 +360,36 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   });
 }
 
-/** 中断当前会话在途流；引擎侧流已不存在时自愈复位 streaming 残留 */
+/** 中断当前会话在途流；loop 存在时中断整个编排（引擎流+工具+审批），否则直接打断引擎 */
 export function interruptChat(): void {
   const api = hostApi;
   const sessionId = useSessionStore.getState().activeId;
   if (!api || !sessionId) return;
+  // 在途 assistant 消息 id：loop 用它立即回执 message.done{interrupted}（UI 即刻收敛）
+  const streamingMsg = useSessionStore
+    .getState()
+    .sessions.find((s) => s.id === sessionId)
+    ?.messages.find((m) => !isToolCard(m) && m.streaming);
+  const messageId = streamingMsg?.id;
 
-  void api
-    .dispatch<{ found?: boolean }>({
+  const doInterrupt = async (): Promise<{ ok: boolean; data?: { found?: boolean } }> => {
+    if (await detectLoop()) {
+      const res = await api.dispatch<{ found?: boolean }>({
+        target: 'cap.agent.loop',
+        action: 'interrupt',
+        payload: { sessionId, ...(messageId ? { messageId } : {}) },
+      });
+      // loop 没有在途轮次（found=false）时回落打断引擎直通流
+      if (res.ok && res.data?.found !== false) return res;
+    }
+    return api.dispatch<{ found?: boolean }>({
       target: 'cap.ai.chat.interrupt',
       action: 'interrupt',
       payload: { sessionId },
-    })
+    });
+  };
+
+  void doInterrupt()
     .then((res) => {
       // 自愈：引擎已无此流（found=false 或调用失败）时复位残留 streaming 标志，
       // 避免输入框被残留状态永久锁死；复位后同样要让队列继续流动。
@@ -249,11 +397,22 @@ export function interruptChat(): void {
         const cur = useSessionStore.getState();
         cur.sessions
           .find((s) => s.id === sessionId)
-          ?.messages.filter((m) => m.streaming)
+          ?.messages.filter((m) => !isToolCard(m) && m.streaming)
           .forEach((m) => cur.updateMessage(sessionId, m.id, { streaming: false }));
         sendNextPending();
       }
-    });
+    })
+    .catch(() => undefined);
+}
+
+/** 审批决策回填（ToolCard 按钮调用；仅 loop 模式会出现审批卡） */
+export function resolveApproval(callId: string, decision: 'once' | 'always' | 'deny'): void {
+  const api = hostApi;
+  const sessionId = useSessionStore.getState().activeId;
+  if (!api || !sessionId || !callId) return;
+  void api
+    .dispatch({ target: 'cap.agent.loop', action: 'resolveApproval', payload: { sessionId, callId, decision } })
+    .catch(() => undefined);
 }
 
 // ===== 待发送队列（流式预输入）：流结束后自动逐条发送，附件随队列项完整保留 =====

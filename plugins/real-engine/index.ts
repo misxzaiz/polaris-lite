@@ -72,8 +72,16 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     sessionId?: string;
     messageId?: string;
     prompt?: string;
-    history?: { role: string; content: string }[];
+    history?: { role: string; content: unknown }[];
     attachments?: { name?: string; mime?: string; content?: string; textContent?: string }[];
+    /**
+     * agent-loop 直传的完整协议消息（含 assistant.tool_calls / tool 角色消息）。
+     * 提供时忽略 prompt/history/attachments——引擎做纯管道，不理解工具语义。
+     */
+    messages?: { role: string; content: unknown; tool_calls?: unknown; tool_call_id?: string; name?: string }[];
+    /** OpenAI function 工具定义（agent-loop 传入，透传给上游） */
+    tools?: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[];
+    toolChoice?: 'auto' | 'none';
   };
   const sessionId = payload.sessionId ?? 'unknown';
   const messageId = payload.messageId ?? 'unknown';
@@ -114,10 +122,20 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
   });
 
   try {
-    const messages = [
-      ...(payload.history ?? []).map((m) => ({ role: m.role as 'user' | 'assistant' | 'system', content: m.content })),
-      { role: 'user' as const, content: payload.prompt ?? '' },
-    ];
+    // agent-loop 直传协议消息时按原样透传（含 tool_calls / role:'tool'）；
+    // 否则走常规 prompt+history 组装。二者互斥，直传路径不做附件拼装。
+    const messages = payload.messages
+      ? payload.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.tool_calls !== undefined ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id !== undefined ? { tool_call_id: m.tool_call_id } : {}),
+          ...(m.name !== undefined ? { name: m.name } : {}),
+        }))
+      : [
+          ...(payload.history ?? []).map((m) => ({ role: m.role as 'user' | 'assistant' | 'system', content: m.content })),
+          { role: 'user' as const, content: payload.prompt ?? '' },
+        ];
     // 附件：图片进 content（base64 data URL），文本拼进 prompt；
     // vision=false 的模型把图片附件降级为文本说明（不向上游发送会被拒的 image_url）
     const attachments = payload.attachments ?? [];
@@ -152,6 +170,8 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         model: provider.activeModel || (provider.models[0]?.id ?? ''),
         stream: true,
         messages,
+        // 工具定义透传（agent-loop 编排；引擎不理解语义，仅管道）
+        ...(payload.tools?.length ? { tools: payload.tools, tool_choice: payload.toolChoice ?? 'auto' } : {}),
         ...buildCapabilityParams(provider),
       },
       provider.id,
@@ -173,6 +193,10 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    // 工具调用聚合：按 OpenAI 规范 delta.tool_calls 可能分片（index 维度拼接
+    // id / function.name / function.arguments），也可能整块一次到齐（MOSI 实测）。
+    let toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
+    let finishReason = '';
     for (;;) {
       if (cancelled) {
         emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
@@ -190,13 +214,34 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         if (data === '[DONE]') continue;
         try {
           const json = JSON.parse(data);
+          const choice = json.choices?.[0];
           // 兼容两类增量：常规 content 与推理模型的 reasoning_content
-          const delta: string | undefined = json.choices?.[0]?.delta?.content;
+          const delta: string | undefined = choice?.delta?.content;
           if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
+          // 工具调用增量聚合（index 维度）
+          const tcs = choice?.delta?.tool_calls;
+          if (Array.isArray(tcs)) {
+            for (const tc of tcs) {
+              const idx = Number(tc?.index ?? 0);
+              const slot = toolAcc.get(idx) ?? { id: '', name: '', arguments: '' };
+              if (tc.id) slot.id = slot.id || String(tc.id);
+              if (tc.function?.name) slot.name += String(tc.function.name);
+              if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
+              toolAcc.set(idx, slot);
+            }
+          }
+          if (choice?.finish_reason) finishReason = String(choice.finish_reason);
         } catch { /* 跳过不完整行 */ }
       }
     }
-    emit({ kind: 'message.done', payload: { sessionId, messageId } });
+    // 上游要求调用工具：聚合结果整体发出，由编排方（agent-loop）决策执行
+    if (finishReason === 'tool_calls' && toolAcc.size > 0) {
+      const toolCalls = [...toolAcc.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }));
+      emit({ kind: 'tool.calls', payload: { sessionId, messageId, toolCalls } });
+    }
+    emit({ kind: 'message.done', payload: { sessionId, messageId, ...(finishReason ? { finishReason } : {}) } });
   } catch (err) {
     if (cancelled) {
       // 中断：必须补发 done，否则 chat-lite 的按钮永远停在「停止」态

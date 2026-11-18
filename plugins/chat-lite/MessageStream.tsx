@@ -1,9 +1,10 @@
 /** 消息流：编辑式助手排版 + 收敛的用户消息，保留贴底跟随。 */
 import { useEffect, useRef, useState } from 'react';
-import { useSessionStore } from './store';
+import { useSessionStore, isToolCard, type ToolCardMessage } from './store';
 import { EmptyState } from './EmptyState';
 import { Markdown } from './markdown';
 import { PolarisMark, UserIcon } from './icons';
+import { ToolCard } from './ToolCard';
 
 export function MessageStream() {
   const activeId = useSessionStore((s) => s.activeId);
@@ -41,17 +42,21 @@ export function MessageStream() {
   return (
     <div className="chat-stream" data-testid="message-stream" ref={streamRef}>
       <div className="chat-conversation">
-        {session.messages.map((m) => (
-          <div key={m.id} className={`chat-msg ${m.role}`}>
-            <div className="chat-avatar" aria-hidden="true">
-              {m.role === 'user' ? <UserIcon /> : <PolarisMark size={19} />}
+        {session.messages.map((m) =>
+          isToolCard(m) ? (
+            <ToolCard key={m.id} msg={m as ToolCardMessage} />
+          ) : (
+            <div key={m.id} className={`chat-msg ${m.role}`}>
+              <div className="chat-avatar" aria-hidden="true">
+                {m.role === 'user' ? <UserIcon /> : <PolarisMark size={19} />}
+              </div>
+              <div className={`chat-bubble ${m.role === 'assistant' ? 'markdown' : ''}`}>
+                {m.role === 'assistant' ? <Markdown text={m.content} /> : m.content}
+                {m.streaming && <span className="cursor" />}
+              </div>
             </div>
-            <div className={`chat-bubble ${m.role === 'assistant' ? 'markdown' : ''}`}>
-              {m.role === 'assistant' ? <Markdown text={m.content} /> : m.content}
-              {m.streaming && <span className="cursor" />}
-            </div>
-          </div>
-        ))}
+          ),
+        )}
         <div ref={bottomRef} />
       </div>
     </div>

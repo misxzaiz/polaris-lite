@@ -417,3 +417,136 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-bubble .cursor, .chat-empty, .chat-msg { animation: none !important; }
 }
+
+/* ===== 工具调用卡（参考 Polaris ToolCallBlock 收敛版） ===== */
+.chat-msg.tool { width: 100%; }
+.tc-letter {
+  display: inline-flex;
+  width: 20px; height: 20px;
+  border-radius: 5px;
+  align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  background: color-mix(in srgb, #a78bfa 14%, transparent);
+  color: #a78bfa;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+.tc-card {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  transition: border-color var(--plite-dur) var(--plite-ease);
+}
+.tc-card.tc-fail { border-color: color-mix(in srgb, var(--plite-danger) 30%, var(--border)); background: color-mix(in srgb, var(--plite-danger) 6%, var(--bg)); }
+
+.tc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  min-width: 0;
+}
+.tc-head:disabled { cursor: default; }
+.tc-status { font-size: 13px; color: var(--text-dim); flex-shrink: 0; }
+.tc-status.spin { animation: tc-spin 1s linear infinite; color: var(--accent); }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+.tc-name { font-weight: 600; flex-shrink: 0; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; }
+.tc-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+}
+.tc-duration { font-size: 10.5px; color: var(--text-dim); flex-shrink: 0; }
+.tc-state { font-size: 10.5px; color: var(--text-dim); flex-shrink: 0; }
+.tc-state.ok { color: var(--plite-success); }
+.tc-state.fail { color: var(--plite-danger); }
+.tc-chevron { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+
+.tc-body { border-top: 1px solid var(--border); padding: 8px 12px 10px; }
+.tc-section-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 4px 0 4px;
+}
+.tc-cmd {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 8rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.tc-output {
+  margin: 0;
+  padding: 7px 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.tc-output.tc-stderr { color: var(--plite-danger); }
+.tc-exit { font-size: 10.5px; color: var(--text-dim); margin-top: 6px; }
+
+/* 审批卡（warning 色独立视觉） */
+.tc-approval {
+  border: 1px solid color-mix(in srgb, var(--plite-warning) 45%, var(--border));
+  border-left: 2px solid var(--plite-warning);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--plite-warning) 7%, var(--bg));
+  padding: 10px 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+.tc-approval-head { font-size: 12.5px; font-weight: 600; color: var(--plite-warning); margin-bottom: 7px; }
+.tc-approval .tc-cmd { margin-bottom: 9px; }
+.tc-approval-btns { display: flex; gap: 7px; flex-wrap: wrap; }
+.tc-btn {
+  height: var(--plite-h-sm);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease);
+}
+.tc-btn:hover { border-color: var(--accent); }
+.tc-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tc-btn.primary:hover { background: #6d99ff; }
+.tc-btn.danger { color: var(--plite-danger); border-color: color-mix(in srgb, var(--plite-danger) 40%, var(--border)); }
+.tc-btn.danger:hover { background: var(--plite-danger-soft); border-color: var(--plite-danger); }

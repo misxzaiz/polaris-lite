@@ -26,6 +26,39 @@ export interface PendingSend {
   createdAt: number;
 }
 
+/** 工具调用卡（参考 Polaris ToolCallBlock 的收敛版） */
+export type ToolCardStatus = 'running' | 'done' | 'error' | 'denied' | 'awaiting' | 'resolved';
+
+export interface ToolCardData {
+  callId: string;
+  name: string;
+  command?: string;
+  status: ToolCardStatus;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  durationMs?: number;
+  truncated?: boolean;
+  decision?: 'once' | 'always' | 'deny';
+}
+
+/** role:'tool' 的消息形态（@sdk 的 ChatMessage 不含 tool 角色；本地扩展零宿主改动） */
+export interface ToolCardMessage {
+  id: string;
+  role: 'tool';
+  content: string;
+  createdAt: number;
+  streaming?: boolean;
+  tool: ToolCardData;
+}
+
+/** 会话消息统一形态（协议消息 + 工具卡） */
+export type StoreMessage = ChatMessage | ToolCardMessage;
+
+export function isToolCard(m: ChatMessage): m is ChatMessage & ToolCardMessage {
+  return (m as ToolCardMessage).role === 'tool' && !!(m as ToolCardMessage).tool;
+}
+
 interface PersistShape {
   sessions: ChatSession[];
   activeId: string | null;
@@ -33,7 +66,7 @@ interface PersistShape {
 }
 
 interface SessionState {
-  sessions: ChatSession[];
+  sessions: (ChatSession & { messages: StoreMessage[] })[];
   activeId: string | null;
   /** 待发队列：sessionId → 队列（内存态，不落盘） */
   pending: Record<string, PendingSend[]>;
@@ -41,8 +74,8 @@ interface SessionState {
   setActive: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   deleteSession: (id: string) => void;
-  appendMessage: (sessionId: string, msg: ChatMessage) => void;
-  updateMessage: (sessionId: string, msgId: string, patch: Partial<ChatMessage>) => void;
+  appendMessage: (sessionId: string, msg: StoreMessage) => void;
+  updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
   enqueue: (sessionId: string, item: PendingSend) => void;
   shiftPending: (sessionId: string) => PendingSend | null;
   clearPending: (sessionId: string) => void;
