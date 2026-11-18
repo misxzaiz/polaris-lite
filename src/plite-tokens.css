@@ -1,0 +1,76 @@
+/**
+ * plite-tokens.css — polaris-lite 唯一设计 token 源（壳层与插件共同消费）。
+ *
+ * 规则：
+ * - 存量 9 个 token 值保持不变（兜底重申，同值冗余不破坏现状）；
+ * - 新增 token 一律 --plite-* 前缀，插件只许消费、禁止重定义；
+ * - 语义色兼容别名（--danger/--ok/--warn）供存量插件 CSS 过渡，新代码用 --plite-*。
+ */
+:root {
+  /* ===== 存量 9 token（值不变，兜底重申） ===== */
+  --bg: #0f1117;
+  --bg-panel: #161923;
+  --bg-hover: #1e2230;
+  --border: #262b3a;
+  --text: #e6e8ef;
+  --text-dim: #8b90a0;
+  --accent: #5b8cff;
+  --accent-soft: rgba(91, 140, 255, 0.16);
+  --radius: 8px;
+
+  /* ===== 间距（4 的倍数 5 档） ===== */
+  --plite-space-1: 4px;
+  --plite-space-2: 8px;
+  --plite-space-3: 12px;
+  --plite-space-4: 16px;
+  --plite-space-6: 24px;
+
+  /* ===== 控件高度 3 档 ===== */
+  --plite-h-sm: 28px;   /* 面板小按钮 / 紧凑控件 */
+  --plite-h-md: 36px;   /* 默认按钮 / 表单输入 */
+  --plite-h-lg: 44px;   /* 主输入条 / 移动端触控目标 */
+
+  /* ===== 字号 4 档 ===== */
+  --plite-fs-xs: 11px;  /* 徽标 / 时间戳 */
+  --plite-fs-sm: 12px;  /* 次要文字 / tab */
+  --plite-fs-md: 13px;  /* 正文默认 */
+  --plite-fs-lg: 16px;  /* 空态标题 / 面板标题 */
+
+  /* ===== 语义色 ===== */
+  --plite-success: #4cc38a;
+  --plite-warning: #ffb84d;
+  --plite-danger: #e5534b;
+  --plite-info: #60a5fa;
+  --plite-success-soft: rgba(76, 195, 138, 0.12);
+  --plite-warning-soft: rgba(255, 184, 77, 0.14);
+  --plite-danger-soft: rgba(229, 83, 75, 0.14);
+  --plite-info-soft: rgba(96, 165, 250, 0.14);
+  --plite-neutral-soft: rgba(139, 144, 160, 0.14);
+
+  /* ===== 焦点 / 阴影 / 动效 ===== */
+  --plite-focus-ring: 0 0 0 2px rgba(91, 140, 255, 0.45);
+  --plite-shadow-1: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --plite-dur: 160ms;
+  --plite-dur-slow: 280ms;
+  --plite-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ===== 圆角补充档 ===== */
+  --radius-lg: 12px;    /* composer 卡片 */
+
+  /* ===== 兼容别名（存量插件 CSS 过渡用；新代码勿用） ===== */
+  --danger: var(--plite-danger);
+  --danger-soft: var(--plite-danger-soft);
+  --ok: var(--plite-success);
+  --ok-soft: var(--plite-success-soft);
+  --warn: var(--plite-warning);
+  --warn-soft: var(--plite-warning-soft);
+  --ring: rgba(91, 140, 255, 0.25);
+  --neutral-soft: var(--plite-neutral-soft);
+  --ctl-h: var(--plite-h-md);
+  --ctl-h-sm: var(--plite-h-sm);
+  --ctl-font: var(--plite-fs-md);
+  --ctl-font-sm: var(--plite-fs-sm);
+  --ctl-radius: 6px;
+  --ctl-focus-ring: var(--plite-focus-ring);
+  --control-h: var(--plite-h-md);
+}

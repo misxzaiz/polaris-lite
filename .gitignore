@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules
+dist
+plugins/*/dist
+
+# 插件构建产物（由 `node plugins/build-plugins.mjs` 生成，含 registry.json）
+# 不入库：避免把构建产物里可能存在的敏感值固化进历史
+public/plugins
+
+# 宿主运行态数据（owner 哈希、会话哈希、供应商密钥）—— 绝不入库
+.polaris-lite
+*.local
+
+# 环境与编辑器
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.log

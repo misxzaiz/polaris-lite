@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>N1 原型：ToolSwitcher 式面板浮层</title>
+<style>
+  /* ===== 对齐 Polaris index.css 核心 token ===== */
+  :root {
+    --bg-base: rgb(0 0 0);
+    --bg-elevated: rgb(26 26 31);
+    --bg-surface: rgb(37 37 43);
+    --bg-hover: rgb(45 45 53);
+    --border-subtle: rgba(255 255 255 / 0.08);
+    --border: rgba(255 255 255 / 0.12);
+    --text-primary: rgb(248 248 248);
+    --text-secondary: rgb(180 180 184);
+    --text-tertiary: rgb(142 142 147);
+    --primary: rgb(59 130 246);
+    --primary-soft: rgba(59 130 246 / 0.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg-base); color: var(--text-primary); font-family: 'Segoe UI', 'PingFang SC', system-ui, sans-serif; }
+
+  .app { display: grid; grid-template-columns: 260px 1fr 300px; height: 100vh; overflow: hidden; }
+
+  /* ===== 左侧：当前面板入口（N1 核心：常态只显示一个入口按钮） ===== */
+  .side { background: var(--bg-elevated); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; }
+  .side-brand { padding: 12px 14px; font-weight: 600; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 8px; }
+  .side-brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); }
+  .side-body { flex: 1; padding: 12px; overflow-y: auto; }
+  .entry {
+    width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-surface);
+    color: var(--text-primary); cursor: pointer; font-size: 13px;
+  }
+  .entry:hover { background: var(--bg-hover); }
+  .entry .ic { width: 22px; height: 22px; border-radius: 6px; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .entry .nm { flex: 1; text-align: left; }
+  .entry .caret { color: var(--text-tertiary); font-size: 10px; }
+  .sess { margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+  .sess-new { width: 100%; padding: 7px; border: 1px dashed var(--border); border-radius: 8px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 12px; }
+  .sess-item { padding: 6px; font-size: 12px; color: var(--text-tertiary); border-radius: 8px; }
+  .sess-item.active { background: var(--primary-soft); color: var(--text-primary); }
+
+  /* ===== 浮层（像素级对齐 ToolSwitcher） ===== */
+  .popover {
+    position: fixed; left: 12px; top: 52px; width: min(360px, calc(100vw - 16px));
+    max-height: min(70dvh, calc(100dvh - 64px));
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  .pop-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+  .pop-head .ic { width: 24px; height: 24px; border-radius: 8px; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .pop-head .tt { flex: 1; font-size: 13px; font-weight: 500; }
+  .pop-head .chip { border: 1px solid var(--border-subtle); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: var(--text-tertiary); }
+  .pop-head .x { border: none; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 14px; }
+  .pop-search { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+  .pop-search .box { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); color: var(--text-tertiary); }
+  .pop-search input { flex: 1; border: none; outline: none; background: transparent; color: var(--text-primary); font-size: 13px; }
+  .pop-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+  .pop-sec { font-size: 11px; color: var(--text-tertiary); margin: 8px 4px 6px; }
+  .pop-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
+  .pop-tile { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: none; background: transparent; color: var(--text-secondary); border-radius: 8px; cursor: pointer; }
+  .pop-tile:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .pop-tile.active { background: var(--primary-soft); color: var(--primary); }
+  .pop-tile .ico { font-size: 17px; }
+  .pop-tile .lbl { font-size: 10.5px; }
+  .pop-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .pop-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: none; background: transparent; color: var(--text-secondary); border-radius: 8px; cursor: pointer; font-size: 12.5px; width: 100%; text-align: left; }
+  .pop-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .pop-row .ico { width: 18px; text-align: center; }
+  .pop-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pop-empty { padding: 24px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+  .pop-foot { border-top: 1px solid var(--border-subtle); padding: 6px 12px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-tertiary); }
+  .pop-foot .sp { flex: 1; }
+  .pop-foot button { border: none; background: transparent; color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+  .pop-foot button:hover { color: var(--text-primary); }
+
+  /* ===== 主区与右面板 ===== */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow-y: auto; padding: 24px; }
+  .bubble { max-width: 70%; padding: 10px 14px; border-radius: 12px; background: var(--bg-elevated); margin-bottom: 12px; font-size: 13.5px; line-height: 1.65; }
+  .bubble.me { margin-left: auto; background: var(--primary-soft); }
+  .input { border-top: 1px solid var(--border-subtle); padding: 12px 16px; }
+  .input textarea { width: 100%; min-height: 64px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 10px; font: inherit; resize: vertical; outline: none; }
+  .rpanel { background: var(--bg-elevated); border-left: 1px solid var(--border-subtle); padding: 16px; font-size: 12.5px; color: var(--text-tertiary); overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="side-brand"><span class="dot"></span> Polaris Lite</div>
+    <div class="side-body">
+      <!-- N1 核心：常态只显示当前面板一个入口，点击弹出浮层 -->
+      <button class="entry" id="entryBtn">
+        <span class="ic" id="entryIcon">💬</span>
+        <span class="nm" id="entryName">会话面板</span>
+        <span class="caret">▾</span>
+      </button>
+      <div class="sess">
+        <button class="sess-new">+ 新会话</button>
+        <div class="sess-item active">会话：演示会话 1</div>
+        <div class="sess-item">会话：供应商联调</div>
+      </div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="stream" id="stream"></div>
+    <div class="input"><textarea placeholder="输入消息…" rows="2"></textarea></div>
+  </main>
+  <aside class="rpanel">
+    <strong>面板区</strong>
+    <p>当前激活面板：<span id="activeName">—</span></p>
+    <p>此区域演示右侧能力面板（cap-panel / model-admin）。</p>
+  </aside>
+</div>
+
+<!-- N1 浮层：搜索 + 置顶 grid + 溢出列表 + 底栏（对齐 ToolSwitcher） -->
+<div class="popover" id="popover" style="display:none">
+  <div class="pop-head">
+    <div class="ic">▦</div>
+    <div class="tt">面板导航</div>
+    <div class="chip" id="popChip">13</div>
+    <button class="x" id="popClose">✕</button>
+  </div>
+  <div class="pop-search">
+    <div class="box">🔎 <input id="popQ" placeholder="搜索面板…" /></div>
+  </div>
+  <div class="pop-scroll">
+    <div class="pop-sec">置顶</div>
+    <div class="pop-grid" id="popPinGrid"></div>
+    <div id="popGroups"></div>
+  </div>
+  <div class="pop-foot">
+    <span>当前侧栏</span><span class="sp" id="popFootActive">—</span>
+    <button id="popFootClose">关闭当前侧栏</button>
+  </div>
+</div>
+
+<script>
+  const PANELS = [
+    { id: 'chat', name: '会话面板', icon: '💬', group: 'chat', order: 1 },
+    { id: 'history', name: '历史会话', icon: '🕘', group: 'chat', order: 2 },
+    { id: 'git', name: 'Git 面板', icon: '🌿', group: 'dev', order: 1 },
+    { id: 'terminal', name: '终端', icon: '⌨️', group: 'dev', order: 2 },
+    { id: 'model-admin', name: '模型供应商', icon: '🧠', group: 'dev', order: 3 },
+    { id: 'csv', name: 'CSV 检查', icon: '📄', group: 'data', order: 1 },
+    { id: 'json', name: 'JSON 检查', icon: '🧾', group: 'data', order: 2 },
+    { id: 'log', name: '日志透视', icon: '📜', group: 'data', order: 3 },
+    { id: 'api', name: '接口压测', icon: '🚀', group: 'tools', order: 1 },
+    { id: 'docker', name: '容器工作台', icon: '🐳', group: 'tools', order: 2 },
+    { id: 'k8s', name: 'K8s 体检', icon: '☸️', group: 'tools', order: 3 },
+    { id: 'misc-a', name: '未分组面板 A', icon: '📦', group: 'misc', order: 1 },
+    { id: 'misc-b', name: '未分组面板 B', icon: '📦', group: 'misc', order: 2 },
+  ];
+  const GROUP_LABEL = { chat: '对话', dev: '开发', data: '数据', tools: '工具', misc: '更多插件' };
+  const GROUP_ORDER = ['chat', 'dev', 'data', 'tools', 'misc'];
+  const PREF_KEY = 'polaris.nav.prefs.v1';
+  const POP_KEY = 'polaris.nav.pins.v1';
+
+  const prefs = Object.assign({ active: 'chat', pins: ['chat', 'api'], query: '' }, loadPrefs());
+  function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch { return {}; } }
+  function savePrefs() { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); }
+  function activePanel() { return PANELS.find((p) => p.id === prefs.active) ?? PANELS[0]; }
+
+  // ===== 浮层开关 =====
+  const pop = document.getElementById('popover');
+  document.getElementById('entryBtn').addEventListener('click', () => {
+    pop.style.display = pop.style.display === 'none' ? 'flex' : 'none';
+    if (pop.style.display === 'flex') { renderPop(); document.getElementById('popQ').focus(); }
+  });
+  document.getElementById('popClose').addEventListener('click', () => { pop.style.display = 'none'; });
+  document.addEventListener('mousedown', (e) => {
+    if (pop.style.display !== 'none' && !pop.contains(e.target) && !document.getElementById('entryBtn').contains(e.target)) {
+      pop.style.display = 'none';
+    }
+  });
+
+  // ===== 浮层渲染（搜索 + 置顶 grid + 溢出列表） =====
+  function renderPop() {
+    const q = (prefs.query || '').toLowerCase();
+    const filtered = PANELS.filter((p) => (p.name + ' ' + p.id).toLowerCase().includes(q));
+    const pinned = prefs.pins.map((id) => filtered.find((p) => p.id === id)).filter(Boolean);
+    const overflow = filtered.filter((p) => !prefs.pins.includes(p.id));
+    document.getElementById('popChip').textContent = filtered.length;
+
+    const grid = document.getElementById('popPinGrid');
+    grid.innerHTML = '';
+    pinned.forEach((p) => {
+      const b = document.createElement('button');
+      b.className = 'pop-tile' + (prefs.active === p.id ? ' active' : '');
+      b.innerHTML = `<span class="ico">${p.icon}</span><span class="lbl">${p.name}</span>`;
+      b.title = p.name;
+      b.onclick = () => { setActive(p.id); };
+      grid.appendChild(b);
+    });
+
+    const groups = document.getElementById('popGroups');
+    groups.innerHTML = '';
+    if (pinned.length) {
+      const sep = document.createElement('div');
+      sep.style.cssText = 'height:1px;background:var(--border-subtle);margin:8px 4px;';
+      groups.appendChild(sep);
+    }
+    GROUP_ORDER.forEach((gid) => {
+      const items = overflow.filter((p) => p.group === gid).sort((a, b) => a.order - b.order);
+      if (!items.length) return;
+      const sec = document.createElement('div');
+      sec.innerHTML = `<div class="pop-sec">${GROUP_LABEL[gid]}</div>`;
+      const list = document.createElement('div');
+      list.className = 'pop-list';
+      items.forEach((p) => {
+        const b = document.createElement('button');
+        b.className = 'pop-row' + (prefs.active === p.id ? ' active' : '');
+        b.innerHTML = `<span class="ico">${p.icon}</span><span class="nm">${p.name}</span>`;
+        b.title = p.name;
+        b.onclick = () => { setActive(p.id); pop.style.display = 'none'; };
+        list.appendChild(b);
+      });
+      sec.appendChild(list);
+      groups.appendChild(sec);
+    });
+    if (!filtered.length) {
+      groups.innerHTML = '<div class="pop-empty">没有匹配结果</div>';
+    }
+  }
+
+  document.getElementById('popQ').addEventListener('input', (e) => {
+    prefs.query = e.target.value;
+    renderPop();
+  });
+
+  function setActive(id) {
+    prefs.active = id;
+    savePrefs();
+    renderEntry();
+    renderStream();
+  }
+
+  function renderEntry() {
+    const p = activePanel();
+    document.getElementById('entryIcon').textContent = p.icon;
+    document.getElementById('entryName').textContent = p.name;
+  }
+
+  function renderStream() {
+    const p = activePanel();
+    document.getElementById('activeName').textContent = p.name;
+    document.getElementById('popFootActive').textContent = p.name;
+    document.getElementById('stream').innerHTML =
+      `<div class="bubble me">打开「${p.name}」</div>` +
+      `<div class="bubble">这里是「${p.name}」面板内容区（N1 浮层原型演示）。常态只显示当前面板入口，面板增多只增加浮层滚动长度。</div>`;
+  }
+
+  renderEntry();
+  renderStream();
+  renderPop();
+</script>
+</body>
+</html>
