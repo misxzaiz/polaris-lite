@@ -18,8 +18,8 @@
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 
-const MAX_TURNS = 8;
-const MAX_TOOL_CALLS = 16;
+// 轮次/工具调用数量上限：应用户要求移除（曾为 8 轮 / 16 次）——任务时长靠用户
+// 「停止」即时收敛与单条命令超时兜底。
 const APPROVAL_TIMEOUT_MS = 120_000;
 /** 喂回模型的工具结果截断（上下文防爆） */
 const FEEDBACK_CAP = 8 * 1024;
@@ -65,6 +65,8 @@ const pendingApprovals = new Map<string, (d: 'once' | 'always' | 'deny') => void
 const inFlightExec = new Map<string, string>();
 /** sessionId → 会话级「总是允许」前缀（内存；持久化在服务端白名单） */
 const sessionAllow = new Map<string, Set<string>>();
+/** 会话级信任工具集（审批卡「本会话信任」沉淀；内存态，不跨会话不持久化） */
+const sessionTrustedTools = new Map<string, Set<string>>();
 
 let hostApi: SlotHostApi | null = null;
 
@@ -110,12 +112,15 @@ async function decideApproval(
   } catch { /* 配置不可达：按 confirm 处理（宁紧勿松） */ }
 
   if (mode === 'yolo') return 'ok';
+  // 会话级信任工具（审批卡「本会话信任」沉淀）：命中直接放行
+  const trusted = sessionTrustedTools.get(sessionId);
+  if (trusted?.has(call.name)) return 'ok';
   const allow = sessionAllow.get(sessionId);
   if (allow && [...allow].some((p) => command === p || command.startsWith(`${p} `))) return 'ok';
   // allowlist 模式：本地未命中白名单仍进审批（服务端白名单由「总是允许」沉淀，服务端最终裁决）
 
   emitTo(emit, 'tool.approval.required', { sessionId, messageId: assistantId, callId, name: call.name, command });
-  const decision = await new Promise<'once' | 'always' | 'deny'>((resolve) => {
+  const decision = await new Promise<'once' | 'always' | 'trust' | 'deny'>((resolve) => {
     pendingApprovals.set(callId, resolve);
     setTimeout(() => {
       if (pendingApprovals.has(callId)) {
@@ -140,15 +145,23 @@ async function decideApproval(
     }).catch(() => undefined);
     return 'ok';
   }
+  if (decision === 'trust') {
+    // 会话级信任本工具：后续该工具调用不再审批（内存态，不持久化、不跨会话）
+    const set = sessionTrustedTools.get(sessionId) ?? new Set<string>();
+    set.add(call.name);
+    sessionTrustedTools.set(sessionId, set);
+    return 'ok';
+  }
   return 'ok'; // once
 }
 
-/** 引擎流一轮：返回 {text, toolCalls, finishReason} 或抛错 */
+/** 引擎流一轮：返回 {text, toolCalls, finishReason} 或抛错；onDelta 实时转发可见增量（流式 UX） */
 function engineTurn(
   sessionId: string,
   turnMessageId: string,
   messages: ShadowMsg[],
   toolDefs: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[],
+  onDelta?: (delta: string) => void,
 ): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>; cancel: () => void } {
   let off: (() => void) | undefined;
   const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>((resolve, reject) => {
@@ -166,6 +179,7 @@ function engineTurn(
       if (inner.messageId && inner.messageId !== turnMessageId) return;
       if (ev.kind === 'message.delta' && inner.delta) {
         text += inner.delta;
+        onDelta?.(inner.delta); // 实时转发（UI 流式渲染；同时喂 chat-lite 看门狗）
       } else if (ev.kind === 'tool.calls' && inner.toolCalls) {
         toolCalls = inner.toolCalls;
         finishReason = 'tool_calls';
@@ -310,9 +324,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
     let turn = 0;
     let totalToolCalls = 0;
-    for (; turn < MAX_TURNS && !abortedFlag; turn += 1) {
+    for (; !abortedFlag; turn += 1) {
       const turnMessageId = `${assistantId}::t${turn}`;
-      const t = engineTurn(sessionId, turnMessageId, shadow, toolDefs);
+      // onDelta：引擎可见增量实时转发（messageId=assistantId，chat-lite 流式渲染）
+      const t = engineTurn(sessionId, turnMessageId, shadow, toolDefs, (delta) => {
+        emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta });
+      });
       running.set(`${sessionId}::turn`, t.cancel);
       let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string };
       try {
@@ -328,10 +345,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       }
       running.delete(`${sessionId}::turn`);
 
-      // 可见文本转发（chat-lite 按 messageId=assistantId 匹配渲染）
-      if (result.text) emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta: result.text });
-
-      if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0 || totalToolCalls >= MAX_TOOL_CALLS) {
+      if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
         shadow.push({ role: 'assistant', content: result.text });
         break;
       }
@@ -351,7 +365,6 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
       // 逐个执行：审批 → cap.tool.* → 结果卡 + shadow
       for (const call of result.toolCalls) {
-        if (totalToolCalls >= MAX_TOOL_CALLS) break;
         totalToolCalls += 1;
         const desc = tools.get(call.name);
         const callId = call.id || `call-${turn}-${totalToolCalls}`;
@@ -418,9 +431,6 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     if (abortedFlag) {
       emitTo(emit, 'message.done', { sessionId, messageId: assistantId, interrupted: true });
       return;
-    }
-    if (turn >= MAX_TURNS) {
-      emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta: '\n\n已达工具循环轮次上限（8），停止继续执行。' });
     }
     emitTo(emit, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
     emitTo(emit, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });

@@ -149,6 +149,8 @@
   display: flex;
   flex-direction: column;
   scroll-behavior: smooth;
+  /* 底部留出输入区高度：scrollIntoView(block:'end') 不再让末尾内容贴着输入区下缘被裁 */
+  scroll-padding-bottom: 140px;
 }
 .chat-conversation {
   width: min(100%, 840px);
@@ -560,3 +562,90 @@
 .tc-btn.primary:hover { background: #6d99ff; }
 .tc-btn.danger { color: var(--plite-danger); border-color: color-mix(in srgb, var(--plite-danger) 40%, var(--border)); }
 .tc-btn.danger:hover { background: var(--plite-danger-soft); border-color: var(--plite-danger); }
+
+/* ===== 折叠组（连续工具块：流式平铺 / 结束折叠汇总条） ===== */
+.tc-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tc-group-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--plite-dur) var(--plite-ease), border-color var(--plite-dur) var(--plite-ease);
+}
+.tc-group-summary:hover { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.tc-group-icon { width: 15px; height: 15px; color: var(--text-dim); flex-shrink: 0; }
+.tc-group-label { font-weight: 600; flex-shrink: 0; }
+.tc-group-chip {
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--plite-success);
+  background: var(--plite-success-soft);
+}
+.tc-group-chip.fail { color: var(--plite-danger); background: var(--plite-danger-soft); }
+.tc-group-count { margin-left: auto; font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.tc-group .tc-chevron, .tc-head .tc-chevron { width: 13px; height: 13px; color: var(--text-dim); flex-shrink: 0; }
+.tc-group-collapse {
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.tc-group-collapse:hover { color: var(--accent); }
+
+/* ===== 待审批胶囊（流容器内 sticky 底部；点击定位审批卡） ===== */
+.tc-await-pill {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--plite-warning) 55%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plite-warning) 14%, var(--bg-panel));
+  color: var(--plite-warning);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 4;
+}
+.tc-await-pill:hover { filter: brightness(1.1); }
+
+/* ===== 信任模式徽标（输入区按钮行） ===== */
+.chat-trust-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
+}
+.chat-trust-chip:hover { border-color: var(--accent); color: var(--text); }
+.chat-trust-chip.trusted {
+  border-color: color-mix(in srgb, var(--plite-success) 55%, var(--border));
+  background: var(--plite-success-soft);
+  color: var(--plite-success);
+  font-weight: 600;
+}
+
+/* ===== text 块间距（工具卡与文本块之间的呼吸） ===== */
+.tc-text { min-width: 0; }
+.tc-text + .tc-text, .tc-card + .tc-text, .tc-text + .tc-card, .tc-group + .tc-text, .tc-text + .tc-group { margin-top: 10px; }

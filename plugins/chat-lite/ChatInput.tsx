@@ -69,6 +69,29 @@ function saveDraft(sessionId: string, text: string): void {
 }
 
 export function ChatInput() {
+  // 信任模式徽标（完全信任 = yolo；数据源服务端配置，切换即改服务端裁决模式）
+  const [trustMode, setTrustMode] = useState<boolean | null>(null);
+  const refreshTrust = useCallback(async () => {
+    try {
+      const r = await fetch('/api/tool/config', { credentials: 'include' });
+      if (!r.ok) { setTrustMode(null); return; }
+      const j = (await r.json()) as { mode?: string };
+      setTrustMode(j.mode === 'yolo');
+    } catch { setTrustMode(null); }
+  }, []);
+  const toggleTrust = useCallback(async () => {
+    try {
+      const r = await fetch('/api/tool/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ mode: trustMode ? 'confirm' : 'yolo' }),
+      });
+      if (r.ok) setTrustMode(((await r.json()) as { mode?: string }).mode === 'yolo');
+    } catch { /* 配置不可达：保持原态 */ }
+  }, [trustMode]);
+  useEffect(() => { void refreshTrust(); }, [refreshTrust]);
+
   const [text, setText] = useState('');
   const [tooLong, setTooLong] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -229,6 +252,7 @@ export function ChatInput() {
     setHistoryIndex(null);
     if (activeId) saveDraft(activeId, '');
     void sendUserMessage(t, carryAttachments);
+    void refreshTrust(); // 会话内配置可能被审批卡/面板改动：发送时同步徽标
   };
 
   const doInterrupt = () => {
@@ -342,6 +366,16 @@ export function ChatInput() {
         onChange={handleFilePicker}
       />
       <div className="chat-input-btns">
+        {trustMode !== null && (
+          <button
+            className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
+            onClick={() => void toggleTrust()}
+            title={trustMode ? '信任模式：AI 可直接执行命令（点击关闭）' : '审批模式：命令需确认（点击开启信任）'}
+            aria-pressed={trustMode}
+          >
+            {trustMode ? '信任模式' : '审批模式'}
+          </button>
+        )}
         <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
         <button
           className="chat-send attach"

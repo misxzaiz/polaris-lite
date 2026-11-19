@@ -11,7 +11,7 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useSessionStore, isToolCard, hasBlocks, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
@@ -128,61 +128,71 @@ interface StreamEnvelope {
   source?: string;
 }
 
-/** 工具卡事件处理（仅 loop 模式；按 callId 幂等建卡/更新） */
-function handleToolEvent(kind: string, inner: NonNullable<StreamEnvelope['payload']>, sid: string, armLongWatchdog: () => void): void {
+/** 工具块事件处理（仅 loop 模式；块内嵌于 assistant 消息，按 callId 幂等建块/更新） */
+function handleToolEvent(
+  kind: string,
+  inner: NonNullable<StreamEnvelope['payload']>,
+  sid: string,
+  assistantId: string,
+  armLongWatchdog: () => void,
+): void {
   const st = useSessionStore.getState();
   // 工具阶段（执行/审批）无 delta 流，看门狗须用长时限，否则 30s 就误杀在途编排
   armLongWatchdog();
-  if (kind === 'tool.card' || kind === 'tool.approval.required') {
-    const cardId = `card-${inner.callId}`;
-    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
-    if (existing) {
-      // 卡已存在（tool.card 先到）：approval.required 把卡片升级为「等待审批」
-      if (kind === 'tool.approval.required') {
-        st.updateMessage(sid, cardId, { tool: { ...existing.tool, status: 'awaiting' } } as Partial<StoreMessage>);
-      }
+  const patchCard = (callId: string, patch: (card: ToolCardData) => ToolCardData): void => {
+    // 新版：块内嵌于 assistant 消息；旧版（历史会话）：独立 tool 卡消息
+    const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+    if (msg && hasBlocks(msg)) {
+      const blk = msg.blocks.find((b) => b.type === 'tool' && b.card.callId === callId);
+      st.patchAssistantToolBlock(sid, assistantId, callId, patch(blk && blk.type === 'tool' ? blk.card : ({} as ToolCardData)));
       return;
     }
-    const tool: ToolCardData = {
-      callId: inner.callId ?? '',
-      name: inner.name ?? 'tool',
-      command: inner.command ?? inner.argsJson,
-      status: kind === 'tool.card' ? 'running' : 'awaiting',
-    };
-    st.appendMessage(sid, {
-      id: cardId,
-      role: 'tool',
-      content: tool.command ?? '',
-      createdAt: Date.now(),
-      tool,
-    } as unknown as StoreMessage);
+    const legacy = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === `card-${callId}`) as ToolCardMessage | undefined;
+    if (legacy) {
+      st.updateMessage(sid, legacy.id, { tool: patch(legacy.tool) } as Partial<StoreMessage>);
+    }
+  };
+
+  if (kind === 'tool.card' || kind === 'tool.approval.required') {
+    const callId = inner.callId ?? '';
+    const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+    const exists = msg && hasBlocks(msg) && msg.blocks.some((b) => b.type === 'tool' && b.card.callId === callId);
+    if (!exists) {
+      // 新块（tool.card 先到即建 running 卡）
+      st.appendAssistantBlock(sid, assistantId, {
+        type: 'tool',
+        card: {
+          callId,
+          name: inner.name ?? 'tool',
+          command: inner.command ?? inner.argsJson,
+          status: kind === 'tool.card' ? 'running' : 'awaiting',
+        },
+      });
+      return;
+    }
+    if (kind === 'tool.approval.required') {
+      patchCard(callId, (c) => ({ ...c, status: 'awaiting' }));
+    }
     return;
   }
   if (kind === 'tool.approval.resolved') {
-    const cardId = `card-${inner.callId}`;
-    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
-    if (!existing) return;
-    // once/always → 后续 tool.result 会更新为终态；deny → 直接收敛为拒绝
-    st.updateMessage(sid, cardId, {
-      tool: { ...existing.tool, status: inner.decision === 'deny' ? 'denied' : 'resolved', decision: inner.decision },
-    } as Partial<StoreMessage>);
+    patchCard(inner.callId ?? '', (c) => ({
+      ...c,
+      status: inner.decision === 'deny' ? 'denied' : 'resolved',
+      decision: inner.decision,
+    }));
     return;
   }
   if (kind === 'tool.result') {
-    const cardId = `card-${inner.callId}`;
-    const existing = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === cardId) as ToolCardMessage | undefined;
-    if (!existing) return;
-    st.updateMessage(sid, cardId, {
-      tool: {
-        ...existing.tool,
-        status: inner.status ?? 'error',
-        stdout: inner.stdout,
-        stderr: inner.stderr,
-        exitCode: inner.exitCode,
-        durationMs: inner.durationMs,
-        truncated: inner.truncated,
-      },
-    } as Partial<StoreMessage>);
+    patchCard(inner.callId ?? '', (c) => ({
+      ...c,
+      status: inner.status ?? 'error',
+      stdout: inner.stdout,
+      stderr: inner.stderr,
+      exitCode: inner.exitCode,
+      durationMs: inner.durationMs,
+      truncated: inner.truncated,
+    }));
     return;
   }
 }
@@ -197,20 +207,20 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   if (!sessionId) sessionId = store.createSession();
   const sid: string = sessionId;
 
-  // 上下文 = 本次提问之前的全部消息（排除工具卡：协议上下文由 agent-loop 的 shadow transcript 自持）
+  // 上下文 = 本次提问之前的全部消息（排除工具卡；blocks 模式的 assistant 文本取块拼接）。
+  // 协议上下文由 agent-loop 的 shadow transcript 自持，此处只喂可见文本。
   const history = store.sessions
     .find((s) => s.id === sid)
-    ?.messages.filter((m) => !m.streaming && !isToolCard(m))
-    .map((m) => ({ role: m.role, content: m.content }));
+    ?.messages.filter((m) => !m.streaming && !isToolCard(m) && (m.role === 'user' || m.role === 'assistant'))
+    .map((m) => ({
+      role: m.role,
+      content: hasBlocks(m)
+        ? m.blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n') || m.content
+        : m.content,
+    }));
 
-  // 新消息即过期：本会话挂着的审批卡直接置为拒绝（Polaris 语义；loop 侧 120s 超时兜底）
-  const expired = store.sessions
-    .find((s) => s.id === sid)
-    ?.messages.filter(isToolCard)
-    .filter((m) => (m as ToolCardMessage).tool.status === 'awaiting') ?? [];
-  for (const m of expired) {
-    store.updateMessage(sid, m.id, { tool: { ...(m as ToolCardMessage).tool, status: 'denied', decision: 'deny' } } as Partial<StoreMessage>);
-  }
+  // 新消息即过期：本会话挂着的审批（块内/旧版独立卡）直接置为拒绝（Polaris 语义；loop 侧 120s 超时兜底）
+  store.expirePendingApprovals(sid);
 
   store.appendMessage(sid, {
     id: nextMsgId(),
@@ -224,18 +234,15 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     id: assistantId,
     role: 'assistant',
     content: '',
+    blocks: [], // blocks 模式：文本/工具块按事件序追加（content 为其镜像，供历史映射与兼容消费）
     createdAt: Date.now(),
     streaming: true,
-  } satisfies ChatMessage);
+  } as unknown as ChatMessage);
 
   // loop 模式探测：cap.agent.loop 存在（已启用）则走编排通道，否则回落纯引擎
   const useLoop = await detectLoop();
 
-  const readContent = (): string =>
-    useSessionStore.getState().sessions
-      .find((x) => x.id === sid)?.messages.find((m) => m.id === assistantId)?.content ?? '';
-
-  // ---- delta 按帧合并 ----
+  // ---- delta 按帧合并（写入 assistant 末尾 text 块；content 镜像由 store 同步） ----
   let buf = '';
   let frame = 0;
   const flushDelta = (): void => {
@@ -246,7 +253,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (!buf) return;
     const chunk = buf;
     buf = '';
-    useSessionStore.getState().updateMessage(sid, assistantId, { content: readContent() + chunk });
+    useSessionStore.getState().appendAssistantBlock(sid, assistantId, { type: 'text', text: chunk });
   };
   const pushDelta = (delta: string): void => {
     buf += delta;
@@ -278,9 +285,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (watchdog) clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (settled) return;
-      const prev = readContent();
-      useSessionStore.getState().updateMessage(sid, assistantId, {
-        content: `${prev}${prev ? '\n\n' : ''}响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000}s 无新内容），已结束本次流式`,
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'text',
+        text: `响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000}s 无新内容），已结束本次流式`,
       });
       settle();
     }, STREAM_IDLE_TIMEOUT_MS);
@@ -291,9 +298,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (watchdog) clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (settled) return;
-      const prev = readContent();
-      useSessionStore.getState().updateMessage(sid, assistantId, {
-        content: `${prev}${prev ? '\n\n' : ''}响应超时（${TOOL_PHASE_TIMEOUT_MS / 1000}s 无新内容），已结束本次编排`,
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'text',
+        text: `响应超时（${TOOL_PHASE_TIMEOUT_MS / 1000}s 无新内容），已结束本次编排`,
       });
       settle();
     }, TOOL_PHASE_TIMEOUT_MS);
@@ -309,9 +316,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (inner.sessionId && inner.sessionId !== sid) return;
     if (inner.messageId && inner.messageId !== assistantId) return;
 
-    // 工具卡事件（loop 模式专属）
+    // 工具块事件（loop 模式专属）
     if (envelope.kind.startsWith('tool.')) {
-      handleToolEvent(envelope.kind, inner, sid, armLongWatchdog);
+      handleToolEvent(envelope.kind, inner, sid, assistantId, armLongWatchdog);
       return;
     }
 
@@ -329,9 +336,10 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
         window.location.reload();
         return;
       }
-      const prev = readContent();
-      useSessionStore.getState().updateMessage(sid, assistantId, {
-        content: `${prev}${prev ? '\n\n' : ''}${detail || '流式请求失败'}`,
+      // 错误信息作为独立 text 块追加（blocks 模式渲染以块为准）
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'text',
+        text: `${detail || '流式请求失败'}`,
       });
       settle();
     }

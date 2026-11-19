@@ -42,7 +42,7 @@ export interface ToolCardData {
   decision?: 'once' | 'always' | 'deny';
 }
 
-/** role:'tool' 的消息形态（@sdk 的 ChatMessage 不含 tool 角色；本地扩展零宿主改动） */
+/** role:'tool' 的消息形态（旧数据兼容；新编排输出改为 assistant.blocks 内嵌块） */
 export interface ToolCardMessage {
   id: string;
   role: 'tool';
@@ -52,11 +52,32 @@ export interface ToolCardMessage {
   tool: ToolCardData;
 }
 
-/** 会话消息统一形态（协议消息 + 工具卡） */
-export type StoreMessage = ChatMessage | ToolCardMessage;
+/** assistant 消息的内容块（Polaris ContentBlock 收敛版）：按事件到达序追加，保序交错 */
+export type AsstBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool'; card: ToolCardData };
+
+export interface AssistantBlocks {
+  blocks: AsstBlock[];
+}
 
 export function isToolCard(m: ChatMessage): m is ChatMessage & ToolCardMessage {
   return (m as ToolCardMessage).role === 'tool' && !!(m as ToolCardMessage).tool;
+}
+
+export function hasBlocks(m: ChatMessage): m is ChatMessage & AssistantBlocks {
+  return Array.isArray((m as AssistantBlocks).blocks) && (m as AssistantBlocks).blocks!.length > 0;
+}
+
+/** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
+export type StoreMessage = ChatMessage | ToolCardMessage;
+
+/** 卡片数据体积上限（localStorage 1.5MB 全库额度；服务端输出 64KB 全量不留存） */
+const CARD_STORE_CAP = 16 * 1024;
+
+function trimCard(card: ToolCardData): ToolCardData {
+  const cut = (s?: string) => (s && s.length > CARD_STORE_CAP ? `${s.slice(0, CARD_STORE_CAP)}\n…[已截断]` : s);
+  return { ...card, stdout: cut(card.stdout), stderr: cut(card.stderr) };
 }
 
 interface PersistShape {
@@ -76,6 +97,12 @@ interface SessionState {
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
+  /** assistant 块追加：delta 进末尾 text 块（无则新建）；tool 块直接追加。content 镜像同步。 */
+  appendAssistantBlock: (sessionId: string, msgId: string, block: AsstBlock) => void;
+  /** 按 callId 更新 assistant 消息内的工具块 */
+  patchAssistantToolBlock: (sessionId: string, msgId: string, callId: string, patch: Partial<ToolCardData>) => void;
+  /** 新消息即过期：本会话所有 awaiting 工具块/旧版审批卡置为拒绝 */
+  expirePendingApprovals: (sessionId: string) => void;
   enqueue: (sessionId: string, item: PendingSend) => void;
   shiftPending: (sessionId: string) => PendingSend | null;
   clearPending: (sessionId: string) => void;
@@ -184,6 +211,85 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ),
     }));
     schedulePersist(get); // 防抖：流式高频更新只会落一次
+  },
+
+  appendAssistantBlock: (sessionId, msgId, block) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== msgId) return m;
+          const cur = m as ChatMessage & AssistantBlocks;
+          const blocks = cur.blocks ?? [];
+          // delta 语义：text 块追加进末尾 text 块（无则新建）——工具块之后的 delta
+          // 自然开新 text 块，交错时序天然保序
+          if (block.type === 'text') {
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'text') {
+              return {
+                ...cur,
+                blocks: [...blocks.slice(0, -1), { type: 'text' as const, text: last.text + block.text }],
+                content: (cur.content ?? '') + block.text, // content 镜像（历史映射/兼容消费）
+              };
+            }
+            return { ...cur, blocks: [...blocks, block], content: (cur.content ?? '') + block.text };
+          }
+          return { ...cur, blocks: [...blocks, { type: 'tool' as const, card: trimCard(block.card) }] };
+        }),
+      })),
+    }));
+    schedulePersist(get);
+  },
+
+  patchAssistantToolBlock: (sessionId, msgId, callId, patch) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== msgId) return m;
+          const cur = m as ChatMessage & AssistantBlocks;
+          if (!cur.blocks) return m;
+          return {
+            ...cur,
+            blocks: cur.blocks.map((b) =>
+              b.type === 'tool' && b.card.callId === callId ? { type: 'tool' as const, card: { ...b.card, ...patch } } : b,
+            ),
+          };
+        }),
+      })),
+    }));
+    schedulePersist(get);
+  },
+
+  expirePendingApprovals: (sessionId) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        let touched = false;
+        const messages = s.messages.map((m) => {
+          // 新版：assistant.blocks 内的 awaiting 工具块
+          if (hasBlocks(m)) {
+            let changed = false;
+            const blocks = m.blocks.map((b) => {
+              if (b.type === 'tool' && b.card.status === 'awaiting') {
+                touched = true; changed = true;
+                return { type: 'tool' as const, card: { ...b.card, status: 'denied' as const, decision: 'deny' as const } };
+              }
+              return b;
+            });
+            return changed ? { ...m, blocks } : m;
+          }
+          // 旧版：独立 tool 卡消息
+          if (isToolCard(m) && m.tool.status === 'awaiting') {
+            touched = true;
+            return { ...m, tool: { ...m.tool, status: 'denied', decision: 'deny' } } as StoreMessage;
+          }
+          return m;
+        });
+        return touched ? { ...s, messages } : s;
+      }),
+    }));
+    schedulePersist(get);
   },
 
   enqueue: (sessionId, item) => {

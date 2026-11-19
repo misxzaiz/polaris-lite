@@ -84,12 +84,13 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
     return (
       <div className="chat-msg tool">
         <div className="chat-avatar" aria-hidden="true"><span className="tc-letter">{tool.name.slice(0, 1).toUpperCase()}</span></div>
-        <div className="tc-approval" data-testid={`tc-approval-${tool.callId}`}>
+        <div className="tc-approval" data-call-id={tool.callId} data-testid={`tc-approval-${tool.callId}`}>
           <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
           <pre className="tc-cmd">{tool.command}</pre>
           <div className="tc-approval-btns">
             <button className="tc-btn primary" onClick={() => resolveApproval(tool.callId, 'once')}>允许一次</button>
             <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'always')}>总是允许该前缀</button>
+            <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'trust')}>本会话信任</button>
             <button className="tc-btn danger" onClick={() => resolveApproval(tool.callId, 'deny')}>拒绝</button>
           </div>
         </div>
@@ -102,6 +103,7 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
       <div className="chat-avatar" aria-hidden="true"><span className="tc-letter">{tool.name.slice(0, 1).toUpperCase()}</span></div>
       <div
         className={`tc-card ${tool.status === 'error' || tool.status === 'denied' ? 'tc-fail' : ''} ${open ? 'tc-open' : ''}`}
+        data-call-id={tool.callId}
         data-testid={`tc-${tool.callId}`}
         style={{ borderLeftColor: CARD_ACCENT }}
       >
