@@ -99,7 +99,9 @@ async function detectLoop(): Promise<boolean> {
   try {
     const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
     loopAvailable = (res.data?.capabilities ?? []).includes('cap.agent.loop');
-  } catch {
+    console.log('[chat-lite] detectLoop:', loopAvailable, 'caps:', (res.data?.capabilities ?? []).join(','));
+  } catch (e) {
+    console.log('[chat-lite] detectLoop error:', String(e).slice(0, 100));
     loopAvailable = false;
   }
   return loopAvailable;

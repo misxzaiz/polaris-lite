@@ -508,7 +508,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],
@@ -530,6 +530,7 @@ export const agentLoopPlugin: LitePlugin = {
         try {
           const res = await hostApi!.dispatch<{ roots?: { id: string; path: string }[] }>({ target: 'cap.tool.fs', action: 'roots' });
           const match = (res.data?.roots ?? []).find((r) => r.id === p.activeRootId);
+          console.log('[agent-loop] resolve:', p.activeRootId, '->', match ? match.path : '(missing)');
           if (match) globalActive.set(match.id, match.path);
           else globalActive.delete(p.activeRootId);
         } catch { /* roots 不可用：保持旧值 */ }
