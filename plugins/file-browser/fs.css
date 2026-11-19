@@ -103,3 +103,60 @@
 
 /* 滚动条 */
 .file-browser { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ===== v2 树形浏览 ===== */
+.fb-filter {
+  width: 100%;
+  height: var(--plite-h-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+.fb-filter:focus { border-color: var(--accent); box-shadow: var(--ctl-focus-ring); }
+
+.fb-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border-radius: 6px;
+  transition: background var(--plite-dur) var(--plite-ease);
+}
+.fb-node:hover { background: var(--bg-hover); }
+.fb-node.is-workspace { background: var(--accent-soft); }
+.fb-node-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.fb-node-main:disabled { cursor: default; opacity: 0.5; }
+.fb-node-caret { width: 12px; color: var(--text-dim); font-size: 10px; flex-shrink: 0; }
+.fb-node.dir .fb-node-name { color: var(--accent); }
+.fb-node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fb-node-ops { display: flex; gap: 3px; flex-shrink: 0; opacity: 0; transition: opacity var(--plite-dur) var(--plite-ease); }
+.fb-node:hover .fb-node-ops { opacity: 1; }
+.fb-node.is-workspace .fb-node-ops { opacity: 1; }
+
+.fb-roam-tag {
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  margin-left: auto;
+}
