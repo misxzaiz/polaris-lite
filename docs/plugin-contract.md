@@ -180,7 +180,7 @@ api.workspace.open(viewType, { where, anchor, allowMultiple })
 api.workspace.close(nodeId)
 api.workspace.split(nodeId, dir, viewType)
 api.workspace.move(nodeId, tabsId, index)
-api.workspace.applyTree(tree)                 // 需 cap.ui.layout.global
+api.workspace.applyTree(tree)                 // 需 cap.ui.layout.global，且必须含四个锚点
 api.workspace.reset()                         // 需 cap.ui.layout.global
 ```
 
@@ -195,7 +195,11 @@ api.workspace.reset()                         // 需 cap.ui.layout.global
 |---|---|---|
 | 授权 | `manifest.capabilities ∩ grants` 必须含 `cap.ui.layout`；未授权时 `api.workspace` **整个字段不存在**（fail-closed，不是「存在但报错」） | `bus.assertAllowed` + `hostRuntime` |
 | 归属 | 只能 `close`/`move` **自己的**视图（`viewType` 前缀 = `pluginId`）；不能动锚点、不能动别人的视图；`applyTree`/`reset` 另需 `.global` | `layoutCap.assertCanTouch` |
-| 登录 | `cap.ui.layout` 在 `bus.isPublicCap` 里**部分豁免**：读与「动自己的视图」登录前可用，`applyTree`/`reset` 未登录一律拒绝 | `bus.isPublicCap` |
+| tab 组 | 并入一个已有 tabs 组 = 与组内视图共享 tab 条与激活态，所以非 `.global` 时**只能并入全部属于自己的组**；`host.slot.*` 的归属是宿主，插件不能往里塞（空锚点上的自动组装除外） | `layoutCap.assertTabsJoinable` |
+| 结构视图 | `host.slot.*` 不可 `close`/`split`/`move`：它代表锚点内容，动了只会得到「按钮看起来坏了」或重复实例 | `layoutCap.assertNotStructuralNode` + `store.close` |
+| 登录 | `cap.ui.layout` 在 `bus.isPublicCap` 里**白名单豁免**（只读 + 动自己的视图）；新增动作默认要求登录 | `bus.isPublicCap` |
+
+> 白名单而不是黑名单：早期实现是「除 `applyTree`/`reset` 之外都放行」，将来新增一个会波及他人的动作就会默认放行。安全默认值必须是「拒绝」。
 
 **为什么部分豁免**：全拦会让插件视图只能等用户登录后才出现，而外壳自己的固定槽位并不经过总线——
 等于「宿主的 UI 权利 > 插件的 UI 权利」，与「核心零业务、一切皆插件」直接冲突；全豁免则让
@@ -213,6 +217,15 @@ api.workspace.reset()                         // 需 cap.ui.layout.global
 默认锚点是 `stream`（主区）：落到 `panel` 会把 320px 一分为二，两个 160px 窗格谁也放不下内容——实测结论，不是推测。
 
 默认幂等：同一 `viewType` 已在树中时直接聚焦、不重复开实例（`allowMultiple` 可覆盖）。
+
+**提交前一定校验**：所有结构变更都经过 `store.commitChecked`（先 `validateWorkspace` 再落地）。
+`applyTree` 额外要求 `requireAllAnchors`——缺锚点的树语法合法，但会被持久化，而下次启动
+`restore` 会拒绝它（用户看到「插件说成功了，刷新就没了」），移动端的抽屉按钮也会指向
+不存在的元素。预设可以只排一部分区域，但**落盘的那一份必须是完整布局**。
+
+**`close` 只接受视图**：`split` / `tabs` 容器不可关闭。删掉一个容器会连带删掉它内部的
+所有视图，其中若含锚点，就得到一棵缺锚点的树；容器的消失应当是「关掉最后一个视图后
+自动折叠」的结果。
 
 ---
 
