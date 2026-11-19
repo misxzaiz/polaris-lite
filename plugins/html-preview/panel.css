@@ -68,33 +68,39 @@
 .hp-card.hp-expanded .hp-body { height: 70vh; }
 .hp-body iframe { width: 100%; height: 100%; border: none; display: block; background: var(--bg); }
 
-/* ===== 全屏态 =====
- * 对话卡片（.hp-card.hp-fullscreen）：原地 absolute inset:0——包含块是 stream 槽的
- * .slot（宿主给了 flex:1 1 auto 满高），盖满消息流区域；节点不动、iframe 不重载，
- * 游戏进度/交互状态保留（原版双实例的病根）。
- * 面板（.hp-panel.hp-fullscreen）：面板槽的 .slot 只有内容高，原地方案只能盖住标题栏；
- * Panel.tsx 全屏时把根节点 reparent 到 .slot-tabpanel（满高 positioned 祖先）再
- * absolute inset:0。面板 iframe 是「点开才运行」的容器，重载可接受。
- * 宿主门禁禁止插件 position:fixed 逃出窗格（盖抽屉/顶栏属宿主层级）；z-index 只需
- * 压过窗格内同级内容。覆盖范围 = 所在窗格：多窗格布局下「全屏」指本窗格内全屏。 */
-.hp-card.hp-fullscreen, .hp-panel.hp-fullscreen {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  margin: 0;
-  border-radius: 0;
-  border: none;
+/* ===== 全屏态（浏览器原生 requestFullscreen，应用级全屏）=====
+ * 容器（标题栏 + iframe）整体进入 DOM 全屏层——盖满整个应用视口（顶栏/tab/侧栏/
+ * 输入区全遮），顶行保留标题与「退出全屏」按钮。iframe 原元素参与全屏零重载。
+ * 全屏层内的尺寸由 :fullscreen 伪类接管（脱离原布局上下文，flex 纵向铺满）。
+ * 旧方案（absolute inset:0 原地盖 stream 槽）已废弃：那只能盖住对话区。
+ * 退出钮醒目化：hp-exit 主色反白，全屏场景它是唯一出口，弱化等于不可见。 */
+.hp-card:fullscreen {
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
+  border: none;
+  border-radius: 0;
+  margin: 0;
 }
-.hp-card.hp-fullscreen .hp-body, .hp-panel.hp-fullscreen .hp-panel-body { height: auto; flex: 1; min-height: 0; }
-.hp-card.hp-fullscreen { display: flex; }
+.hp-card:fullscreen .hp-body { height: auto; flex: 1; min-height: 0; }
+.hp-panel:fullscreen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+}
+.hp-panel:fullscreen .hp-panel-body { flex: 1; min-height: 0; }
+.hp-panel:fullscreen .hp-panel-run { min-height: 0; }
+.hp-btn.hp-exit { background: var(--accent); border-color: var(--accent); color: #fff; }
+.hp-btn.hp-exit:hover { background: #6d99ff; }
 
 /* ===== panel 槽应用架 =====
  * 容器适配：panel 槽的 .slot 是内容高（宿主 flex:0 1 auto，无 stretch），
  * height:100% 会塌 0——运行区给视口自适应的固定高，列表配同高滚动；
- * 全屏态由 Panel.tsx reparent 到 .slot-tabpanel 后 inset:0 盖满。 */
+ * 全屏态走浏览器原生 requestFullscreen（:fullscreen 伪类接管，见文件尾）。 */
 .hp-panel { display: flex; flex-direction: column; min-height: 0; height: min(62vh, 560px); }
-.hp-panel.hp-fullscreen { height: auto; }
 .hp-panel-head {
   display: flex;
   align-items: center;

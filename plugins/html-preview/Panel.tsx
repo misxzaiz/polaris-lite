@@ -11,6 +11,7 @@
  * 全屏态 reparent 到 .slot-tabpanel（满高 positioned 祖先，见 panel.css 注释）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { enterFullscreenKeepingOrientation, exitFullscreenAndUnlock, releaseOrientationLock } from './fullscreen';
 
 interface PreviewItem {
   previewId: string;
@@ -53,32 +54,25 @@ export function HtmlPreviewPanel() {
 
   const current = items.find((i) => i.previewId === selected) ?? items[0] ?? null;
 
-  // 全屏（面板侧）：reparent 到最近的满高 positioned 祖先（.slot-tabpanel）。
-  // 原因：面板槽的 .slot 是内容高，absolute inset:0 只能盖到内容范围；
-  // .slot-tabpanel（tabpanel 主体）满高。面板 iframe 是「点开才运行」的容器，
-  // reparent 重载可接受（对话卡片才是保活优先场景，那边维持原地不 reparent）。
+  // 全屏（面板侧）：同卡片——浏览器原生 requestFullscreen（应用级全屏），
+  // 面板根（列表 + 运行 iframe）整体进全屏层，iframe 原元素零重载。
+  // 旧 reparent 方案废弃（只能盖 tabpanel，且回退路径分裂）。
   useEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    if (fullscreen) {
-      const host = box.closest('.slot-tabpanel') as HTMLElement | null;
-      const restoreTo = box.parentElement;
-      if (host && restoreTo) {
-        box.classList.add('hp-fullscreen');
-        host.appendChild(box);
-        const onKey = (e: KeyboardEvent) => {
-          if (e.key === 'Escape') setFullscreen(false);
-        };
-        document.addEventListener('keydown', onKey);
-        return () => {
-          document.removeEventListener('keydown', onKey);
-          box.classList.remove('hp-fullscreen');
-          restoreTo.appendChild(box);
-        };
-      }
-      setFullscreen(false); // 找不到挂载点：回退非全屏，避免状态与视觉脱节
-    }
-  }, [fullscreen]);
+    const onFsChange = () => {
+      setFullscreen(document.fullscreenElement === boxRef.current);
+      if (!document.fullscreenElement) releaseOrientationLock();
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  const enterFullscreen = (): void => {
+    void enterFullscreenKeepingOrientation(boxRef.current);
+  };
+
+  const exitFullscreen = (): void => {
+    exitFullscreenAndUnlock();
+  };
 
   return (
     <div ref={boxRef} className="hp-panel cap-panel html-preview" data-testid="html-preview">
@@ -87,7 +81,11 @@ export function HtmlPreviewPanel() {
         <span className="hp-panel-meta">{items.length ? `${items.length} 个` : ''}</span>
         <button type="button" className="hp-btn" onClick={() => void refresh()}>刷新</button>
         {current ? (
-          <button type="button" className="hp-btn" onClick={() => setFullscreen(!fullscreen)}>
+          <button
+            type="button"
+            className={`hp-btn ${fullscreen ? 'hp-exit' : ''}`}
+            onClick={() => (fullscreen ? exitFullscreen() : enterFullscreen())}
+          >
             {fullscreen ? '退出全屏' : '全屏运行'}
           </button>
         ) : null}

@@ -2,14 +2,23 @@
  * 对话内预览卡片（html-preview 渲染器；chat-lite artifact 块经
  * __PLITE_ARTIFACT_RENDERERS__ 查表渲染本组件）。
  *
- * 卡片结构：标题栏（AI 生成徽标 + 标题 + 版本 + 操作钮[展开/全屏]）+ 沙箱 iframe。
+ * 卡片结构：标题栏（AI 生成徽标 + 标题 + 版本 + 操作钮[全屏/展开]）+ 沙箱 iframe。
  * iframe 源是 /api/preview/:id/raw（服务端 CSP sandbox 头 + 本组件 sandbox 属性双保险）。
  *
- * 全屏方案：**节点原地不动**，卡片容器挂 fixed 全屏类——Chrome 移动 iframe 节点
- * （appendChild/portal）会触发重载丢交互状态（原版 interactive-component 双实例的病根）；
- * lite 消息流无 transform 祖先，fixed 可逃逸 overflow 裁剪，同实例零重载。
+ * 全屏方案：**浏览器原生 requestFullscreen()**——盖满整个应用视口（顶栏/tab/侧栏/
+ * 输入区全部遮住），卡片容器（标题栏 + iframe）成为全屏层，顶行自然保留
+ * 「退出全屏」按钮。要点：
+ * - iframe 原元素参与全屏，**零重载**（reparent/portal 都会让 iframe 重启丢
+ *   游戏进度——原版 interactive-component 双实例的病根）；
+ * - DOM 全屏是浏览器协议而非 CSS 样式逃逸——插件 CSS 门禁禁 position:fixed
+ *   （防插件盖宿主层），原生全屏不在其列；全屏层自带 `:fullscreen` 伪类样式；
+ * - 进入/退出双向同步：按钮进、Esc/浏览器菜单退（fullscreenchange 监听统一收口，
+ *   React 状态不与浏览器脱节）。
+ * - 移动端朝向：安卓浏览器进全屏常被当成「看视频」强制转横屏，进全屏后用 Screen
+ *   Orientation API 锁回点击那一刻的朝向（见 fullscreen.ts），退出时解锁。
  */
 import { useEffect, useRef, useState } from 'react';
+import { enterFullscreenKeepingOrientation, exitFullscreenAndUnlock, releaseOrientationLock } from './fullscreen';
 
 export interface PreviewCardProps {
   callId: string;
@@ -28,33 +37,26 @@ export function PreviewCard({ callId, title, data }: PreviewCardProps) {
 
   const url = data.url ?? (data.previewId ? `/api/preview/${data.previewId}/raw` : null);
 
-  // 全屏 = 容器加 absolute 全屏类（原地；退出还原）。Esc 辅助出口（焦点在 iframe 内收不到，
-  // 顶栏「退出全屏」按钮兜底）。
-  //
-  // 包含块坑（实测）：.chat-msg 的入场动画 message-enter 是 fill-mode:both——动画
-  // 结束后 Chrome 仍保持合成层，computed transform = identity matrix（≠none），
-  // 使它成为 absolute 后代的包含块——全屏 inset:0 只盖到消息内容高（44px）。
-  // 全屏期间置 .chat-msg 内联 animation:none（动画早已播完，无视觉影响），
-  // transform 计算值归 none，包含块恢复为 stream 槽的 .slot（满高）。退出还原。
+  // 全屏状态以浏览器为单一事实源：进入 = 容器 requestFullscreen()；
+  // 退出（Esc / 浏览器菜单 / 按钮）都经 fullscreenchange 收敛回 React。
   useEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    if (fullscreen) {
-      const msg = box.closest('.chat-msg') as HTMLElement | null;
-      const prevAnim = msg?.style.animation ?? null;
-      if (msg) msg.style.animation = 'none';
-      box.classList.add('hp-fullscreen');
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') setFullscreen(false);
-      };
-      document.addEventListener('keydown', onKey);
-      return () => {
-        document.removeEventListener('keydown', onKey);
-        box.classList.remove('hp-fullscreen');
-        if (msg) msg.style.animation = prevAnim ?? '';
-      };
-    }
-  }, [fullscreen]);
+    const onFsChange = () => {
+      setFullscreen(document.fullscreenElement === boxRef.current);
+      // Esc / 浏览器返回退出全屏时也释放方向锁，避免退出后页面被钉死在某个朝向
+      if (!document.fullscreenElement) releaseOrientationLock();
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // 移动端：浏览器进全屏常把屏幕强制转成横屏，这里在进全屏后按「点击时的朝向」锁回去
+  const enterFullscreen = (): void => {
+    void enterFullscreenKeepingOrientation(boxRef.current);
+  };
+
+  const exitFullscreen = (): void => {
+    exitFullscreenAndUnlock();
+  };
 
   if (!url) {
     return (
@@ -67,7 +69,7 @@ export function PreviewCard({ callId, title, data }: PreviewCardProps) {
   return (
     <div
       ref={boxRef}
-      className={`hp-card ${expanded ? 'hp-expanded' : ''}`}
+      className={`hp-card ${expanded ? 'hp-expanded' : ''} ${fullscreen ? 'hp-is-fullscreen' : ''}`}
       data-call-id={callId}
       data-testid={`hp-${callId}`}
     >
@@ -76,9 +78,11 @@ export function PreviewCard({ callId, title, data }: PreviewCardProps) {
         <span className="hp-title">{title}</span>
         {data.versionLabel ? <span className="hp-ver">{data.versionLabel}</span> : null}
         <span className="hp-actions">
-          <button type="button" className="hp-btn" onClick={() => setFullscreen(!fullscreen)}>
-            {fullscreen ? '退出全屏' : '全屏'}
-          </button>
+          {fullscreen ? (
+            <button type="button" className="hp-btn hp-exit" onClick={exitFullscreen}>退出全屏</button>
+          ) : (
+            <button type="button" className="hp-btn" onClick={enterFullscreen}>全屏</button>
+          )}
           {!fullscreen ? (
             <button type="button" className="hp-btn" onClick={() => setExpanded(!expanded)}>
               {expanded ? '收起' : '展开'}
