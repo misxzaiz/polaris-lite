@@ -56,6 +56,10 @@ button { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* 窗格是最后一道裁切：任何内容都不许越过窗格边界跑到别的窗格/视口上。
+     实测没有这条时，输入区内容比窗格高会整块溢出，发送按钮落到视口外且无法点击
+     （窗格 152px / 内容 284px → 按钮 bottom 851，视口只有 748）。 */
+  overflow: hidden;
 }
 /* 窗格内容自己撑满：锚点依赖这条才能像原来的 grid 项一样拉伸 */
 .ws-pane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
@@ -245,11 +249,24 @@ body.ws-dragging-tab { cursor: grabbing; }
 
 .shell-input {
   position: relative;
-  flex-shrink: 0;
-  max-height: 42vh;
-  overflow-y: auto;
+  /* 不再用 `flex-shrink: 0`：那会让输入区无视窗格高度、按内容一路撑到视口外。
+     现在是「跟随窗格、可被压缩」，压缩到不够时由内部的输入条自己收缩（见 chat-input.css）。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 42dvh：移动端地址栏收起/展开时 dvh 跟随可视高度，vh 不跟 */
+  max-height: 42dvh;
+  overflow: hidden;
   padding: 0 24px 20px;
   background: transparent;
+  display: flex;
+  flex-direction: column;
+}
+/* SlotOutlet 的包裹层：输入区内容要能一起压缩，否则 flex 链在这里断掉 */
+.shell-input > .slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .shell-panel {

@@ -98,6 +98,22 @@ function paneStyles(size: SplitSize, dir: 'row' | 'col'): [CSSProperties, CSSPro
   return [{ ...pair[0], ...floors[0] }, { ...pair[1], ...floors[1] }];
 }
 
+/**
+ * 「主区 / 输入区」这一列 split 的 `auto` 语义：输入区跟着内容长高。
+ *
+ * 为什么只有这类 split 才认 auto：侧栏、面板的 auto 没有意义（宽度按内容会塌成一条），
+ * 把它们双击复位成 auto 只会更难收拾。输入区则相反——auto 是它最自然的状态，
+ * 而拖一下分隔条就会把它固化成 px（`onUp` 只对 ratio 特殊处理），此后再也没有回退入口。
+ * 返回 input 锚点所在的侧别，供 `{ mode: 'auto', of }` 使用。
+ */
+function autoOf(node: SplitNode): 'first' | 'second' | null {
+  if (node.dir !== 'col') return null;
+  const i = node.children.findIndex((c) => c.kind === 'anchor' && c.anchor === 'input');
+  if (i === 0) return 'first';
+  if (i === 1) return 'second';
+  return null;
+}
+
 function splitterAria(size: SplitSize): { now: number; min: number; max: number; text: string } {
   if (size.mode === 'ratio') {
     const pct = Math.round(size.value * 100);
@@ -513,6 +529,7 @@ function SplitView({ node }: { node: SplitNode }) {
   const raf = useRef<number | null>(null);
 
   const effective = preview ?? node.size;
+  const autoSide = autoOf(node);
   // 窄屏不分栏：窗格用 display:contents「溶解」掉，子元素直接成为纵向流的成员。
   // 侧栏/面板此时是 position:fixed 抽屉，会自己脱离文档流，因此不会留下空档。
   const [styleA, styleB] = narrow
@@ -604,6 +621,23 @@ function SplitView({ node }: { node: SplitNode }) {
     e.preventDefault();
   };
 
+  /**
+   * 双击 / Enter：回到「最自然」的状态。
+   * - 主区/输入区列 → 内容自适应（auto）：用户拖一次就会把 auto 固化成 px，
+   *   这里是他唯一能退回去的入口；
+   * - 其余 ratio → 复位成一半。px 固定栏（侧栏 252 / 面板 320）不参与：
+   *   改成 50% 会一口气吃掉半个屏幕且没有撤销——实测双击能让 252px 侧栏变 720px。
+   */
+  const resetSize = (): void => {
+    if (autoSide) {
+      workspaceStore.setSize(node.id, { mode: 'auto', of: autoSide });
+      return;
+    }
+    if (node.size.mode === 'ratio') {
+      workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
+    }
+  };
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const container = containerRef.current;
     if (!container) return;
@@ -619,12 +653,7 @@ function SplitView({ node }: { node: SplitNode }) {
 
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      // 只有 ratio 才有「复位成一半」的语义。px 固定栏（侧栏 252 / 面板 320）在
-      // 这里若被改成 50%，会一口气吃掉半个屏幕，而且没有撤销入口——实测过，
-      // 双击分隔条能让 252px 侧栏直接变成 720px。
-      if (node.size.mode === 'ratio') {
-        workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
-      }
+      resetSize();
       return;
     }
 
@@ -648,6 +677,8 @@ function SplitView({ node }: { node: SplitNode }) {
   };
 
   const aria = splitterAria(effective);
+  // 主区/输入区在 px 或 ratio 下都提示可以回到「内容自适应」，否则用户不知道这条路存在
+  const ariaText = autoSide && effective.mode !== 'auto' ? `${aria.text}（双击恢复内容自适应）` : aria.text;
   const first = node.children[0];
   const second = node.children[1];
 
@@ -669,17 +700,12 @@ function SplitView({ node }: { node: SplitNode }) {
           aria-valuenow={aria.now}
           aria-valuemin={aria.min}
           aria-valuemax={aria.max}
-          aria-valuetext={aria.text}
+          aria-valuetext={ariaText}
           tabIndex={0}
           data-dir={node.dir}
           onPointerDown={onPointerDown}
           onKeyDown={onKeyDown}
-          onDoubleClick={() => {
-            // 同上：ratio 才复位，固定像素栏保持不动
-            if (node.size.mode === 'ratio') {
-              workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
-            }
-          }}
+          onDoubleClick={resetSize}
         />
       )}
       <Pane
