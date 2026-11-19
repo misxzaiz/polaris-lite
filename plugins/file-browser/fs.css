@@ -160,3 +160,34 @@
   padding: 0 6px;
   margin-left: auto;
 }
+
+/* ===== 载入指示（不跳动）：绝对定位顶部细条 + 半透明遮罩，列表保持占位 ===== */
+.file-browser { position: relative; }
+.fb-loading {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  z-index: 3;
+  pointer-events: none;
+}
+.fb-loading-bar {
+  height: 100%;
+  width: 40%;
+  background: var(--accent);
+  animation: fb-load-slide 1s ease-in-out infinite;
+}
+@keyframes fb-load-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(260%); }
+}
+.fb-loading::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-loading-bar { animation: none; width: 100%; opacity: 0.6; }
+}

@@ -58,15 +58,42 @@ export function FileBrowserPanel() {
   // 预览
   const [preview, setPreview] = useState<{ name: string; path: string; isText: boolean; text?: string; data?: string; mime?: string; tooLarge?: boolean; hint?: string; size?: number } | null>(null);
   const [busyPath, setBusyPath] = useState<string | null>(null);
+  /** 当前展示的列表是否来自缓存（后台刷新中）——置灰提示而非清空列表 */
+  const [stale, setStale] = useState(false);
+  /**
+   * 目录缓存（防跳变核心）：path → nodes。
+   * 进入目录先展示缓存（若有），后台刷新后无缝替换——列表不再「清空→载入→重建」三段闪。
+   * 缓存上限 60 层，超出淘汰最旧（浅拷贝 Map 重排保插入序）。
+   */
+  const dirCache = useRef(new Map<string, FsNode[]>());
+  const cachePut = (path: string, nodes: FsNode[]) => {
+    const m = dirCache.current;
+    m.set(path, nodes);
+    if (m.size > 60) {
+      const oldest = m.keys().next().value;
+      if (oldest !== undefined) m.delete(oldest);
+    }
+  };
 
   const loadDir = useCallback(async (dir: string, label: string) => {
-    setLoading(true); setErr('');
+    // 乐观渲染：有缓存先上屏（stale 置灰），无缓存才出「载入中」——列表不再清空闪烁
+    const cached = dirCache.current.get(dir);
+    setStale(!!cached);
+    setLoading(!cached);
+    setErr('');
     const q = new URLSearchParams(dir ? { dir } : {});
     const r = await fsGet<{ nodes: FsNode[]; sessionRoam?: boolean }>(`tree?${q}`);
     setLoading(false);
-    if (r.status !== 200) { setErr(r.error ?? '浏览失败'); return; }
-    setNodes(r.data?.nodes ?? []);
-    setCwd((prev) => (prev.path === dir && prev.label === label ? prev : { path: dir, label })); // 引用稳定：同位不重建
+    setStale(false);
+    if (r.status !== 200) {
+      // 失败且无缓存才报错；有缓存保留旧视图（不打断浏览）
+      if (!cached) setErr(r.error ?? '浏览失败');
+      return;
+    }
+    const fresh = r.data?.nodes ?? [];
+    cachePut(dir, fresh);
+    setNodes(fresh);
+    setCwd((prev) => (prev.path === dir && prev.label === label ? prev : { path: dir, label }));
     if (r.data?.sessionRoam !== undefined) setSessionRoam(r.data.sessionRoam);
   }, []);
 
@@ -177,7 +204,12 @@ export function FileBrowserPanel() {
       <input className="fb-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="过滤当前层（名称包含）…" />
 
       {err && <div className="fb-err">{err}</div>}
-      {loading && <div className="fb-hint">载入中…</div>}
+      {/* 载入中：绝对定位的顶部细条 + 轻遮罩，不卸载列表、不产生高度跳动 */}
+      {loading && (
+        <div className="fb-loading" aria-hidden="true">
+          <div className="fb-loading-bar" />
+        </div>
+      )}
 
       {/* 树单层节点 */}
       <div className="fb-entries">
