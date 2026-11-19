@@ -381,6 +381,10 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       messageId: assistantId,
       prompt: text,
       history,
+      // 会话绑定的文件工作区（agent-loop 据此设置 bash cwd 与 system prompt；缺省=默认 workspace）
+      ...(store.sessions.find((s) => s.id === sid)?.workspaceId
+        ? { workspaceId: store.sessions.find((s) => s.id === sid)!.workspaceId }
+        : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   });

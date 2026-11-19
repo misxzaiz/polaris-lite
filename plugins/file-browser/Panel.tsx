@@ -104,6 +104,19 @@ export function FileBrowserPanel() {
     if (!cwd.path) void loadDir('', '顶层');
   }, [refresh, cwd.path, loadDir]);
 
+  // 工作区状态同步：file-browser 模块层持有 activeRootId/linked（含 cap.config 回读），
+  // 变更时广播 workspace-changed——面板订阅以跨刷新保持 ✓ 徽标一致
+  useEffect(() => {
+    const onChanged = (payload: unknown) => {
+      const p = payload as { activeRootId?: string; linkedRootIds?: string[] } | undefined;
+      if (p?.activeRootId) setActiveRootId(p.activeRootId);
+      if (p?.linkedRootIds) setLinked(new Set(p.linkedRootIds));
+    };
+    const handler = (ev: Event) => onChanged((ev as CustomEvent).detail);
+    window.addEventListener('workspace-changed', handler);
+    return () => window.removeEventListener('workspace-changed', handler);
+  }, []);
+
   const registerRoot = useCallback(async (dir: string) => {
     setBusyPath(dir);
     const r = await fetch('/api/fs/roots/from-path', {
@@ -221,8 +234,24 @@ export function FileBrowserPanel() {
               {!n.isDir && <span className="fb-size">{fmtSize(n.size)}</span>}
             </button>
             <div className="fb-node-ops">
-              {n.isDir && (
+              {n.isDir && n.isRoot && !n.builtin && (
                 <>
+                  <button
+                    className="fb-mini"
+                    title="重命名工作区显示名"
+                    disabled={busyPath === n.path}
+                    onClick={() => {
+                      const label = window.prompt('新的工作区名称', n.name);
+                      if (label && label.trim() && label.trim() !== n.name) {
+                        setBusyPath(n.path);
+                        fetch('/api/fs/roots/rename', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+                          body: JSON.stringify({ id: n.rootId, label: label.trim() }),
+                        }).then((r) => { if (r.status !== 200) setErr('重命名失败'); void refresh(); });
+                      }
+                      setBusyPath(null);
+                    }}
+                  >名</button>
                   <button className="fb-mini" title="设为当前工作区（浏览/文件工具根目录；非根自动登记）" disabled={busyPath === n.path} onClick={() => void makeWorkspace(n)}>
                     {n.path === activeRoot?.path ? '当前' : '工作区'}
                   </button>

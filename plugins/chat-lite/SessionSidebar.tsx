@@ -1,7 +1,8 @@
-/** 会话侧栏：克制的内容目录 + 行内删除确认。 */
+/** 会话侧栏：克制的内容目录 + 行内删除确认 + 会话工作区设置入口。 */
 import { useState } from 'react';
 import { useSessionStore } from './store';
-import { PlusIcon, TrashIcon } from './icons';
+import { PlusIcon, TrashIcon, FolderIcon } from './icons';
+import { WorkspacePicker } from './WorkspacePicker';
 
 function displayTitle(title: string, firstMessage: string | undefined): string {
   if (title !== '新会话') return title;
@@ -14,7 +15,12 @@ export function SessionSidebar() {
   const setActive = useSessionStore((s) => s.setActive);
   const createSession = useSessionStore((s) => s.createSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
+  const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  /** 正在设置工作区的会话 id（弹层） */
+  const [wsPickerFor, setWsPickerFor] = useState<string | null>(null);
+
+  const pickedSession = sessions.find((s) => s.id === wsPickerFor);
 
   return (
     <div className="chat-sessions" data-testid="session-sidebar">
@@ -40,7 +46,10 @@ export function SessionSidebar() {
             className={`chat-session-item ${s.id === activeId ? 'active' : ''}`}
             onClick={() => setActive(s.id)}
           >
-            <span className="title">{displayTitle(s.title, s.messages[0]?.content)}</span>
+            <span className="title">
+              {displayTitle(s.title, s.messages[0]?.content)}
+              {s.workspaceId && <span className="chat-session-ws" title={`工作区：${s.workspaceId}`}>⌂</span>}
+            </span>
             {confirmId === s.id ? (
               <span className="chat-session-confirm" onClick={(e) => e.stopPropagation()}>
                 <span>删除？</span>
@@ -50,6 +59,14 @@ export function SessionSidebar() {
             ) : (
               <span className="chat-session-actions">
                 <span className="chat-session-count">{s.messages.length}</span>
+                <button
+                  className="chat-session-del"
+                  title="设置工作区"
+                  aria-label={`设置工作区 ${displayTitle(s.title, s.messages[0]?.content)}`}
+                  onClick={(e) => { e.stopPropagation(); setWsPickerFor(s.id); }}
+                >
+                  <FolderIcon />
+                </button>
                 <button
                   className="chat-session-del"
                   title="删除会话"
@@ -63,6 +80,14 @@ export function SessionSidebar() {
           </div>
         ))}
       </div>
+
+      {pickedSession && (
+        <WorkspacePicker
+          session={pickedSession}
+          onPick={(workspaceId) => { setSessionWorkspace(pickedSession.id, workspaceId); setWsPickerFor(null); }}
+          onClose={() => setWsPickerFor(null)}
+        />
+      )}
     </div>
   );
 }

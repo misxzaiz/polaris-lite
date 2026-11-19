@@ -50,6 +50,18 @@ export function createToolExecMiddleware(options = {}) {
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const workspaceRoot = resolve(dataDir, 'workspace');
+  const wsRootsFile = resolve(dataDir, 'workspace-roots.json');
+  /** 已登记根的 realpath 列表（fs-api 维护 workspace-roots.json；读失败回退仅内建） */
+  const registeredRoots = () => {
+    try {
+      const raw = JSON.parse(readFileSync(wsRootsFile, 'utf8'));
+      return (Array.isArray(raw.roots) ? raw.roots : [])
+        .map((r) => String(r.path ?? ''))
+        .filter(Boolean)
+        .map((p) => { try { return realpathSync(resolve(p)); } catch { return ''; } })
+        .filter(Boolean);
+    } catch { return []; }
+  };
   const configFile = resolve(dataDir, 'tool-exec.json');
   const auditFile = resolve(dataDir, 'tool-exec-audit.log');
   const hardOff = process.env.PLITE_TOOL_EXEC === '0';
@@ -263,14 +275,25 @@ export function createToolExecMiddleware(options = {}) {
       return res.end(JSON.stringify({ error: 'approval required', code: 'EXEC_APPROVAL_REQUIRED', denied: true }));
     }
 
-    // ⑥ cwd 锁定 workspace 内
+    // ⑥ cwd 允许范围：内建 workspace 或任一已登记工作区根（realpath 防符号链接逃逸）
     const cwdReq = typeof body.cwd === 'string' && body.cwd.trim() ? resolve(body.cwd.trim()) : workspaceRoot;
-    if (cwdReq !== workspaceRoot && !cwdReq.startsWith(workspaceRoot + sep)) {
+    let cwdReal;
+    try {
+      cwdReal = realpathSync(cwdReq);
+    } catch {
+      audit({ at: Date.now(), sessionId, command, verdict: 'cwd-missing', mode: cfg.mode });
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'cwd does not exist', code: 'EXEC_CWD_MISSING', denied: true }));
+    }
+    const workspaceReal = realpathSync(workspaceRoot);
+    const withinWorkspace = cwdReal === workspaceReal || cwdReal.startsWith(workspaceReal + sep);
+    const withinRegistered = registeredRoots().some((rr) => cwdReal === rr || cwdReal.startsWith(rr + sep));
+    if (!withinWorkspace && !withinRegistered) {
       audit({ at: Date.now(), sessionId, command, verdict: 'cwd-escape', mode: cfg.mode });
       res.writeHead(403, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: `cwd must stay inside workspace (${workspaceRoot})`, code: 'EXEC_CWD_ESCAPED', denied: true }));
+      return res.end(JSON.stringify({ error: 'cwd must be the builtin workspace or a registered workspace root', code: 'EXEC_CWD_ESCAPED', denied: true }));
     }
-    mkdirSync(cwdReq, { recursive: true });
+    mkdirSync(cwdReal, { recursive: true });
 
     const abort = new AbortController();
     res.on('close', () => abort.abort()); // 编排方中断（fetch abort）→ 杀树

@@ -108,8 +108,27 @@ export function ChatInput() {
     s.sessions.find((x) => x.id === s.activeId)?.messages.some((m) => m.streaming),
   );
   const queueLen = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId]?.length ?? 0) : 0));
+  /** 当前会话绑定的工作区（file-browser 登记的根；null=跟随全局默认） */
+  const sessionWorkspaceId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.workspaceId ?? null);
+  /** 工作区显示名（file-browser 维护 names/labels；经全局事件桥同步） */
+  const [wsLabel, setWsLabel] = useState<string | null>(null);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;
+
+  // 会话工作区显示名：roots 变化（登记/改名/删除）时由 file-browser 广播；这里解析当前绑定
+  useEffect(() => {
+    if (!sessionWorkspaceId) { setWsLabel(null); return; }
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await fetch('/api/fs/roots', { credentials: 'include' });
+        const j = (await r.json()) as { roots?: { id: string; label: string }[] };
+        const match = j.roots?.find((x) => x.id === sessionWorkspaceId);
+        if (alive) setWsLabel(match?.label ?? sessionWorkspaceId);
+      } catch { if (alive) setWsLabel(sessionWorkspaceId); }
+    })();
+    return () => { alive = false; };
+  }, [sessionWorkspaceId]);
 
   /** 附件统一入口：校验（单件 + 整批）→ 转 Attachment */
   const addFiles = useCallback(async (files: File[]) => {
@@ -366,6 +385,11 @@ export function ChatInput() {
         onChange={handleFilePicker}
       />
       <div className="chat-input-btns">
+        {wsLabel && (
+          <span className="chat-ws-chip pinned" title="当前会话绑定的工作区（AI 命令在此目录内执行）">
+            {wsLabel}
+          </span>
+        )}
         {trustMode !== null && (
           <button
             className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}

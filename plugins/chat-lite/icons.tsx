@@ -48,6 +48,10 @@ export function CloseIcon() {
   return <Icon size={14}><path d="m6 6 12 12M18 6 6 18" {...stroke} /></Icon>;
 }
 
+export function FolderIcon() {
+  return <Icon size={15}><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17Z" {...stroke} /></Icon>;
+}
+
 export function FileIcon() {
   return <Icon size={24}><path d="M6 3h8l4 4v14H6V3ZM14 3v5h4M9 13h6M9 17h4" {...stroke} /></Icon>;
 }

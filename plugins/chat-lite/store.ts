@@ -94,7 +94,10 @@ interface PersistShape {
 }
 
 /** 会话的 store 形态：核心 ChatSession 的 role 不足以容纳工具卡，消息用 StoreMessage 放宽 */
-type ChatSessionShape = Omit<ChatSession, 'messages'>;
+type ChatSessionShape = Omit<ChatSession, 'messages'> & {
+  /** 会话绑定的文件工作区根 id（file-browser roots.id；缺省=跟随全局默认） */
+  workspaceId?: string;
+};
 
 interface SessionState {
   sessions: (ChatSessionShape & { messages: StoreMessage[] })[];
@@ -104,6 +107,8 @@ interface SessionState {
   createSession: (title?: string) => string;
   setActive: (id: string) => void;
   renameSession: (id: string, title: string) => void;
+  /** 设置/清除会话绑定的文件工作区根 id（undefined=跟随全局默认） */
+  setSessionWorkspace: (id: string, workspaceId: string | undefined) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -189,6 +194,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   renameSession: (id, title) => {
     set((st) => ({ sessions: st.sessions.map((s) => (s.id === id ? { ...s, title } : s)) }));
+    schedulePersist(get);
+  },
+
+  setSessionWorkspace: (id, workspaceId) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => (s.id === id ? { ...s, workspaceId } : s)),
+    }));
     schedulePersist(get);
   },
 

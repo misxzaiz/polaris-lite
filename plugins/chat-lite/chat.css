@@ -649,3 +649,92 @@
 /* ===== text 块间距（工具卡与文本块之间的呼吸） ===== */
 .tc-text { min-width: 0; }
 .tc-text + .tc-text, .tc-card + .tc-text, .tc-text + .tc-card, .tc-group + .tc-text, .tc-text + .tc-group { margin-top: 10px; }
+
+/* ===== 会话工作区：侧栏徽标 + 设置弹层 ===== */
+.chat-session-ws { margin-left: 5px; color: var(--accent); font-size: 11px; flex-shrink: 0; }
+.chat-sessions { position: relative; }
+.ws-picker-mask {
+  position: absolute; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.ws-picker {
+  width: min(92vw, 480px);
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 14px 16px;
+}
+.ws-picker-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  margin-bottom: 4px;
+}
+.ws-picker-head svg { color: var(--accent); flex-shrink: 0; }
+.ws-picker-close {
+  margin-left: auto;
+  border: none; background: transparent; color: var(--text-dim);
+  cursor: pointer; display: flex; padding: 3px; border-radius: 6px;
+}
+.ws-picker-close:hover { color: var(--text); background: var(--bg-hover); }
+.ws-picker-hint { font-size: 11.5px; color: var(--text-dim); margin: 4px 0 10px; line-height: 1.6; }
+.ws-picker-list { display: flex; flex-direction: column; gap: 4px; }
+.ws-row {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text);
+  padding: 8px 10px; font-size: 12px; cursor: pointer; text-align: left;
+  min-width: 0;
+  transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease);
+}
+.ws-row:hover { border-color: var(--accent); }
+.ws-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.ws-row.missing { opacity: 0.45; }
+.ws-row-name { font-weight: 600; flex-shrink: 0; }
+.ws-row-path {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-dim); font-size: 11px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+.ws-check { color: var(--accent); font-weight: 700; flex-shrink: 0; }
+.ws-picker-add { display: flex; gap: 6px; margin-top: 10px; }
+.ws-picker-add input {
+  flex: 1; min-width: 0; height: var(--plite-h-sm);
+  border: 1px solid var(--border); border-radius: var(--ctl-radius);
+  background: var(--bg); color: var(--text); padding: 0 8px; font-size: 12px; outline: none;
+  box-sizing: border-box;
+}
+.ws-picker-add input:focus { border-color: var(--accent); box-shadow: var(--ctl-focus-ring); }
+.ws-picker-add-btn {
+  height: var(--plite-h-sm); padding: 0 12px;
+  border: 1px solid var(--border); border-radius: var(--ctl-radius);
+  background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.ws-picker-add-btn:hover:not(:disabled) { border-color: var(--accent); }
+.ws-picker-add-btn:disabled { opacity: 0.4; cursor: default; }
+.ws-picker-err {
+  margin-top: 8px; font-size: 11.5px; color: var(--plite-danger);
+  background: var(--plite-danger-soft); border-radius: var(--radius); padding: 6px 9px;
+  overflow-wrap: anywhere;
+}
+
+/* 输入区当前会话工作区胶囊 */
+.chat-ws-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
+}
+.chat-ws-chip:hover { border-color: var(--accent); color: var(--accent); }
+.chat-ws-chip.pinned { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }

@@ -55,7 +55,10 @@ function savePrefs(): void {
 }
 
 function emitWorkspaceChanged(): void {
-  hostApi?.emit('workspace-changed', { activeRootId, linkedRootIds: [...linkedRootIds] });
+  const payload = { activeRootId, linkedRootIds: [...linkedRootIds] };
+  hostApi?.emit('workspace-changed', payload);
+  // 同步 DOM 自定义事件：本插件 Panel 订阅（同插件内自发自收，跨组件状态同步）
+  window.dispatchEvent(new CustomEvent('workspace-changed', { detail: payload }));
 }
 
 /** 供面板调用：设置当前工作区（联动广播） */
@@ -88,7 +91,7 @@ async function fsFetch(path: string, init?: RequestInit): Promise<{ status: numb
 
 function createFsHandler(): CapabilityHandler {
   return async (req) => {
-    const payload = (req.payload ?? {}) as { rootId?: string; path?: string; head?: number; tail?: number };
+    const payload = (req.payload ?? {}) as { rootId?: string; path?: string; head?: number; tail?: number; label?: string };
     switch (req.action) {
       case 'describe':
         return {
@@ -132,6 +135,19 @@ function createFsHandler(): CapabilityHandler {
         if (!r.json.isText) return { ok: false, error: '二进制文件不支持文本读取' };
         return { ok: true, text: r.json.text, size: r.json.size, truncated: r.json.truncated };
       }
+      case 'renameRoot': {
+        // 重命名工作区根显示名（服务端 label；广播 workspace-renamed 供侧栏/胶囊即时改字）
+        const id = String(payload.rootId ?? '');
+        const label = String(payload.label ?? '').trim();
+        if (!id || !label) return { ok: false, error: 'rootId/label required' };
+        const r = await fetch('/api/fs/roots/rename', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify({ id, label }),
+        });
+        if (r.status !== 200) return { ok: false, error: 'rename failed' };
+        hostApi?.emit('workspace-renamed', { rootId: id, label });
+        return { ok: true };
+      }
       default:
         return { ok: false, error: `unknown action: ${req.action}` };
     }
@@ -145,7 +161,7 @@ export const fileBrowserPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: ['cap.config'],
     provides: ['cap.tool.fs'],
-    events: ['tool-registered', 'workspace-changed'],
+    events: ['tool-registered', 'workspace-changed', 'workspace-renamed'],
     contributes: {
       slots: [{ slot: 'panel', component: 'FileBrowserPanel', order: 6, title: '文件' }],
     },

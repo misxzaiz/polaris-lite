@@ -228,6 +228,20 @@ export function createFsApi(options = {}) {
         return send(200, { roots: currentRoots() });
       }
 
+      // 重命名工作区根显示名（builtin label 不可改——「workspace」是约定名）
+      if (pathname === '/api/fs/roots/rename' && req.method === 'POST') {
+        const body = JSON.parse((await readBody()) || '{}');
+        const id = String(body.id ?? '');
+        const label = String(body.label ?? '').trim();
+        const target = currentRoots().find((r) => r.id === id);
+        if (!target) return send(404, { error: 'root not found', code: 'FS_ROOT_NOT_FOUND' });
+        if (target.builtin) return send(403, { error: '内建 workspace 根不可重命名', code: 'FS_ROOT_BUILTIN' });
+        if (!label) return send(400, { error: 'label required', code: 'BAD_REQUEST' });
+        writeRoots(currentRoots().map((r) => (r.id === id ? { ...r, label } : r)));
+        audit({ at: Date.now(), op: 'rename-root', path: target.path, label, user: session.user?.name });
+        return send(200, { roots: currentRoots() });
+      }
+
       if (pathname === '/api/fs/roots/remove' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
         const root = findRoot(String(body.id ?? ''));
