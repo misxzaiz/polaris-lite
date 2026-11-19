@@ -16,13 +16,13 @@
  * 而 `host` 由宿主占用）。`host.slot.*` 永远在线，所以永远不会被 pruneDeadViews 折叠。
  */
 import type { AnchorId } from './schema.ts';
-import { ANCHOR_IDS } from './schema.ts';
+import { ANCHOR_IDS, HOST_SLOT_VIEW_PREFIX } from './schema.ts';
 import { viewRegistry } from './viewRegistry.ts';
 
 /** 宿主在视图注册表里的 pluginId（不是插件，不参与 grants / 生命周期） */
 export const HOST_PLUGIN_ID = 'host';
 
-const SLOT_VIEW_PREFIX = `${HOST_PLUGIN_ID}.slot.`;
+const SLOT_VIEW_PREFIX = HOST_SLOT_VIEW_PREFIX;
 
 /** tab 文本：锚点内容在 tabs 组里的可访问名，保持 2–3 字以免挤爆 tabbar */
 const SLOT_VIEW_TITLE: Record<AnchorId, string> = {

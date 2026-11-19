@@ -258,3 +258,111 @@ test('reset：回到默认树并清空提示', () => {
   assert.deepEqual(store.getSnapshot().tree, createDefaultTree());
   assert.equal(store.getSnapshot().notice, null);
 });
+
+// ---------------------------------------------------------------------------
+// 落地前的结构校验：这几条对应「坏树被持久化 → 下次启动整布局回默认」的真实路径
+// ---------------------------------------------------------------------------
+
+test('apply(requireAllAnchors)：缺锚点的树被拒绝，原树不变', () => {
+  const store = makeStore();
+  store.restore();
+  const before = JSON.stringify(store.getSnapshot().tree);
+  const noSidebar = replaceById(createDefaultTree(), 'anchor-sidebar', { kind: 'view', id: 'v-x', viewType: 'demo.gantt' });
+  const res = store.apply(noSidebar, { requireAllAnchors: true });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /缺少必需锚点/);
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+});
+
+test('close：split / tabs 容器与宿主槽位视图都不可关闭', () => {
+  const store = makeStore();
+  store.restore();
+  const before = JSON.stringify(store.getSnapshot().tree);
+  for (const id of ['main-column', 'root-main', 'anchor-panel']) {
+    const res = store.close(id);
+    assert.equal(res.ok, false, `close(${id}) 应被拒绝`);
+  }
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+});
+
+test('move：把 tabs 组拖进另一个 tabs 组被拒绝，且不会写出非法树', () => {
+  const store = makeStore();
+  store.restore();
+  const panel = findNode(store.getSnapshot().tree, 'anchor-panel');
+  const tabsA = {
+    kind: 'tabs',
+    id: 'tabs-a',
+    active: 'ta-1',
+    children: [
+      { kind: 'view', id: 'ta-1', viewType: 'demo.gantt' },
+      { kind: 'view', id: 'ta-2', viewType: 'demo.logs' },
+    ],
+  };
+  const tabsB = {
+    kind: 'tabs',
+    id: 'tabs-b',
+    active: 'tb-1',
+    children: [
+      { kind: 'view', id: 'tb-1', viewType: 'demo.gantt' },
+      { kind: 'view', id: 'tb-2', viewType: 'demo.logs' },
+    ],
+  };
+  const withTabs = replaceById(store.getSnapshot().tree, 'anchor-panel', { ...panel, children: [tabsA, tabsB] });
+  assert.equal(store.apply(withTabs, { requireAllAnchors: true }).ok, true);
+  const before = JSON.stringify(store.getSnapshot().tree);
+
+  const res = store.move('tabs-a', 'tabs-b', 0);
+  assert.equal(res.ok, false);
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+  assert.equal(validateWorkspace(store.getSnapshot().tree).ok, true);
+});
+
+test('restore：坏快照备份到 .bak 后清掉主键，下次启动不再重复提示', () => {
+  const badRaw = '{"v":1,"tree":{"kind":"split","id":"root","dir":"row","size":{"mode":"px","value":252},"children":[]}}';
+  const p = fakePersistence({ [WORKSPACE_STORAGE_KEY]: badRaw });
+  const store = makeStore({ persistence: p });
+  store.restore();
+  assert.equal(p.data.get(WORKSPACE_STORAGE_KEY), undefined, '主键应被清除');
+  assert.equal(p.data.get(`${WORKSPACE_STORAGE_KEY}.bak`), badRaw, '现场保留在 .bak');
+
+  const store2 = makeStore({ persistence: p });
+  store2.restore();
+  assert.equal(store2.getSnapshot().notice, null, '第二次启动不再提示');
+});
+
+test('apply：深拷贝入参——插件之后复用/改写自己的模板不影响宿主状态', () => {
+  const store = makeStore();
+  store.restore();
+  const template = createDefaultTree();
+  const panel = findNode(template, 'anchor-panel');
+  const patched = replaceById(template, 'anchor-panel', {
+    ...panel,
+    children: [
+      { kind: 'view', id: 'v-a', viewType: 'demo.gantt' },
+      { kind: 'view', id: 'v-b', viewType: 'demo.logs' },
+    ],
+  });
+  assert.equal(store.apply(patched, { requireAllAnchors: true }).ok, true);
+
+  // 插件切换透视时最常见的写法：复用同一棵树对象，继续 push / 清空
+  const panelNode = findNode(patched, 'anchor-panel');
+  panelNode.children.length = 0;
+  patched.children = [];
+
+  const now = store.getSnapshot().tree;
+  assert.equal(validateWorkspace(now).ok, true, '宿主的树不应被插件的外部修改破坏');
+  assert.notEqual(findNode(now, 'anchor-stream'), null);
+  assert.notEqual(findNode(now, 'anchor-panel'), null);
+});
+
+test('apply：不可克隆的入参被拒绝（不抛异常、不落地）', () => {
+  const store = makeStore();
+  store.restore();
+  const before = JSON.stringify(store.getSnapshot().tree);
+  const bad = createDefaultTree();
+  bad.fn = () => 1; // 函数无法结构化克隆
+  const res = store.apply(bad);
+  assert.equal(res.ok, false);
+  assert.match(res.error, /无法复制/);
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+});

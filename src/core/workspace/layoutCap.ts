@@ -17,11 +17,12 @@
  */
 import type { CapBus, CapContext } from '../bus';
 import type { CapRequest } from '../types';
-import type { WorkspaceNode } from './schema.ts';
+import type { TabsNode, WorkspaceNode } from './schema.ts';
 import { findNode, validateWorkspace } from './schema.ts';
 import type { WorkspaceStore } from './store.ts';
 import type { ViewRegistry } from './viewRegistry.ts';
 import { isHostSlotView } from './hostViews.ts';
+import { anchorNode } from './treeOps.ts';
 
 export const CAP_UI_LAYOUT = 'cap.ui.layout';
 /** 二级权限：可重排/关闭**他人**视图、可整体替换布局（预设/透视） */
@@ -54,6 +55,12 @@ function ownerOfView(viewType: string, registry: ViewRegistry): string {
  * 的预设里，不能经 `open`/`split` 新建第二份：同一个槽位被挂两次会得到两个互不相认的
  * 槽位实例（各自的激活 tab、各自的滚动位置），用户看到的是「面板凭空多了一份」。
  */
+function assertNotStructuralNode(node: WorkspaceNode): void {
+  if (node.kind === 'view' && isHostSlotView(node.viewType)) {
+    throw new Error(`${node.viewType} 是宿主结构视图，不能关闭 / 拆分 / 移动`);
+  }
+}
+
 function assertNotStructuralView(viewType: string): void {
   if (isHostSlotView(viewType)) {
     throw new Error(`${viewType} 是宿主结构视图，不能直接打开；请在 applyTree 预设的 tabs 里引用`);
@@ -62,6 +69,44 @@ function assertNotStructuralView(viewType: string): void {
 
 function nodeOwner(node: WorkspaceNode, registry: ViewRegistry): string | null {
   return node.kind === 'view' ? ownerOfView(node.viewType, registry) : null;
+}
+
+/** 子树内所有视图的归属插件集合（tabs 组合并前的越权检查） */
+function ownersIn(node: WorkspaceNode, registry: ViewRegistry): Set<string> {
+  const out = new Set<string>();
+  const walk = (n: WorkspaceNode): void => {
+    if (n.kind === 'view') out.add(ownerOfView(n.viewType, registry));
+    else n.children?.forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+/** 与 store.open 的落位规则保持一致：锚点子树里第一个 tabs 组 */
+function diveForTabs(node: WorkspaceNode): TabsNode | null {
+  if (node.kind === 'tabs') return node;
+  if (node.kind === 'view') return null;
+  for (const child of node.children ?? []) {
+    const hit = diveForTabs(child);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * 往一个 tabs 组里加/挪视图，等于与组内其他视图共享一条 tab 条与激活态。
+ * 非全局插件只能并入**全部属于自己**的组——否则它就能把自己的界面塞进
+ * 「审计面板 / 能力面板」旁边，借别人的位置获得曝光与焦点，而宿主对此毫无记录。
+ * `host.slot.*` 的归属是宿主，因此插件不能往槽位视图所在的 tab 组里塞东西
+ * （例外：`open({where:'tab'})` 在空锚点上自动组装的那一组由宿主自己创建，不经过这里）。
+ */
+function assertTabsJoinable(tabs: TabsNode | null, registry: ViewRegistry, ctx: CapContext): void {
+  if (!tabs) return;
+  if (ctx.capabilities.includes(CAP_UI_LAYOUT_GLOBAL)) return;
+  const foreign = [...ownersIn(tabs, registry)].filter((o) => o !== ctx.pluginId);
+  if (foreign.length > 0) {
+    throw new Error(`目标 tab 组含他人视图（${foreign.join('、')}），无权并入`);
+  }
 }
 
 function assertCanTouch(nodeId: string, deps: LayoutCapDeps, ctx: CapContext): WorkspaceNode {
@@ -113,6 +158,10 @@ export function createLayoutHandler(deps: LayoutCapDeps) {
         if (anchor !== undefined && !['sidebar', 'stream', 'input', 'panel'].includes(anchor as string)) {
           throw new Error(`anchor 不合法：${String(anchor)}`);
         }
+        if (where === 'tab') {
+          const target = anchorNode(store.getSnapshot().tree, (anchor as 'sidebar' | 'stream' | 'input' | 'panel') ?? 'stream');
+          assertTabsJoinable(target ? diveForTabs(target) : null, registry, ctx);
+        }
         const res = store.open(viewType, {
           where: where as 'tab' | 'split-right' | 'split-bottom' | undefined,
           anchor: anchor as 'sidebar' | 'stream' | 'input' | 'panel' | undefined,
@@ -123,7 +172,7 @@ export function createLayoutHandler(deps: LayoutCapDeps) {
       }
       case 'close': {
         const nodeId = requireString(p.nodeId, 'nodeId');
-        assertCanTouch(nodeId, deps, ctx);
+        assertNotStructuralNode(assertCanTouch(nodeId, deps, ctx));
         const res = store.close(nodeId);
         if (!res.ok) throw new Error(res.error);
         return undefined;
@@ -132,19 +181,25 @@ export function createLayoutHandler(deps: LayoutCapDeps) {
         const nodeId = requireString(p.nodeId, 'nodeId');
         const viewType = requireString(p.viewType, 'viewType');
         assertNotStructuralView(viewType);
+        if (p.dir !== undefined && p.dir !== 'row' && p.dir !== 'col') {
+          throw new Error("dir 只能是 'row' 或 'col'");
+        }
         const dir = p.dir === 'col' ? 'col' : 'row';
         const def = registry.get(viewType);
         if (!def) throw new Error(`视图未注册：${viewType}`);
         if (!global && def.pluginId !== ctx.pluginId) throw new Error(`无权打开他人视图：${viewType}`);
-        assertCanTouch(nodeId, deps, ctx);
+        assertNotStructuralNode(assertCanTouch(nodeId, deps, ctx));
         const res = store.split(nodeId, dir, viewType);
         if (!res.ok) throw new Error(res.error);
         return { id: res.id };
       }
       case 'move': {
         const nodeId = requireString(p.nodeId, 'nodeId');
-        assertCanTouch(nodeId, deps, ctx);
+        assertNotStructuralNode(assertCanTouch(nodeId, deps, ctx));
         const tabsId = requireString(p.tabsId, 'tabsId');
+        const tabsNode = findNode(store.getSnapshot().tree, tabsId);
+        if (!tabsNode || tabsNode.kind !== 'tabs') throw new Error(`目标不是 tabs 组：${tabsId}`);
+        assertTabsJoinable(tabsNode, registry, ctx);
         const index = typeof p.index === 'number' && Number.isFinite(p.index) ? Math.max(0, Math.floor(p.index)) : 0;
         const res = store.move(nodeId, tabsId, index);
         if (!res.ok) throw new Error(res.error);
@@ -155,9 +210,16 @@ export function createLayoutHandler(deps: LayoutCapDeps) {
       case 'applyTree': {
         if (!global) throw new Error('整体替换布局需要 cap.ui.layout.global 授权');
         const tree = p.tree;
-        const check = validateWorkspace(tree, { knownViewTypes: registry.types(), requireKnownViews: true });
+        // requireAllAnchors：整体替换是**会被持久化**的，缺锚点的树下次启动会被 restore
+        // 拒绝（移动端抽屉也依赖锚点定位）——插件会看到「applyTree 成功、刷新就没了」。
+        // 预设本身允许只排部分区域，但落盘的那一份必须是完整布局。
+        const check = validateWorkspace(tree, {
+          knownViewTypes: registry.types(),
+          requireKnownViews: true,
+          requireAllAnchors: true,
+        });
         if (!check.ok) throw new Error(`${check.code}@${check.path}：${check.message}`);
-        const res = store.apply(tree, { requireKnownViews: true });
+        const res = store.apply(tree, { requireKnownViews: true, requireAllAnchors: true });
         if (!res.ok) throw new Error(res.error);
         return undefined;
       }

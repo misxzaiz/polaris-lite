@@ -22,7 +22,7 @@ import type {
 } from './schema.ts';
 // 带 .ts 扩展名：这些模块会被 `node --experimental-strip-types --test` 直接加载，
 // Node 的 ESM 解析不做扩展名补全（tsconfig 已开 allowImportingTsExtensions）。
-import { findNode } from './schema.ts';
+import { WORKSPACE_LIMITS, findNode } from './schema.ts';
 
 // ============================================================================
 // 默认树：与改造前的四槽布局逐节点等价
@@ -281,9 +281,13 @@ export function splitLeaf(
   // id 冲突必须在构造前挡掉：否则会生成一棵「全树 id 唯一」不成立的树，
   // 校验器拒绝后调用方只看到 applyTree 失败，很难追到是这里。
   if (newLeaf.id === leafId || findNode(root, newLeaf.id)) return null;
+  // 生成的分割 id 还不能与新区间 id 撞：`nextNodeId` 只避让**当前树里**的 id，
+  // 而 newLeaf 此刻还没进树（调用方传 `split-1` 时会与生成结果相同 → 全树 id 重复）
+  const splitId = nextNodeId(root, 'split');
+  if (splitId === newLeaf.id) return null;
   const split: SplitNode = {
     kind: 'split',
-    id: nextNodeId(root, 'split'),
+    id: splitId,
     dir,
     size,
     children: [leaf, newLeaf],
@@ -295,7 +299,7 @@ export function splitLeaf(
 export function addToTabs(root: WorkspaceNode, tabsId: string, leaf: ViewLeaf, index?: number): WorkspaceNode | null {
   const target = findNode(root, tabsId);
   if (!target || target.kind !== 'tabs') return null;
-  if (target.children.length >= 12) return null;
+  if (target.children.length >= WORKSPACE_LIMITS.maxTabsChildren) return null;
   if (findNode(root, leaf.id)) return null; // 同 id 已在树里，会让全树 id 唯一失效
   const at = index === undefined ? target.children.length : Math.max(0, Math.min(index, target.children.length));
   const children = [...target.children.slice(0, at), leaf, ...target.children.slice(at)];
@@ -309,6 +313,9 @@ export function moveNodeToTabs(root: WorkspaceNode, nodeId: string, tabsId: stri
   const target = findNode(root, tabsId);
   if (!node || !target || target.kind !== 'tabs') return null;
   if (node.kind === 'anchor') return null; // 锚点是保留位置，不允许当成 tab 拖走
+  // 整个 tabs 组不能拖进另一个 tabs 组：校验器禁止 tabs 直接嵌套 tabs，
+  // 而这里若放行，store 会拿到一棵非法树（实测能写出并持久化，下次启动整布局回默认）。
+  if (node.kind === 'tabs') return null;
   // 拖进自己的子树会构造出环——校验器会拒，但这里直接不让发生
   if (isInside(root, tabsId, nodeId)) return null;
 

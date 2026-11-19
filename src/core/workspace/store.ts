@@ -15,7 +15,7 @@
  */
 import type { AnchorId, SplitDir, SplitSize, TabsNode, ViewLeaf, WorkspaceNode } from './schema.ts';
 import { WORKSPACE_LIMITS, findNode, validateWorkspace } from './schema.ts';
-import { slotViewType } from './hostViews.ts';
+import { isHostSlotView, slotViewType } from './hostViews.ts';
 import {
   addToTabs,
   anchorNode,
@@ -111,10 +111,32 @@ export class WorkspaceStore {
     };
   };
 
-  private commit(tree: WorkspaceNode, notice: string | null = this.state.notice): void {
+  private commit(tree: WorkspaceNode, notice: string | null = null): void {
     this.state = { tree, revision: this.state.revision + 1, notice };
     this.subs.forEach((fn) => fn());
     this.schedulePersist();
+  }
+
+  /**
+   * 结构变更的唯一提交口：**先校验再落地**。
+   *
+   * 树操作是纯函数，理论上产出必然合法——但「理论上」已经不够：实测中
+   * `move` 会把一个 tabs 组拖进另一个 tabs 组，产出的树违反「tabs 不得嵌套 tabs」，
+   * 而 store 直接 commit 并写盘；用户下次启动时 restore 校验失败 → 整棵布局回默认，
+   * 且无法自愈（坏树已被持久化）。
+   *
+   * 所以所有结构变更走这里：非法树不进内存、不写盘，只在控制台留证。
+   * 代价是每次变更多一次 O(64) 校验，可以忽略。
+   */
+  private commitChecked(tree: WorkspaceNode, notice: string | null = null): string | null {
+    const check = validateWorkspace(tree);
+    if (!check.ok) {
+      const reason = `${check.code}@${check.path}：${check.message}`;
+      console.warn(`[workspace] 拒绝应用非法布局：${reason}`);
+      return reason;
+    }
+    this.commit(tree, notice);
+    return null;
   }
 
   // ---------- 恢复 ----------
@@ -184,14 +206,14 @@ export class WorkspaceStore {
   pruneDeadViews(): void {
     const collapsed = collapseTree(this.state.tree, (t) => this.isAliveViewType(t));
     if (!collapsed) {
-      this.commit(createDefaultTree(), '布局中的视图均已不可用，已恢复默认布局');
+      this.commitChecked(createDefaultTree(), '布局中的视图均已不可用，已恢复默认布局');
       return;
     }
     if (collapsed === this.state.tree) return;
     // split 的折叠总会产生新对象（结构未变时也新），所以按序列化结果判等，
     // 否则每次启动都会多一次 revision 与一次落盘
     if (JSON.stringify(collapsed) === JSON.stringify(this.state.tree)) return;
-    this.commit(collapsed, '部分视图已不可用，已从布局中移除');
+    this.commitChecked(collapsed, '部分视图已不可用，已从布局中移除');
   }
 
   private fallback(notice: string, raw: string): void {
@@ -201,46 +223,83 @@ export class WorkspaceStore {
     } catch {
       /* 备份失败不阻断恢复 */
     }
+    // 清掉主键：否则这份坏数据会被每次启动重新读到，用户每次都要看一遍同样的提示，
+    // 而 .bak 也被反复覆盖（第一次的现场反而丢了）。备份留着供人工分析即可。
+    try {
+      this.persistence?.remove(this.key);
+    } catch {
+      /* 清不掉也不能阻断恢复：本次仍回默认，只是下次还会提示 */
+    }
     this.state = { tree: createDefaultTree(), revision: this.state.revision + 1, notice };
   }
 
   // ---------- 应用 ----------
 
-  /** 原子应用一棵树：校验失败则整棵树不变 */
-  apply(tree: unknown, opts: { requireKnownViews?: boolean } = {}): LayoutResult {
+  /**
+   * 原子应用一棵树：校验失败则整棵树不变。
+   *
+   * `requireAllAnchors` 必须由**持久化/全局替换**路径打开（applyTree）：缺锚点的树虽然
+   * 语法合法（预设可以刻意只排一部分），但一旦落盘，下次 restore 会因缺锚点回默认，
+   * 移动端的抽屉按钮也会指向不存在的元素——表现为「插件说成功了，刷新就没了」。
+   */
+  apply(tree: unknown, opts: { requireKnownViews?: boolean; requireAllAnchors?: boolean } = {}): LayoutResult {
+    // **深拷贝**：插件传进来的是活对象，applyTree 返回后它仍可能在用同一个引用
+    // （切换透视时复用模板、往常量里 push 视图都是常见写法）。不克隆的话，宿主状态与
+    // 校验时的快照会分叉——渲染器读到 `children[1] === undefined` 直接抛 TypeError，
+    // 整棵树被 React 卸载 → 白屏且无法自愈（树已被持久化）。
+    let snapshot: unknown;
+    try {
+      snapshot = typeof structuredClone === 'function' ? structuredClone(tree) : JSON.parse(JSON.stringify(tree));
+    } catch {
+      return { ok: false, error: '布局树包含无法复制的值（函数 / DOM 节点 / 循环引用以外的不可克隆对象）' };
+    }
+
     const known = this.knownViewTypes();
-    const check = validateWorkspace(tree, {
+    const check = validateWorkspace(snapshot, {
       knownViewTypes: known,
       requireKnownViews: opts.requireKnownViews === true && Boolean(known),
+      requireAllAnchors: opts.requireAllAnchors === true,
     });
     if (!check.ok) return { ok: false, error: `${check.code}@${check.path}：${check.message}` };
-    this.commit(tree as WorkspaceNode);
+    this.commit(snapshot as WorkspaceNode);
     return { ok: true };
   }
 
   /** 修改单个 tabs 组的激活项（切 tab） */
   setActive(tabsId: string, childId: string): void {
     const next = setActiveChild(this.state.tree, tabsId, childId);
-    if (next !== this.state.tree) this.commit(next);
+    if (next !== this.state.tree) this.commitChecked(next);
   }
 
   /** 修改分割尺寸（拖动结束调用一次；拖动过程直接写 DOM，不经过这里） */
   setSize(splitId: string, size: SplitSize): void {
     const next = setSplitSize(this.state.tree, splitId, size);
-    if (next !== this.state.tree) this.commit(next);
+    if (next !== this.state.tree) this.commitChecked(next);
   }
 
-  /** 关闭节点（锚点不允许关闭，它是保留位置） */
+  /**
+   * 关闭节点。只允许**视图**：
+   * - 锚点不可关闭（保留位置）；
+   * - split / tabs 也不可关闭——删掉一个容器会连带删掉它里面所有视图，若其中恰好
+   *   含锚点，还会得到一棵缺锚点的树（落盘后下次启动回默认，用户布局全丢）。
+   *   容器的消失应当是「关闭其下最后一个视图时自动折叠」的结果，而不是被直接关闭。
+   * - `host.slot.*` 不可关闭：它代表该锚点的槽位内容，关掉只是让它回退到同一个槽位，
+   *   行为与结果不一致，用户会以为按钮坏了。
+   */
   close(nodeId: string): LayoutResult {
     const node = findNode(this.state.tree, nodeId);
     if (!node) return { ok: false, error: `节点不存在：${nodeId}` };
     if (node.kind === 'anchor') return { ok: false, error: '锚点不可关闭（它是保留位置）' };
+    if (node.kind !== 'view') return { ok: false, error: `只有视图可以关闭（${node.kind} 是容器，请关闭其中的视图）` };
+    if (isHostSlotView(node.viewType)) return { ok: false, error: '宿主槽位视图不可关闭（它就是该锚点的内容）' };
     const next = removeById(this.state.tree, nodeId);
     if (!next) {
       this.reset();
       return { ok: true };
     }
-    this.commit(next);
+    // 关掉视图后若剩余布局不合法（理论上不该发生），保持原树而不是落地一棵坏树
+    const closeErr = this.commitChecked(next);
+    if (closeErr) return { ok: false, error: `关闭后布局不合法（${closeErr}）` };
     return { ok: true };
   }
 
@@ -276,7 +335,7 @@ export class WorkspaceStore {
         // 已存在就聚焦：找到它所在的 tabs 组并切激活（树没变则不写盘）
         const tabs = findParentTabs(this.state.tree, existing);
         const focused = tabs ? setActiveChild(this.state.tree, tabs, existing) : this.state.tree;
-        if (focused !== this.state.tree) this.commit(focused);
+        if (focused !== this.state.tree) this.commitChecked(focused);
         return { ok: true, id: existing };
       }
     }
@@ -289,7 +348,8 @@ export class WorkspaceStore {
       if (tabsId) {
         const next = addToTabs(this.state.tree, tabsId, leaf);
         if (!next) return { ok: false, error: '目标 tabs 组已满或 id 冲突' };
-        this.commit(next);
+        const openErr = this.commitChecked(next);
+        if (openErr) return { ok: false, error: `打开后布局不合法（${openErr}）` };
         return { ok: true, id };
       }
       // 锚点还没有子节点时，`tab` 不该退化成「把 320px 面一分为二」：
@@ -321,7 +381,8 @@ export class WorkspaceStore {
     const dir: SplitDir = where === 'split-bottom' ? 'col' : 'row';
     const next = splitLeaf(this.state.tree, target.id, dir, leaf);
     if (!next) return { ok: false, error: '拆分失败（目标不存在或 id 冲突）' };
-    this.commit(next);
+    const splitErr = this.commitChecked(next);
+    if (splitErr) return { ok: false, error: `拆分后布局不合法（${splitErr}）` };
     return { ok: true, id };
   }
 
@@ -330,7 +391,8 @@ export class WorkspaceStore {
     const leafId = id ?? nextNodeId(this.state.tree, `${sanitizeId(viewType)}-i`);
     const next = splitLeaf(this.state.tree, nodeId, dir, { kind: 'view', id: leafId, viewType });
     if (!next) return { ok: false, error: '拆分失败（目标不存在或 id 冲突）' };
-    this.commit(next);
+    const splitErr = this.commitChecked(next);
+    if (splitErr) return { ok: false, error: `拆分后布局不合法（${splitErr}）` };
     return { ok: true, id: leafId };
   }
 
@@ -338,7 +400,9 @@ export class WorkspaceStore {
   move(nodeId: string, tabsId: string, index: number): LayoutResult {
     const next = moveNodeToTabs(this.state.tree, nodeId, tabsId, index);
     if (!next) return { ok: false, error: '移动失败（会把节点拖进自己的子树，或目标不是 tabs 组）' };
-    this.commit(next);
+    // 拖拽产生的结构必须仍然合法：tabs 拖进 tabs 会被校验器拒绝，宁可不动
+    const moveErr = this.commitChecked(next);
+    if (moveErr) return { ok: false, error: `移动后布局不合法（${moveErr}）` };
     return { ok: true };
   }
 
@@ -407,9 +471,15 @@ export class WorkspaceStore {
 // 内部工具
 // ============================================================================
 
-/** 把 viewType 变成合法 id 片段（ID_PATTERN 只允许小写字母数字与 . _ -） */
+/**
+ * 把 viewType 变成合法 id 片段（ID_PATTERN 只允许小写字母数字与 . _ -）。
+ * 截到 48 字符：`nextNodeId` 还会追加 `-NN`，而 id 上限是 64——不截断的话
+ * 一个被声明成 `<64 长插件 id>.<长组件名>` 的 viewType 会生成超长 id，
+ * 校验器拒绝后表现为「open 返回失败」，排障时完全看不出是长度问题。
+ */
 function sanitizeId(viewType: string): string {
-  return viewType.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
+  const cleaned = viewType.toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/^[^a-z0-9]+/, '');
+  return cleaned.slice(0, 48).replace(/[-._]+$/, '') || 'view';
 }
 
 function findFirstByViewType(node: WorkspaceNode, viewType: string): string | null {

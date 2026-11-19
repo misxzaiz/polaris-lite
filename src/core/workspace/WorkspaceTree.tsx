@@ -67,20 +67,35 @@ function useNarrow(): boolean {
  * 为什么不用 CSS Grid：Grid 模板需要一次性知道所有轨道，嵌套 split 时要拼字符串；
  * 而 flex 每层独立解析，嵌套天然成立，且拖动时只改一个 `flex-basis` 即可。
  */
-function paneStyles(size: SplitSize): [CSSProperties, CSSProperties] {
+function paneStyles(size: SplitSize, dir: 'row' | 'col'): [CSSProperties, CSSProperties] {
   const of = size.of ?? 'first';
   const fixedIdx = of === 'first' ? 0 : 1;
-  const sized: CSSProperties =
+  const minMain = dir === 'row' ? 'minWidth' : 'minHeight';
+  const minCross = dir === 'row' ? 'minHeight' : 'minWidth';
+
+  /**
+   * 固定侧用 `0 1 <basis>`（**可收缩**）而不是 `0 0 <basis>`。
+   *
+   * `0 0` 在「容器比固定值还小」时会把另一侧压成 0：实测 1600px 窗口把侧栏拖到 1480px
+   * （合法，maxPx=2000），再缩到 1000px，主区变成 0×464、分隔条被推到 x=1200（视口外），
+   * 页面又没有横向滚动 —— 用户鼠标够不到分隔条，布局永久锁死。
+   * 允许收缩之后，容器不足时固定侧先让位，主区至少保留 MIN_PANE_PX。
+   */
+  const basis =
     size.mode === 'px'
-      ? { flex: `0 0 ${size.value}px` }
+      ? `${size.value}px`
       : size.mode === 'ratio'
-        ? { flex: `0 0 ${(size.value * 100).toFixed(3)}%` }
-        : { flex: '0 0 auto' };
+        ? `${(size.value * 100).toFixed(3)}%`
+        : 'auto';
+  const sized: CSSProperties = { flex: `0 1 ${basis}` };
   const grows: CSSProperties = { flex: '1 1 0' };
-  // 两个方向都写 min 尺寸：`1fr` 的默认 `min-width:auto` 会被长单词 / <pre> / iframe 顶爆
-  const floor: CSSProperties = { minWidth: 0, minHeight: 0 };
+  // 两侧都保 MIN_PANE_PX：允许收缩不等于允许消失。实测 1600px 下把侧栏拖到 1480 再缩到
+  // 1000px，若固定侧 floor 为 0，面板会直接变成 0 宽（比被压死更难理解：它凭空不见了）。
+  const sizedFloor: CSSProperties = { [minMain]: MIN_PANE_PX, [minCross]: 0 } as CSSProperties;
+  const growsFloor: CSSProperties = { [minMain]: MIN_PANE_PX, [minCross]: 0 } as CSSProperties;
   const pair: [CSSProperties, CSSProperties] = fixedIdx === 0 ? [sized, grows] : [grows, sized];
-  return [{ ...pair[0], ...floor }, { ...pair[1], ...floor }];
+  const floors: [CSSProperties, CSSProperties] = fixedIdx === 0 ? [sizedFloor, growsFloor] : [growsFloor, sizedFloor];
+  return [{ ...pair[0], ...floors[0] }, { ...pair[1], ...floors[1] }];
 }
 
 function splitterAria(size: SplitSize): { now: number; min: number; max: number; text: string } {
@@ -155,6 +170,7 @@ function LeafView({ node }: { node: ViewLeaf }) {
 function AnchorView({ node }: { node: AnchorNode }) {
   const drawer = useDrawerState();
   const narrow = useNarrow();
+  const asideRef = useRef<HTMLElement | null>(null);
   const isSidebar = node.anchor === 'sidebar';
   const isPanel = node.anchor === 'panel';
 
@@ -178,6 +194,27 @@ function AnchorView({ node }: { node: AnchorNode }) {
       <SlotOutlet slot={node.anchor} />
     );
 
+  // 关闭的抽屉必须**真正不可达**：`aria-hidden` 只对读屏生效，
+  // 键盘用户按 Tab 仍会聚焦到屏幕外（translateX(-102%)）的那些按钮上，
+  // 焦点跑到看不见的地方，视觉上就像「Tab 键坏了」。
+  useEffect(() => {
+    const el = asideRef.current;
+    if (!el) return;
+    if (narrow && !open) el.setAttribute('inert', '');
+    else el.removeAttribute('inert');
+  }, [narrow, open]);
+
+  // 打开时把焦点移进抽屉，否则焦点仍停在打开它的按钮上，读屏用户不知道抽屉已展开
+  useEffect(() => {
+    if (!narrow || !open) return;
+    const el = asideRef.current;
+    if (!el) return;
+    const first = el.querySelector<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select, [tabindex]:not([tabindex="-1"])',
+    );
+    first?.focus({ preventScroll: true });
+  }, [narrow, open]);
+
   const body = isSidebar ? (
     <>
       <Brand />
@@ -190,6 +227,7 @@ function AnchorView({ node }: { node: AnchorNode }) {
   if (isSidebar || isPanel) {
     return (
       <aside
+        ref={asideRef}
         className={className}
         data-anchor={node.anchor}
         data-node={node.id}
@@ -426,6 +464,21 @@ function TabsView({ node }: { node: TabsNode }) {
               // 也避免嵌套 4 层时每帧仍参与布局计算
               style={selected ? undefined : { display: 'none' }}
             >
+              {/* tabs 里的视图没有窗格，因此也没有窗格的 ×：鼠标用户原本无法关闭它们
+                  （只有 Delete / Ctrl+W）。这里补一个与窗格一致的浮动关闭按钮。 */}
+              {selected && isClosable(child) && (
+                <button
+                  type="button"
+                  className="ws-close ws-tab-close"
+                  aria-label={`关闭 ${titleOf(child)}`}
+                  title={`关闭 ${titleOf(child)}`}
+                  onClick={() => workspaceStore.close(child.id)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
               {mounted.has(child.id) ? <NodeView node={child} /> : null}
             </div>
           );
@@ -467,7 +520,7 @@ function SplitView({ node }: { node: SplitNode }) {
         { display: 'contents' } as CSSProperties,
         { display: 'contents' } as CSSProperties,
       ]
-    : paneStyles(effective);
+    : paneStyles(effective, node.dir);
 
   const cleanup = useCallback(() => {
     window.removeEventListener('pointermove', onMove, true);
@@ -488,7 +541,9 @@ function SplitView({ node }: { node: SplitNode }) {
     const delta = pos - s.startPos;
     // 固定侧在左/上时同向增长，在右/下时反向
     const raw = s.startPx + (s.fixedIdx === 0 ? delta : -delta);
-    const max = Math.max(MIN_PANE_PX, s.containerPx - MIN_PANE_PX);
+    // 上限同时受 maxPx 与容器约束：拖到 1400px 再换到窄窗口时，pane 会撑爆容器；
+    // 而超过 maxPx 的值本身会被校验器拒绝 → 用户看到「拖完弹回去」。
+    const max = Math.min(WORKSPACE_LIMITS.maxPx, Math.max(MIN_PANE_PX, s.containerPx - MIN_PANE_PX));
     pendingPx.current = Math.min(Math.max(raw, MIN_PANE_PX), max);
     if (raf.current !== null) return;
     raf.current = requestAnimationFrame(() => {
@@ -508,7 +563,9 @@ function SplitView({ node }: { node: SplitNode }) {
     pendingPx.current = null;
     // 只是点了一下没拖动：不改尺寸，也不要把 ratio 无端转成 px
     if (px === null) return;
-    const max = Math.max(MIN_PANE_PX, s.containerPx - MIN_PANE_PX);
+    // 上限同时受 maxPx 与容器约束：拖到 1400px 再换到窄窗口时，pane 会撑爆容器；
+    // 而超过 maxPx 的值本身会被校验器拒绝 → 用户看到「拖完弹回去」。
+    const max = Math.min(WORKSPACE_LIMITS.maxPx, Math.max(MIN_PANE_PX, s.containerPx - MIN_PANE_PX));
     const clamped = Math.min(Math.max(px, MIN_PANE_PX), max);
     if (s.mode === 'ratio') {
       const ratio = Math.min(Math.max(clamped / s.containerPx, WORKSPACE_LIMITS.minRatio), WORKSPACE_LIMITS.maxRatio);
@@ -562,7 +619,12 @@ function SplitView({ node }: { node: SplitNode }) {
 
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
+      // 只有 ratio 才有「复位成一半」的语义。px 固定栏（侧栏 252 / 面板 320）在
+      // 这里若被改成 50%，会一口气吃掉半个屏幕，而且没有撤销入口——实测过，
+      // 双击分隔条能让 252px 侧栏直接变成 720px。
+      if (node.size.mode === 'ratio') {
+        workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
+      }
       return;
     }
 
@@ -575,7 +637,7 @@ function SplitView({ node }: { node: SplitNode }) {
     e.preventDefault();
 
     const raw = currentPx + (fixedIdx === 0 ? delta : -delta);
-    const max = Math.max(MIN_PANE_PX, containerPx - MIN_PANE_PX);
+    const max = Math.min(WORKSPACE_LIMITS.maxPx, Math.max(MIN_PANE_PX, containerPx - MIN_PANE_PX));
     const px = Math.min(Math.max(raw, MIN_PANE_PX), max);
     if (node.size.mode === 'ratio') {
       const ratio = Math.min(Math.max(px / containerPx, WORKSPACE_LIMITS.minRatio), WORKSPACE_LIMITS.maxRatio);
@@ -612,7 +674,12 @@ function SplitView({ node }: { node: SplitNode }) {
           data-dir={node.dir}
           onPointerDown={onPointerDown}
           onKeyDown={onKeyDown}
-          onDoubleClick={() => workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of })}
+          onDoubleClick={() => {
+            // 同上：ratio 才复位，固定像素栏保持不动
+            if (node.size.mode === 'ratio') {
+              workspaceStore.setSize(node.id, { mode: 'ratio', value: 0.5, of: node.size.of });
+            }
+          }}
         />
       )}
       <Pane
@@ -687,6 +754,11 @@ export function WorkspaceTree({ node }: { node: WorkspaceNode }) {
 export function LayoutNotice() {
   const snap = useSyncExternalStore(workspaceStore.subscribe, workspaceStore.getSnapshot, workspaceStore.getSnapshot);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  // 提示在「下一次成功的结构变更」时会被清空。清空后同一条文案可能再次出现
+  // （比如又有一个插件被下线），此时不能因为文案相同就永久静音。
+  useEffect(() => {
+    if (!snap.notice) setDismissed(null);
+  }, [snap.notice]);
   if (!snap.notice || snap.notice === dismissed) return null;
   return (
     <div className="plite-layout-notice" role="status">

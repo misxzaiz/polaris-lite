@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { WorkspaceStore } from '../src/core/workspace/store.ts';
 import { ViewRegistry } from '../src/core/workspace/viewRegistry.ts';
 import { createLayoutHandler, CAP_UI_LAYOUT, CAP_UI_LAYOUT_GLOBAL } from '../src/core/workspace/layoutCap.ts';
-import { createDefaultTree } from '../src/core/workspace/treeOps.ts';
+import { createDefaultTree, replaceById } from '../src/core/workspace/treeOps.ts';
 import { findNode, validateWorkspace } from '../src/core/workspace/schema.ts';
 
 function setup() {
@@ -101,7 +101,7 @@ test('move：目标不是 tabs 组时被拒（而不是把节点弄丢）', () =
   const { store, call } = setup();
   const opened = call('open', { viewType: 'demo.gantt', anchor: 'panel' }, demo());
   const before = store.getSnapshot().tree;
-  assert.throws(() => call('move', { nodeId: opened.id, tabsId: 'anchor-stream', index: 0 }, demo()), /移动失败/);
+  assert.throws(() => call('move', { nodeId: opened.id, tabsId: 'anchor-stream', index: 0 }, demo()), /目标不是 tabs 组/);
   assert.equal(store.getSnapshot().tree, before);
 });
 
@@ -144,4 +144,104 @@ test('reset：需要二级权限（它会把别人的视图一起清掉）', () 
 test('未知动作直接报错，不静默 no-op（静默失败最难排查）', () => {
   const { call } = setup();
   assert.throws(() => call('explode', {}, demo()), /未知布局动作/);
+});
+
+test('applyTree：缺锚点的树被拒绝（落盘后下次启动会回默认，不能放行）', () => {
+  const { store, call } = setup();
+  const noSidebar = {
+    kind: 'split',
+    id: 'root',
+    dir: 'row',
+    size: { mode: 'px', value: 252 },
+    children: [
+      { kind: 'view', id: 'v-a', viewType: 'demo.gantt' },
+      {
+        kind: 'split',
+        id: 'root-main',
+        dir: 'row',
+        size: { mode: 'px', value: 320, of: 'second' },
+        children: [
+          { kind: 'split', id: 'main-column', dir: 'col', size: { mode: 'auto', of: 'second' },
+            children: [
+              { kind: 'anchor', id: 'anchor-stream', anchor: 'stream' },
+              { kind: 'anchor', id: 'anchor-input', anchor: 'input' },
+            ] },
+          { kind: 'anchor', id: 'anchor-panel', anchor: 'panel' },
+        ],
+      },
+    ],
+  };
+  assert.throws(() => call('applyTree', { tree: noSidebar }, demo([CAP_UI_LAYOUT_GLOBAL])), /缺少必需锚点/);
+  assert.equal(store.getSnapshot().tree.id, 'root');
+  assert.equal(findNode(store.getSnapshot().tree, 'anchor-sidebar')?.kind, 'anchor');
+});
+
+test('split：非法 dir 直接报错，不静默当成 row', () => {
+  const { call } = setup();
+  assert.throws(() => call('split', { nodeId: 'anchor-stream', dir: 'diagonal', viewType: 'demo.gantt' }, demo()), /dir 只能是/);
+});
+
+// ---------------------------------------------------------------------------
+// tab 组归属：并入别人的 tab 条 = 借别人的位置获得曝光，必须有闸门
+// ---------------------------------------------------------------------------
+
+/** 在面板里放一个 tabs 组（第一个 tab 归属 other，第二个归属 demo） */
+function panelWithMixedTabs(store) {
+  const panel = findNode(store.getSnapshot().tree, 'anchor-panel');
+  const tree = replaceById(store.getSnapshot().tree, 'anchor-panel', {
+    ...panel,
+    children: [
+      {
+        kind: 'tabs',
+        id: 't-panel',
+        active: 'tp-1',
+        children: [
+          { kind: 'view', id: 'tp-1', viewType: 'other.widget' },
+          { kind: 'view', id: 'tp-2', viewType: 'demo.gantt' },
+        ],
+      },
+    ],
+  });
+  const res = store.apply(tree, { requireKnownViews: true, requireAllAnchors: true });
+  assert.equal(res.ok, true);
+}
+
+test('open(where:tab)：含他人视图的 tabs 组不能并入', () => {
+  const { store, call } = setup();
+  panelWithMixedTabs(store);
+  const before = JSON.stringify(store.getSnapshot().tree);
+  assert.throws(() => call('open', { viewType: 'demo.logs', where: 'tab', anchor: 'panel' }, demo()), /他人视图/);
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+});
+
+test('move：不能把视图挪进含他人视图的 tabs 组', () => {
+  const { store, call } = setup();
+  panelWithMixedTabs(store);
+  const opened = call('open', { viewType: 'demo.logs', anchor: 'stream' }, demo());
+  const before = JSON.stringify(store.getSnapshot().tree);
+  assert.throws(() => call('move', { nodeId: opened.id, tabsId: 't-panel', index: 0 }, demo()), /他人视图/);
+  assert.equal(JSON.stringify(store.getSnapshot().tree), before);
+});
+
+test('move：全局权限可以并入（它是被显式授予的「重排他人布局」）', () => {
+  const { store, call } = setup();
+  panelWithMixedTabs(store);
+  const opened = call('open', { viewType: 'demo.logs', anchor: 'stream' }, demo());
+  assert.equal(call('move', { nodeId: opened.id, tabsId: 't-panel', index: 0 }, demo([CAP_UI_LAYOUT_GLOBAL])), undefined);
+});
+
+test('结构视图（host.slot.*）不能被关闭 / 拆分 / 移动', () => {
+  const { store, call } = setup();
+  const panel = findNode(store.getSnapshot().tree, 'anchor-panel');
+  const tree = replaceById(store.getSnapshot().tree, 'anchor-panel', {
+    ...panel,
+    children: [
+      { kind: 'view', id: 'slot-panel', viewType: 'host.slot.panel' },
+      { kind: 'view', id: 'mine', viewType: 'demo.gantt' },
+    ],
+  });
+  assert.equal(store.apply(tree, { requireAllAnchors: true }).ok, true);
+  assert.throws(() => call('close', { nodeId: 'slot-panel' }, demo([CAP_UI_LAYOUT_GLOBAL])), /结构视图/);
+  assert.throws(() => call('split', { nodeId: 'slot-panel', dir: 'row', viewType: 'demo.logs' }, demo([CAP_UI_LAYOUT_GLOBAL])), /结构视图/);
+  assert.throws(() => call('move', { nodeId: 'slot-panel', tabsId: 'nope', index: 0 }, demo([CAP_UI_LAYOUT_GLOBAL])), /结构视图/);
 });

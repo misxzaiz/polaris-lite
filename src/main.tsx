@@ -62,8 +62,14 @@ async function bootstrap(): Promise<void> {
   }
   console.info(`[polaris-lite] ${loaded.length} external plugin(s) loaded:`, loaded);
 
-  // 4. 视图注册表已齐 → 折叠孤儿视图（插件下线/禁用后留下的空洞）
-  workspaceStore.pruneDeadViews();
+  // 4. 视图注册表已齐 → 折叠孤儿视图（插件下线/禁用后留下的空洞）。
+  //    但有插件加载失败时**必须跳过**：那些插件的视图此刻只是「未注册」，
+  //    prune 会把它们判成死视图删掉并立刻落盘——用户修好插件也回不来了。
+  if (failed.length === 0) {
+    workspaceStore.pruneDeadViews();
+  } else {
+    console.warn('[polaris-lite] 有插件加载失败，跳过孤儿视图折叠，避免误删它们的布局位');
+  }
 
   // 5. 渲染壳层（内部按工作区树渲染四个锚点）
   createRoot(document.getElementById('root')!).render(
@@ -73,7 +79,55 @@ async function bootstrap(): Promise<void> {
   );
 }
 
+/**
+ * 装配链失败时的兜底界面。
+ * 只 console.error 是不够的：用户看到的是一整页纯白，连「出了什么问题」都不知道，
+ * 也无法重试。这里用纯 DOM + 内联样式渲染（不依赖 React 与 CSS 是否加载成功）。
+ */
+function renderBootFailure(err: unknown): void {
+  const root = document.getElementById('root');
+  if (!root) return;
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  root.textContent = '';
+
+  const box = document.createElement('div');
+  box.setAttribute('role', 'alert');
+  box.style.cssText = [
+    'min-height:100vh',
+    'display:flex',
+    'flex-direction:column',
+    'align-items:center',
+    'justify-content:center',
+    'gap:14px',
+    'padding:32px',
+    'box-sizing:border-box',
+    'font-family:system-ui,-apple-system,Segoe UI,sans-serif',
+    'background:#fff',
+    'color:#1a1a1a',
+    'text-align:center',
+  ].join(';');
+
+  const title = document.createElement('div');
+  title.textContent = '应用启动失败';
+  title.style.cssText = 'font-size:17px;font-weight:600;letter-spacing:0.02em';
+
+  const detail = document.createElement('div');
+  detail.textContent = message;
+  detail.style.cssText = 'font-size:13px;line-height:1.6;color:#666;max-width:560px;word-break:break-word';
+
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = '重新加载';
+  retry.style.cssText =
+    'margin-top:6px;padding:8px 18px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;color:#1a1a1a;font-size:13px;cursor:pointer';
+  retry.addEventListener('click', () => window.location.reload());
+
+  box.append(title, detail, retry);
+  root.appendChild(box);
+}
+
 void bootstrap().catch((err) => {
   // 装配链任何一步失败都不能静默——否则 UI 空白且无日志（验收教训）
   console.error('[polaris-lite] bootstrap failed:', err);
+  renderBootFailure(err);
 });

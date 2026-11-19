@@ -56,6 +56,13 @@ export const WORKSPACE_LIMITS = {
 /** 节点 id 与视图类型名的合法格式：小写字母数字开头，允许 . _ - */
 export const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+/**
+ * 宿主保留的槽位视图前缀（`host.slot.sidebar` 等，见 hostViews.ts）。
+ * 每个锚点最多只能出现一次：同一槽位挂两份会得到两个互不相认的实例
+ * （各自的激活 tab、各自的滚动位置），用户看到的是「面板凭空多了一份」。
+ */
+export const HOST_SLOT_VIEW_PREFIX = 'host.slot.';
+
 // ============================================================================
 // 类型
 // ============================================================================
@@ -204,6 +211,7 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
   const seen = new WeakSet<object>();
   const ids = new Set<string>();
   const anchors = new Set<string>();
+  const slotViews = new Set<string>();
   const counters: WorkspaceStats = { nodes: 0, leaves: 0, depth: 0 };
 
   const walk = (node: unknown, path: Path, depth: number): WorkspaceValidation | null => {
@@ -242,6 +250,12 @@ export function validateWorkspace(root: unknown, opts: ValidateOptions = {}): Wo
       }
       if (opts.requireKnownViews && opts.knownViewTypes && !opts.knownViewTypes.has(viewType)) {
         return fail('bad_view_type', path, `视图类型未注册：${viewType}`);
+      }
+      if (viewType.startsWith(HOST_SLOT_VIEW_PREFIX)) {
+        if (slotViews.has(viewType)) {
+          return fail('bad_view_type', path, `宿主槽位视图不得出现多次：${viewType}（同一槽位挂两份会有两套互不相认的状态）`);
+        }
+        slotViews.add(viewType);
       }
       counters.leaves += 1;
       if (counters.leaves > WORKSPACE_LIMITS.maxLeaves) {

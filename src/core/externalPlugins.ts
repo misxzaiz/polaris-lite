@@ -108,9 +108,21 @@ export async function loadExternalPlugins(
 ): Promise<LoadResult> {
   installImportMap();
 
-  const res = await fetch(registryUrl);
-  if (!res.ok) throw new Error(`plugin registry fetch failed: ${res.status}`);
-  const registry = (await res.json()) as PluginRegistryFile;
+  // 注册表本身拉不到时**不要抛**：抛出去会让 bootstrap 在 createRoot 之前中断，
+  // 用户得到一整页纯白，而恰恰此时最需要「壳还在、告警可见、能重试」。
+  // 返回一个 failed 项即可——调用方会显示告警条，并跳过孤儿视图折叠。
+  let registry: PluginRegistryFile;
+  try {
+    const res = await fetch(registryUrl);
+    if (!res.ok) throw new Error(`plugin registry fetch failed: ${res.status}`);
+    registry = (await res.json()) as PluginRegistryFile;
+  } catch (err) {
+    return {
+      loaded: [],
+      failed: [{ id: 'registry', error: err instanceof Error ? err.message : String(err) }],
+      policyWarnings: [],
+    };
+  }
   // 授权表拉取失败 → 走 unlisted 兜底（按 manifest 放行并告警），不 brick 应用
   const grants = await loadGrants(grantsUrl);
 

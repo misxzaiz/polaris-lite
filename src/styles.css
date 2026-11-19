@@ -229,6 +229,13 @@ body.ws-dragging-tab { cursor: grabbing; }
   flex-direction: column;
   overflow: hidden;
 }
+.shell-stream > .slot {
+  /* 高度确定 + 自己滚动：否则超长内容会被 .shell-stream 的 overflow:hidden 裁掉，
+     且没有任何滚动条可以到达（实测 3528px 宽的 pre 右半部分完全够不到） */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
 .shell-stream .slot {
   display: flex;
   flex-direction: column;
@@ -257,7 +264,7 @@ body.ws-dragging-tab { cursor: grabbing; }
 .shell-panel > .slot:last-child { border-bottom: none; }
 
 /* ===== 多面板 Tab ===== */
-.slot-tabs { display: flex; flex-direction: column; min-height: 0; }
+.slot-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .ws-tabs { flex: 1 1 auto; }
 .slot-tabbar {
   display: flex;
@@ -305,7 +312,10 @@ body.ws-dragging-tab { cursor: grabbing; }
 .slot-tab.active::after { transform: scaleX(1); }
 .slot-tabbody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .slot-tabpanel,
-.ws-tabpanel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+.ws-tabpanel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; }
+/* tabs 里的视图没有窗格，关闭按钮挂在面板右上角；hover 才显现，触屏常驻 */
+.ws-tabpanel:hover > .ws-tab-close,
+.ws-tabpanel > .ws-tab-close:focus-visible { opacity: 1; }
 
 /* ===== auth 门禁 ===== */
 /* 登录墙外层：允许顶部叠加启动告警（告警占位，登录页占剩余高度） */
@@ -532,6 +542,8 @@ body.ws-dragging-tab { cursor: grabbing; }
   .ws-split-row, .ws-split-col { flex-direction: column; }
   .ws-splitter { display: none; }
   .ws-close { display: none; }
+  /* 窄屏窗格的 × 隐藏（手指容易误触），但 tabs 面板里的 × 是该视图唯一的关闭入口 */
+  .ws-tabpanel > .ws-tab-close { display: inline-flex; }
 
   /* 窗格溶解成 contents 后，它的子元素直接变成祖父 split 的 flex item，
      但 `.ws-pane > *` 的 `flex: 1 1 auto` 依然按 DOM 父子关系命中它们——
@@ -541,10 +553,14 @@ body.ws-dragging-tab { cursor: grabbing; }
   .ws-pane { flex: 0 0 auto; }
   /* 只复位**叶子**：嵌套的 .ws-split / .ws-tabs 仍是切分容器，必须继续吃剩余高度，
      否则整棵内层子树退化成内容高（实测 stream 直接变成 0px）。 */
-  .ws-pane > :not(.ws-split):not(.ws-tabs):not([data-anchor='stream']) { flex: 0 0 auto; }
-  .ws-pane > [data-anchor='stream'] { flex: 1 1 0; }
+  .ws-pane > :not(.ws-split):not(.ws-tabs):not([data-anchor='stream']) { flex: 0 1 auto; }
+  /* 主区保底 50vh：自定义预设里若主区旁边是一个很高的 auto 内容，两者相加会超过视口，
+     没有保底时主区被压成 0（实测 h=0，变成一条线且无法使用）。保底 + 整列滚动即可。 */
+  .ws-pane > [data-anchor='stream'] { flex: 1 1 auto; min-height: 50vh; }
   /* tabs 组是二级切分容器，它自己的窗格同样是 contents，需要继续分配剩余高度 */
   .ws-pane > .ws-tabs { flex: 1 1 auto; min-height: 0; }
+  /* 单列超过视口时整列滚动，而不是把某一侧压没 */
+  .ws-root { overflow-y: auto; }
 
   .shell-sidebar {
     position: fixed;

@@ -571,3 +571,39 @@ test('nearestTabs / countViewType：拖拽源组判定与多实例计数', () =>
   assert.equal(countViewType(withTabs, 'x.zzz'), 0);
 });
 
+
+test('宿主槽位视图（host.slot.*）在树里只能出现一次', () => {
+  const build = (mainChildren) => ({
+    kind: 'split',
+    id: 'root',
+    dir: 'row',
+    size: { mode: 'px', value: 252 },
+    children: [
+      { kind: 'anchor', id: 'anchor-sidebar', anchor: 'sidebar' },
+      {
+        kind: 'split',
+        id: 'right',
+        dir: 'row',
+        size: { mode: 'px', value: 320, of: 'second' },
+        children: [
+          { kind: 'split', id: 'main-column', dir: 'col', size: { mode: 'auto', of: 'second' }, children: mainChildren },
+          { kind: 'anchor', id: 'anchor-panel', anchor: 'panel' },
+        ],
+      },
+    ],
+  });
+  const one = build([
+    { kind: 'view', id: 'slot-a', viewType: 'host.slot.panel' },
+    { kind: 'anchor', id: 'anchor-input', anchor: 'input' },
+  ]);
+  assert.equal(validateWorkspace(one).ok, true, '一份应当合法');
+
+  // 两份同一个槽位：两套互不相认的激活态与滚动位置，用户看到「面板凭空多了一份」
+  const two = build([
+    { kind: 'view', id: 'slot-a', viewType: 'host.slot.panel' },
+    { kind: 'view', id: 'slot-b', viewType: 'host.slot.panel' },
+  ]);
+  const r = validateWorkspace(two);
+  assert.equal(r.ok, false);
+  assert.match(r.message, /不得出现多次/);
+});

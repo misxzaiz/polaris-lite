@@ -13,6 +13,13 @@
 import type { CapRequest, CapResponse, StreamEvent } from './types';
 
 /**
+ * `cap.ui.layout` 里**不需要登录**的动作：只读，或只动调用方自己的视图
+ * （归属校验在 layoutCap.assertCanTouch 里，pluginId 由宿主注入、插件无法伪造）。
+ * 其余动作（applyTree / reset 以及将来新增的）一律要求登录——白名单的意义就在于此。
+ */
+const PUBLIC_LAYOUT_ACTIONS = new Set(['getTree', 'listViews', 'open', 'close', 'split', 'move']);
+
+/**
  * 处理器上下文：由宿主在调用时注入，插件无法伪造。
  * - `pluginId`：用于「只能动自己东西」这类归属校验（布局能力的 close/move 依赖它）。
  * - `capabilities`：该插件**实际生效**的权限（manifest ∩ grants），供处理器做二级判定
@@ -80,7 +87,9 @@ export class CapBus {
    */
   private isPublicCap(target: string, action: string): boolean {
     if (target === 'cap.auth' || target === 'cap.auth.interrupt' || target === 'cap.meta') return true;
-    if (target === 'cap.ui.layout') return action !== 'applyTree' && action !== 'reset';
+    // 白名单而不是「排除 applyTree/reset」的黑名单：将来新增一个会波及他人的动作时，
+    // 黑名单会默认放行——那正是这类漏洞最常见的产生方式。新动作默认要求登录。
+    if (target === 'cap.ui.layout') return PUBLIC_LAYOUT_ACTIONS.has(action);
     return false;
   }
 
