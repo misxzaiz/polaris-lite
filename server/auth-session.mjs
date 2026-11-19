@@ -38,6 +38,8 @@ export function createAuthMiddleware(options = {}) {
   const ttlMs = options.sessionTtlMs ?? TTL_MS;
 
   const sessions = new Map();
+  /** 临时 Bearer 凭证（token → {expiresAt, owner}）；仅本地 IP 可用，重启即失效 */
+  const tempTokens = new Map();
   // ip -> { fails, until }；定期清理，避免被随机 IP 撑爆内存
   const rate = new Map();
 
@@ -60,6 +62,7 @@ export function createAuthMiddleware(options = {}) {
   };
   loadSessions();
 
+  const audit = (entry) => { try { console.log('[auth-audit]', JSON.stringify(entry)); } catch { /* ignore */ } };
   const readOwner = () => {
     try {
       return existsSync(ownerFile) ? JSON.parse(readFileSync(ownerFile, 'utf8')) : null;
@@ -235,6 +238,22 @@ export function createAuthMiddleware(options = {}) {
       }
 
       // 修改注册人账号/密码：必须已登录，且提供正确旧密码
+      // 临时凭证：owner 登录后签发短 TTL Bearer token（仅本地回环 IP 可用，
+      // 供 AI/外部工具访问本地 /api/fs/* 与 /api/tool/exec；不落盘、重启即失效）
+      if (pathname === '/api/auth/temp-credential' && req.method === 'POST') {
+        const session = getSession(req);
+        if (!session) throw new HttpError(401, 'SESSION_REQUIRED', '未登录');
+        const owner = readOwner();
+        if (!owner) throw new HttpError(401, 'SESSION_REQUIRED', '尚未注册');
+        if (session.user.name !== owner.username) throw new HttpError(403, 'AUTH_FORBIDDEN', '仅注册人可签发临时凭证');
+        const token = randomBytes(24).toString('hex');
+        const expiresAt = Date.now() + 30 * 60 * 1000; // 30 分钟
+        tempTokens.set(token, { expiresAt, owner: owner.username });
+        setTimeout(() => tempTokens.delete(token), 30 * 60 * 1000);
+        audit({ at: Date.now(), op: 'temp-credential-issued', user: owner.username });
+        return sendJson(res, 200, { ok: true, token, expiresInMs: 30 * 60 * 1000, note: '仅限 127.0.0.1/localhost 本地访问；30 分钟后自动失效' });
+      }
+
       if (pathname === '/api/auth/change-credentials' && req.method === 'POST') {
         const session = getSession(req);
         if (!session) throw new HttpError(401, 'SESSION_REQUIRED', '未登录');
@@ -275,5 +294,5 @@ export function createAuthMiddleware(options = {}) {
     }
   };
 
-  return { getSession, middleware, ownerFile, sessionsFile };
+  return { getSession, middleware, ownerFile, sessionsFile, tempTokens, verifyTempToken: (token) => { const e = tempTokens.get(token); if (!e || e.expiresAt < Date.now()) return false; return e.owner === (readOwner()?.username ?? ''); } };
 }
