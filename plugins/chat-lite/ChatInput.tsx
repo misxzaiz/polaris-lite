@@ -11,13 +11,17 @@
  * - ↑↓ prompt 历史召回（localStorage，空输入/浏览态才接管方向键，不污染草稿）
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { sendUserMessage, interruptChat, enqueuePending, clearPending, onCompose } from './index';
 import { useSessionStore } from './store';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
 } from './attachments';
 import { AttachmentStrip } from './AttachmentStrip';
-import { PaperclipIcon, SendIcon, StopIcon } from './icons';
+import { PaperclipIcon, SendIcon, StopIcon, FolderIcon, ChevronRightIcon } from './icons';
+import { WorkspacePickerBody } from './WorkspacePickerBody';
+import { onRootsChanged } from './workspace-prefs';
+import { ContextMeter } from './ContextMeter';
 import './chat-input.css';
 
 const MAX_CHARS = 200_000;
@@ -98,8 +102,12 @@ export function ChatInput() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null); // null=非浏览态
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachErr, setAttachErr] = useState('');
-  /** 助手面板（工作区 / 信任模式 / 队列）：默认收起，操作行调谐图标点击内联展开 */
+  /** 助手面板（工作目录 / 信任模式 / 队列）：默认收起，操作行调谐图标点击内联展开 */
   const [assistantOpen, setAssistantOpen] = useState(false);
+  /** 工作目录选择浮层位置（portal 到 body：宿主输入槽 overflow:hidden 会裁掉内联面板） */
+  const [pickerPos, setPickerPos] = useState<{ left: number; width: number; bottom: number; maxHeight: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,25 +120,92 @@ export function ChatInput() {
   const queueLen = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId]?.length ?? 0) : 0));
   /** 当前会话绑定的工作区（file-browser 登记的根；null=跟随全局默认） */
   const sessionWorkspaceId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.workspaceId ?? null);
+  /** 关联只读目录（可读不可写，命令仍在主目录执行） */
+  const sessionLinkedIds = useSessionStore(
+    (s) => s.sessions.find((x) => x.id === s.activeId)?.linkedWorkspaceIds ?? [],
+  );
+  const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
+  const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
+  const createSession = useSessionStore((s) => s.createSession);
   /** 工作区显示名（file-browser 维护 names/labels；经全局事件桥同步） */
   const [wsLabel, setWsLabel] = useState<string | null>(null);
+  /** 绑定失效（root 被移除/盘符不在）：必须显性提示，不能装作正常 */
+  const [wsMissing, setWsMissing] = useState(false);
+  const [wsRev, setWsRev] = useState(0);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;
 
-  // 会话工作区显示名：roots 变化（登记/改名/删除）时由 file-browser 广播；这里解析当前绑定
+  /** 浮层定位：用 bottom 贴住输入条上方（高度由内容决定，避免内容少时留一大片空白）；
+      空间不足时用 max-height 收紧，列表在内部滚动，绝不越过视口顶部 */
+  const computePickerPos = useCallback(() => {
+    const el = barRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const gap = 8;
+    return {
+      left: Math.max(8, r.left),
+      width: Math.min(r.width, 400),
+      bottom: Math.max(gap, window.innerHeight - r.top + gap),
+      maxHeight: Math.max(180, Math.min(400, r.top - gap * 2)),
+    };
+  }, []);
+
+  const openPicker = useCallback(() => {
+    setAssistantOpen(false); // 抽屉与浮层不同时出现，避免两个面板抢焦点
+    setPickerPos(computePickerPos());
+  }, [computePickerPos]);
+
+  const closePicker = useCallback(() => setPickerPos(null), []);
+  const pickerOpen = pickerPos !== null;
+
+  // 视口变化（软键盘/旋转/窗口缩放）与页面滚动时重新定位
   useEffect(() => {
-    if (!sessionWorkspaceId) { setWsLabel(null); return; }
+    if (!pickerOpen) return;
+    const update = () => {
+      const next = computePickerPos();
+      if (next) setPickerPos(next);
+    };
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [pickerOpen, computePickerPos]);
+
+  // 点空白关闭（不设遮罩：遮罩会挡住消息流滚动）
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t) || barRef.current?.contains(t)) return;
+      setPickerPos(null);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [pickerOpen]);
+
+  // 根表变化（登记/改名/删除）时重取名称：file-browser 广播 → index.ts 转成 roots 变更
+  useEffect(() => onRootsChanged(() => setWsRev((v) => v + 1)), []);
+
+  // 会话工作区显示名：解析当前绑定
+  useEffect(() => {
+    if (!sessionWorkspaceId) { setWsLabel(null); setWsMissing(false); return; }
     let alive = true;
     void (async () => {
       try {
         const r = await fetch('/api/fs/roots', { credentials: 'include' });
         const j = (await r.json()) as { roots?: { id: string; label: string }[] };
         const match = j.roots?.find((x) => x.id === sessionWorkspaceId);
-        if (alive) setWsLabel(match?.label ?? sessionWorkspaceId);
-      } catch { if (alive) setWsLabel(sessionWorkspaceId); }
+        if (!alive) return;
+        setWsLabel(match?.label ?? sessionWorkspaceId);
+        setWsMissing(!match);
+      } catch {
+        if (alive) { setWsLabel(sessionWorkspaceId); setWsMissing(false); }
+      }
     })();
     return () => { alive = false; };
-  }, [sessionWorkspaceId]);
+  }, [sessionWorkspaceId, wsRev]);
 
   /** 附件统一入口：校验（单件 + 整批）→ 转 Attachment */
   const addFiles = useCallback(async (files: File[]) => {
@@ -337,8 +412,12 @@ export function ChatInput() {
     }
     if (e.key === 'Escape') {
       if (native.isComposing) return; // IME 组词中的 Esc 是取消候选，不清空
+      if (pickerOpen) {
+        setPickerPos(null); // Esc 先关选择浮层
+        return;
+      }
       if (assistantOpen) {
-        setAssistantOpen(false); // 先收起助手面板
+        setAssistantOpen(false);
         return;
       }
       if (historyIndex !== null) {
@@ -371,12 +450,15 @@ export function ChatInput() {
 
   return (
     <div
+      ref={barRef}
       className={`chat-input-bar ${assistantOpen ? 'assistant-open' : ''}`}
       data-testid="chat-input"
       onPaste={handlePaste}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+        {/* 上下文水位 + token 速率状态条（spec §5.3；无数据时自身不渲染） */}
+        <ContextMeter />
         {attachErr && <div className="chat-input-warn">{attachErr}</div>}
         <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
         <textarea
@@ -398,37 +480,46 @@ export function ChatInput() {
           onChange={handleFilePicker}
         />
         {/* 助手面板：操作行调谐图标触发，内联展开在按钮行上方（不用浮层，避免被 shell-input 裁剪） */}
-        <div className={`chat-assistant-drawer ${assistantOpen ? 'open' : ''}`} aria-hidden={!assistantOpen}>
-          <div className="chat-assistant-inner">
-            {wsLabel && (
-              <div className="chat-assistant-row">
-                <span className="chat-assistant-key">工作区</span>
-                <span className="chat-ws-chip pinned" title="当前会话绑定的工作区（AI 命令在此目录内执行）">
-                  {wsLabel}
+        <div
+          className={`chat-assistant-drawer ${assistantOpen ? 'open' : ''}`}
+          aria-hidden={!assistantOpen}
+        >
+            <div className="chat-assistant-inner">
+              <button
+                className="chat-assistant-row chat-row-btn"
+                onClick={openPicker}
+                title="选择本对话的工作目录（AI 命令在此执行）"
+              >
+                <span className="chat-assistant-key">工作目录</span>
+                <span className={`chat-ws-chip ${sessionWorkspaceId ? 'pinned' : ''} ${wsMissing ? 'invalid' : ''}`}>
+                  {sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}
                 </span>
-              </div>
-            )}
-            {trustMode !== null && (
-              <div className="chat-assistant-row">
-                <span className="chat-assistant-key">执行模式</span>
-                <button
-                  className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
-                  onClick={() => void toggleTrust()}
-                  title={trustTitle}
-                  aria-pressed={trustMode}
-                >
-                  {trustLabel}
-                </button>
-              </div>
-            )}
-            <div className="chat-assistant-row">
-              <span className="chat-assistant-key">待发队列</span>
-              <span className="chat-assistant-val">{queueLen > 0 ? `已排队 ${queueLen} 条` : '无'}</span>
-              {queueLen > 0 && (
-                <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
+                {sessionLinkedIds.length > 0 && (
+                  <span className="chat-row-aux" title="关联只读目录">+{sessionLinkedIds.length}</span>
+                )}
+                <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
+              </button>
+              {trustMode !== null && (
+                <div className="chat-assistant-row">
+                  <span className="chat-assistant-key">执行模式</span>
+                  <button
+                    className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
+                    onClick={() => void toggleTrust()}
+                    title={trustTitle}
+                    aria-pressed={trustMode}
+                  >
+                    {trustLabel}
+                  </button>
+                </div>
               )}
+              <div className="chat-assistant-row">
+                <span className="chat-assistant-key">待发队列</span>
+                <span className="chat-assistant-val">{queueLen > 0 ? `已排队 ${queueLen} 条` : '无'}</span>
+                {queueLen > 0 && (
+                  <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
+                )}
+              </div>
             </div>
-          </div>
         </div>
         <div className="chat-input-btns">
           <button
@@ -442,9 +533,9 @@ export function ChatInput() {
           </button>
           <button
             className={`chat-send tune ${assistantOpen ? 'on' : ''} ${trustMode ? 'trusted' : ''}`}
-            onClick={() => setAssistantOpen((v) => !v)}
-            title={trustMode ? '信任模式已开启：AI 可直接执行命令 · 点击管理' : '工作区 · 执行模式 · 队列'}
-            aria-label="工作区、执行模式与队列设置"
+            onClick={() => { setAssistantOpen((v) => !v); }}
+            title={trustMode ? '信任模式已开启：AI 可直接执行命令 · 点击管理' : '工作目录 · 执行模式 · 队列'}
+            aria-label="工作目录、执行模式与队列设置"
             aria-expanded={assistantOpen}
           >
             <svg viewBox="0 0 24 24" fill="none" width="16" height="16" aria-hidden="true">
@@ -453,6 +544,21 @@ export function ChatInput() {
               <circle cx="9" cy="17" r="2.2" stroke="currentColor" strokeWidth="1.7" />
             </svg>
             {trustMode === true && <span className="chat-tune-badge" title="信任模式已开启" aria-hidden="true" />}
+          </button>
+          {/* 当前目录：始终可见，点一下直接选（不必先找到调谐） */}
+          <button
+            className={`chat-ws-btn ${sessionWorkspaceId ? 'pinned' : ''} ${wsMissing ? 'invalid' : ''}`}
+            onClick={openPicker}
+            title={
+              wsMissing
+                ? `绑定的目录已失效，当前回退到默认目录 — 点击重新选择`
+                : `工作目录：${wsLabel ?? '默认目录'}（AI 命令在此执行）— 点击切换`
+            }
+            aria-label="切换工作目录"
+          >
+            <FolderIcon />
+            <span className="chat-ws-btn-label">{sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}</span>
+            {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
           </button>
           <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
           {showBoth && (
@@ -474,6 +580,42 @@ export function ChatInput() {
             </button>
           )}
       </div>
+      {/* 工作目录选择浮层：portal 到 body（输入槽 overflow:hidden 会裁掉内联面板）。
+          用 absolute 而非 fixed——插件 CSS 门禁禁止 fixed，且这里只需要贴住输入条。 */}
+      {pickerPos && createPortal(
+        <div
+          ref={popRef}
+          className="chat-ws-pop"
+          role="dialog"
+          aria-label="选择工作目录"
+          style={{ left: pickerPos.left, bottom: pickerPos.bottom, width: pickerPos.width, maxHeight: pickerPos.maxHeight }}
+        >
+          <div className="chat-picker-head">
+            <span className="chat-picker-title">工作目录</span>
+            <button className="chat-picker-done" onClick={closePicker}>完成</button>
+          </div>
+          <WorkspacePickerBody
+            workspaceId={sessionWorkspaceId ?? undefined}
+            linkedWorkspaceIds={sessionLinkedIds}
+            onPickMain={(id) => {
+              // 空态还没有会话：选择本身就是「要在这个目录里干活」的意图，直接建会话并绑定，
+              // 否则选择看起来生效了、实际没有落点（用户会以为又丢了）
+              const sid = activeId ?? createSession();
+              setSessionWorkspace(sid, id);
+            }}
+            onToggleLinked={(id) => {
+              const sid = activeId ?? createSession();
+              const cur = useSessionStore.getState().sessions.find((s) => s.id === sid)?.linkedWorkspaceIds ?? [];
+              const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(0, 3);
+              setSessionLinkedWorkspaces(sid, next);
+            }}
+            closeOnPickMain
+            onRequestClose={closePicker}
+            locked={!!streaming}
+          />
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

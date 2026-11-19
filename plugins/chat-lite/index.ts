@@ -12,24 +12,27 @@
  */
 import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
 import { useSessionStore, isToolCard, hasBlocks, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
+import { notifyRootsChanged } from './workspace-prefs';
 // 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown / 工具卡（原先散落在宿主 src/styles.css）
 import './chat.css';
+// 上下文透视：状态条 + 详情抽屉样式（spec docs/context-insight-plan.md）
+import './context.css';
 
 /** 与 mock-auth 的会话镜像键保持一致（跨插件约定） */
 const MOCK_AUTH_SESSION_KEY = 'mock-auth.session.v1';
 
-/** 流式看门狗：超过该时长没有任何增量，认为引擎卡死并收敛（防按钮永久停在「停止」） */
-const STREAM_IDLE_TIMEOUT_MS = 30_000;
 /**
- * 工具阶段看门狗：仅作「真卡死」兜底，不是编排时限。
- * 编排可能在无人值守下跑很久（多轮工具 + 每轮审批 120s + bash 300s），这些都会
- * 各自续期看门狗；只有在整个阶段完全没有事件（引擎/中继断连）时才触发。
- * 触发后不再「假收敛 + 谎报已结束」——保留订阅，让后台结果继续落地。
+ * 看门狗只是「疑似卡住」的软提示阈值，不是超时上限，更不是收敛信号。
+ * 无人值守场景下，模型长思考 / reasoning / provider 慢都能几十秒无 delta，
+ * 因此这里刻意取大值，且超时后只提示、不收敛（收敛只认 message.done / stream.error / 用户停止）。
+ * 流式阶段：慢首 token 兜底；工具阶段：多轮审批 + bash 的静默兜底。
  */
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
 const TOOL_PHASE_TIMEOUT_MS = 600_000;
 
 /** 空态快捷建议 → 输入框的填写通道（避免为一句「填入草稿」在组件间拉一条状态） */
@@ -80,7 +83,8 @@ export const chatLitePlugin: LitePlugin = {
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
     // interactive.*：interactive-cards 的交互卡事件；artifact.created：html-preview 等产物插件
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created'],
+    // workspace-renamed：file-browser 改名广播，输入区目录名据此即时同步（不再停留在旧名）
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -161,6 +165,56 @@ export const chatLitePlugin: LitePlugin = {
           data: inner.data ?? {},
         },
       });
+    });
+    // 工作区根改名/登记/删除：广播到输入区与选择器（原先只发不收，目录名会停在旧值）
+    api.listen('workspace-renamed', () => notifyRootsChanged());
+    // ---- 上下文透视（spec §5.3）：ctxStore 单写者由事件驱动，UI 只读 ----
+    // ai.usage：real-engine 流末发出（输入/输出 token、耗时、速率分母）
+    api.listen('cap.ai.chat:event', (envelope) => {
+      const ev = envelope as { kind?: string; payload?: Record<string, unknown> };
+      if (ev.kind !== 'ai.usage' || !ev.payload) return;
+      const p = ev.payload as { sessionId?: string; inputTokens?: number; outputTokens?: number; durationMs?: number; estimated?: boolean; model?: string; contextWindow?: number };
+      if (!p.sessionId) return;
+      useCtxStore.getState().applyUsage(p as { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; estimated?: boolean; model?: string; contextWindow?: number });
+    });
+    // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
+    api.listen('cap.agent.loop:event', (envelope) => {
+      const ev = envelope as { kind?: string; payload?: Record<string, unknown> };
+      const kind = ev.kind ?? '';
+      const p = (ev.payload ?? {}) as { sessionId?: string; messageId?: string } & Record<string, unknown>;
+      if (!p.sessionId) return;
+      const store = useCtxStore.getState();
+      if (kind === 'context.snapshot') store.applySnapshot(p as never);
+      else if (kind === 'context.compacting') store.applyCompacting(p.sessionId);
+      else if (kind === 'context.compacted') {
+        store.applyCompacted(p as never);
+        // 压缩卡片落进 assistant 消息流（用户在对话里直接可见；幂等：重复事件不重复落块）
+        const sid = p.sessionId;
+        const aid = p.messageId;
+        if (aid) {
+          const st = useSessionStore.getState();
+          const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === aid);
+          if (msg && hasBlocks(msg)) {
+            const marker = `[已压缩上下文 ${String(p.removedMessages ?? '?')} 条消息 → 摘要（${String(p.tokensBefore ?? '?')} → ${String(p.tokensAfter ?? '?')} tokens）]`;
+            const dup = msg.blocks.some((b) => b.type === 'text' && b.text.includes('[已压缩上下文'));
+            if (!dup) st.appendAssistantBlock(sid, aid, { type: 'text', text: marker });
+          }
+        }
+      } else if (kind === 'context.compact-failed') {
+        store.applyCompactFailed(p.sessionId, String((p as { reason?: string }).reason ?? 'unknown'));
+        // 失败提示同样落块（非破坏语义：历史完整保留，用户知道发生了什么）
+        const sid = p.sessionId;
+        const aid = p.messageId;
+        if (aid) {
+          const st = useSessionStore.getState();
+          const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === aid);
+          if (msg && hasBlocks(msg)) {
+            const marker = `[上下文压缩失败：${String((p as { reason?: string }).reason ?? 'unknown')}；历史已完整保留，将继续以当前上下文继续对话]`;
+            const dup = msg.blocks.some((b) => b.type === 'text' && b.text.includes('[上下文压缩失败'));
+            if (!dup) st.appendAssistantBlock(sid, aid, { type: 'text', text: marker });
+          }
+        }
+      }
     });
   },
 };
@@ -363,6 +417,28 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       : (setTimeout(flushDelta, 16) as unknown as number);
   };
 
+  // ---- 思考流按帧合并（reasoning_content → thinking 块）----
+  // 推理模型的思考可能先于正文持续 30s+；把它落成可见块，用户才知道 AI「在动」。
+  let rbuf = '';
+  let rframe = 0;
+  const flushReasoning = (): void => {
+    if (rframe) {
+      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rframe);
+      rframe = 0;
+    }
+    if (!rbuf) return;
+    const chunk = rbuf;
+    rbuf = '';
+    useSessionStore.getState().appendAssistantBlock(sid, assistantId, { type: 'thinking', text: chunk });
+  };
+  const pushReasoning = (delta: string): void => {
+    rbuf += delta;
+    if (rframe) return;
+    rframe = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame(flushReasoning)
+      : (setTimeout(flushReasoning, 16) as unknown as number);
+  };
+
   // ---- 幂等收敛 + 看门狗 ----
   // 两个 timer 必须独立：流式阶段每帧 delta 会续期短看门狗，若与工具阶段共用一个变量，
   // 工具执行期间偶发的一段模型文本会把长看门狗切回 30s → 误杀在途编排。
@@ -370,57 +446,58 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   let streamWatchdog: ReturnType<typeof setTimeout> | null = null;
   let phaseWatchdog: ReturnType<typeof setTimeout> | null = null;
   let unbind: (() => void) | undefined;
+  let idleHintShown = false; // 每条流只提示一次，避免长思考期间反复追加相同文本
 
   const clearWatchdogs = (): void => {
     if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
     if (phaseWatchdog) { clearTimeout(phaseWatchdog); phaseWatchdog = null; }
   };
 
-  /** 真收敛：仅在收到 done/error/用户中断、或流式真卡死时调用 */
+  /** 真收敛：仅由 message.done / stream.error / 用户主动停止触发；看门狗永不调用 */
   const settle = (): void => {
     if (settled) return;
     settled = true;
     clearWatchdogs();
     flushDelta();
+    flushReasoning();
     useSessionStore.getState().updateMessage(sid, assistantId, { streaming: false });
     unbind?.();
     sendNextPending(); // 流结束：自动派发队列下一条（若有）
   };
 
   /**
-   * 流式看门狗：只在「还没进入工具阶段」时守护 delta 停滞。
-   * 一旦工具事件到达（armPhaseWatchdog），短看门狗即长期挂起——工具执行期间
-   * 几十秒无 delta 是常态，不该被当作引擎卡死。
+   * 软提示：超时只告诉用户「仍在等待」，绝不 settle / unbind。
+   * 收敛权交给后端权威信号（message.done / stream.error）和用户「停止」——
+   * 这样模型长思考或后台长编排期间静默再久，结果到达后仍会被订阅到并落块。
    */
+  const showIdleHint = (label: string): void => {
+    if (settled || idleHintShown) return;
+    idleHintShown = true;
+    useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+      type: 'text',
+      text: `[运行提示] ${label}暂无新内容，任务可能仍在后台执行；结果到达后会自动更新。如需中止请点「停止」。`,
+    });
+  };
+
+  /** 流式阶段看门狗：仅慢首 token / 长思考兜底；进入工具阶段后让位 */
   const armWatchdog = (): void => {
-    if (phaseWatchdog) return; // 已进入工具阶段：短看门狗让位
+    if (phaseWatchdog) return; // 已进入工具阶段：流式看门狗长期让位
     if (streamWatchdog) clearTimeout(streamWatchdog);
     streamWatchdog = setTimeout(() => {
       if (settled) return;
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'text',
-        text: `[流式中断] ${STREAM_IDLE_TIMEOUT_MS / 1000}s 无新内容，引擎可能已停止响应。`,
-      });
-      settle();
+      streamWatchdog = null;
+      showIdleHint(`已 ${STREAM_IDLE_TIMEOUT_MS / 1000}s`);
     }, STREAM_IDLE_TIMEOUT_MS);
   };
 
-  /**
-   * 工具阶段看门狗：每个 tool.* / interactive.* 事件都会续期。
-   * 超时只是「疑似断连」的兜底提示——保留订阅不 unbind，因为无人值守编排
-   * 本就可能长时间静默（审批 120s × 多轮），后台工具结果仍会继续送达并落块。
-   * 用户在任何时候都能点「停止」真正收敛。
-   */
+  /** 工具阶段看门狗：每个 tool.* 事件续期；超时同样只提示不收敛 */
   const armPhaseWatchdog = (): void => {
     if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
     if (phaseWatchdog) clearTimeout(phaseWatchdog);
     phaseWatchdog = setTimeout(() => {
       if (settled) return;
-      phaseWatchdog = null; // 不 settle：让后台编排继续把结果推来
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'text',
-        text: `[运行提示] 工具阶段已 ${TOOL_PHASE_TIMEOUT_MS / 1000}s 无事件，编排可能仍在后台执行；结果到达后会自动更新。如需中止请点「停止」。`,
-      });
+      phaseWatchdog = null;
+      showIdleHint(`工具阶段已 ${TOOL_PHASE_TIMEOUT_MS / 1000}s`);
     }, TOOL_PHASE_TIMEOUT_MS);
   };
 
@@ -440,7 +517,10 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
 
-    if (envelope.kind === 'message.delta' && inner.delta) {
+    if (envelope.kind === 'message.reasoning' && inner.delta) {
+      armWatchdog(); // 思考流也是活跃信号：长思考期间看门狗持续续期（只软提示不收敛）
+      pushReasoning(inner.delta);
+    } else if (envelope.kind === 'message.delta' && inner.delta) {
       armWatchdog();
       pushDelta(inner.delta);
     } else if (envelope.kind === 'message.done') {
@@ -485,6 +565,12 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       ...(store.sessions.find((s) => s.id === sid)?.workspaceId
         ? { workspaceId: store.sessions.find((s) => s.id === sid)!.workspaceId }
         : {}),
+      // 关联只读目录：files 工具可读、bash 不在此执行（服务端仍按登记根白名单校验）
+      ...((store.sessions.find((s) => s.id === sid)?.linkedWorkspaceIds?.length ?? 0) > 0
+        ? { linkedWorkspaceIds: store.sessions.find((s) => s.id === sid)!.linkedWorkspaceIds }
+        : {}),
+      // 会话级上下文压缩策略（agent-loop 据此触发自动压缩；spec §4.3）
+      ...(useLoop ? { ctxPolicy: ctxPolicyOf(sid) } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   });

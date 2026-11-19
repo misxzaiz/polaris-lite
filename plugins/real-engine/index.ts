@@ -22,6 +22,39 @@ interface ModelCaps {
   vision: boolean;
 }
 
+/** ai.usage 事件载荷（spec：docs/context-insight-plan.md §4.1） */
+interface AiUsagePayload {
+  sessionId: string;
+  messageId: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  durationMs: number;
+  model?: string;
+  contextWindow?: number;
+  estimated?: boolean;
+}
+
+/** OpenAI 兼容 usage 块（流末帧；字段名按协议，camelCase 由本层转换） */
+interface WireUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+/** 上下文估算：Σ消息字符 ÷ 4（中英混合保守近似，对齐 simple_ai CHARS_PER_TOKEN） */
+function estimateTokens(messages: { content: unknown; tool_calls?: unknown }[]): number {
+  let chars = 0;
+  for (const m of messages) {
+    if (typeof m.content === 'string') chars += m.content.length;
+    else if (Array.isArray(m.content)) {
+      for (const p of m.content as { text?: string }[]) chars += typeof p?.text === 'string' ? p.text.length : 0;
+    }
+    if (m.tool_calls !== undefined) chars += JSON.stringify(m.tool_calls).length;
+  }
+  return Math.ceil(chars / 4);
+}
+
 /** 引擎视角的供应商（masked：服务端只回这些字段，无 apiKey） */
 interface ActiveProvider {
   id: string;
@@ -65,6 +98,51 @@ function buildCapabilityParams(provider: ActiveProvider): Record<string, unknown
   if (caps.maxOutputTokens > 0) out.max_tokens = caps.maxOutputTokens;
   if (caps.effort) out.reasoning_effort = caps.effort;
   return out;
+}
+
+/** 统一 emit ai.usage：真实 usage 优先，缺失时按 messages 估算（estimated 标记） */
+function emitUsage(
+  _streamKey: string,
+  sessionId: string,
+  messageId: string,
+  messages: { content: unknown; tool_calls?: unknown }[],
+  wireUsage: WireUsage | null,
+  model: string | undefined,
+  maxInputTokens: number | undefined,
+  startedAt: number,
+  emit: (ev: { kind: string; payload: unknown }) => void,
+): void {
+  const durationMs = Date.now() - startedAt;
+  const contextWindow = maxInputTokens && maxInputTokens > 0 ? maxInputTokens : undefined;
+  if (wireUsage && (wireUsage.prompt_tokens !== undefined || wireUsage.completion_tokens !== undefined)) {
+    const inputTokens = Math.max(0, Number(wireUsage.prompt_tokens ?? 0));
+    const outputTokens = Math.max(0, Number(wireUsage.completion_tokens ?? 0));
+    const total = Number(wireUsage.total_tokens ?? inputTokens + outputTokens);
+    const payload: AiUsagePayload = {
+      sessionId, messageId,
+      inputTokens,
+      outputTokens,
+      totalTokens: Math.max(0, Number.isFinite(total) ? total : inputTokens + outputTokens),
+      durationMs,
+      ...(model ? { model } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
+    };
+    emit({ kind: 'ai.usage', payload });
+    return;
+  }
+  // 无 usage：字符估算兜底（水位仍可用，精度降级并明示）
+  const est = estimateTokens(messages);
+  const payload: AiUsagePayload = {
+    sessionId, messageId,
+    inputTokens: est,
+    outputTokens: 0,
+    totalTokens: est,
+    durationMs,
+    estimated: true,
+    ...(model ? { model } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+  emit({ kind: 'ai.usage', payload });
 }
 
 const streamHandler: StreamCapabilityHandler = async (req, emit) => {
@@ -120,6 +198,12 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     cancelled = true;
     abort.abort();
   });
+
+  // usage 采集（spec §4.1）：流末帧 usage 是上下文水位与压缩触发的真相源；
+  // 中断/出错路径数据不完整，不 emit（避免污染 agent-loop 的水位基准）。
+  const startedAt = Date.now();
+  let wireUsage: WireUsage | null = null;
+  let responseModel: string | undefined;
 
   try {
     // agent-loop 直传协议消息时按原样透传（含 tool_calls / role:'tool'）；
@@ -215,7 +299,16 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         try {
           const json = JSON.parse(data);
           const choice = json.choices?.[0];
-          // 兼容两类增量：常规 content 与推理模型的 reasoning_content
+          // usage：流式协议下通常在最后一个 data 帧（stream_options.include_usage）。
+          // 逐帧覆盖，最后一条非空 usage 为准（兼容逐帧都带的供应商）。
+          if (json.usage && typeof json.usage === 'object') wireUsage = json.usage as WireUsage;
+          if (typeof json.model === 'string' && json.model) responseModel = json.model;
+          // 推理模型的「思考流」：reasoning_content 是独立于 content 的增量。
+          // 必须以 message.reasoning 转发（chat-lite 渲染为思考块），否则长思考期间
+          // UI 全程静默，用户会误以为「不回复」（实测 nex-n2.6 思考 30s+ 无任何 content）。
+          const reasoning: string | undefined = choice?.delta?.reasoning_content;
+          if (reasoning) emit({ kind: 'message.reasoning', payload: { sessionId, messageId, delta: reasoning } });
+          // 常规正文增量
           const delta: string | undefined = choice?.delta?.content;
           if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
           // 工具调用增量聚合（index 维度）
@@ -241,6 +334,9 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         .map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }));
       emit({ kind: 'tool.calls', payload: { sessionId, messageId, toolCalls } });
     }
+
+    // ai.usage：优先真实 usage；供应商不回时按本次 messages 估算兜底（estimated 标记）
+    emitUsage(streamKey, sessionId, messageId, messages, wireUsage, responseModel, activeCaps(provider)?.maxInputTokens, startedAt, emit);
     emit({ kind: 'message.done', payload: { sessionId, messageId, ...(finishReason ? { finishReason } : {}) } });
   } catch (err) {
     if (cancelled) {

@@ -17,12 +17,28 @@
  * 边界：无工具注册时进入直通模式（start 原样透传 cap.ai.chat，自身不监听不转发）。
  */
 import type { LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
+import {
+  UsageAccumulator, estimateTokens, compactShadow,
+  type NonStreamComplete, type UsageSample,
+} from './context-compact';
 
 // 轮次/工具调用数量上限：应用户要求移除（曾为 8 轮 / 16 次）——任务时长靠用户
 // 「停止」即时收敛与单条命令超时兜底。
 const APPROVAL_TIMEOUT_MS = 120_000;
 /** 喂回模型的工具结果截断（上下文防爆） */
 const FEEDBACK_CAP = 8 * 1024;
+
+/** 上下文压缩默认策略（chat-lite 可按会话覆盖，spec §4.3） */
+const DEFAULT_CTX_POLICY = { autoCompact: true, threshold: 0.75, keepRecent: 6 };
+/** 上下文窗口默认值（模型能力表缺失时；与 simple_ai DEFAULT_CONTEXT_WINDOW 对齐） */
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+/** 会话级上下文策略（chat-lite send payload.ctxPolicy 透传） */
+interface CtxPolicy {
+  autoCompact?: boolean;
+  threshold?: number;
+  keepRecent?: number;
+}
 
 interface ToolCallProto {
   id: string;
@@ -69,8 +85,34 @@ const sessionAllow = new Map<string, Set<string>>();
 const sessionTrustedTools = new Map<string, Set<string>>();
 /** 全局 activeRoot（file-browser 树上点「工作区」即全局切换；会话未显式绑定时跟随它） */
 const globalActive = new Map<string, string>(); // rootId -> path
+/** sessionId → 上下文用量（真实 usage 优先，字符估算兜底；压缩触发基准） */
+const usageAcc = new Map<string, UsageAccumulator>();
+/** sessionId → 最近一轮 ai.usage（速率/详情展示；chat-lite 消费） */
+const lastUsage = new Map<string, UsageSample & { totalTokens?: number; model?: string; contextWindow?: number; estimated?: boolean }>();
+/** sessionId → 会话级上下文策略（chat-lite 每次发送时透传） */
+const ctxPolicies = new Map<string, CtxPolicy>();
+/** sessionId → 模型能力表窗口（ai.usage.contextWindow；压缩窗口优先级高于默认值） */
+const ctxWindows = new Map<string, number>();
+/** 压缩中标记（防同会话并发触发两次压缩） */
+const compacting = new Set<string>();
 
 let hostApi: SlotHostApi | null = null;
+
+/** 引擎事件里的 ai.usage 载荷（real-engine 发出，spec §4.1） */
+interface AiUsageEvent {
+  kind: string;
+  payload?: {
+    sessionId?: string;
+    messageId?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    durationMs?: number;
+    model?: string;
+    contextWindow?: number;
+    estimated?: boolean;
+  };
+}
 
 function emitTo(emit: (ev: { kind: string; payload: unknown }) => void, kind: string, payload: Record<string, unknown>): void {
   emit({ kind, payload });
@@ -168,6 +210,7 @@ function engineTurn(
   messages: ShadowMsg[],
   toolDefs: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[],
   onDelta?: (delta: string) => void,
+  onReasoning?: (delta: string) => void,
 ): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>; cancel: () => void } {
   let off: (() => void) | undefined;
   const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>((resolve, reject) => {
@@ -186,6 +229,10 @@ function engineTurn(
       if (ev.kind === 'message.delta' && inner.delta) {
         text += inner.delta;
         onDelta?.(inner.delta); // 实时转发（UI 流式渲染；同时喂 chat-lite 看门狗）
+      } else if (ev.kind === 'message.reasoning' && inner.delta) {
+        // 思考流原样转发到编排通道（不进 shadow transcript——思考不是协议消息，
+        // 喂回上游会造成重复推理/上下文污染；UI 由 chat-lite 落思考块）
+        onReasoning?.(inner.delta);
       } else if (ev.kind === 'tool.calls' && inner.toolCalls) {
         toolCalls = inner.toolCalls;
         finishReason = 'tool_calls';
@@ -231,8 +278,11 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     decision?: 'once' | 'always' | 'trust' | 'deny';
     prompt?: string;
     history?: { role: string; content: string }[];
+    ctxPolicy?: CtxPolicy;
   };
   const sessionId = payload.sessionId ?? 'unknown';
+  // 会话级上下文策略：chat-lite 每次发送透传（缺省字段回退默认值）
+  if (payload.ctxPolicy) ctxPolicies.set(sessionId, payload.ctxPolicy);
 
   // ---- 审批回填 / 中断：非 start 动作直接处理，绝不进入主循环 ----
   if (action === 'resolveApproval') {
@@ -347,8 +397,18 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       } else if (builtin?.path && builtin.path !== execCwd) {
         // 会话绑定优先；builtin 与其它登记根退居「只读可见」提示
       }
-      const readonly = list.filter((r) => !r.builtin && r.path !== (execCwd ?? builtin?.path));
-      if (readonly.length) readonlyHint += ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
+      // 只读可见范围：会话显式关联的目录优先（用户在输入区勾选的「关联只读」）；
+      // 未关联时退回「其余已登记根」——不改变老会话的行为。
+      const linkedIds = (payload as { linkedWorkspaceIds?: string[] }).linkedWorkspaceIds ?? [];
+      const linkedSet = new Set(linkedIds);
+      const readonly = linkedIds.length > 0
+        ? list.filter((r) => linkedSet.has(r.id) && r.path !== (execCwd ?? builtin?.path))
+        : list.filter((r) => !r.builtin && r.path !== (execCwd ?? builtin?.path));
+      if (readonly.length) {
+        readonlyHint += linkedIds.length > 0
+          ? ` 用户为本对话关联了这些只读目录（可浏览/读取，不可写、bash 不在其中执行）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`
+          : ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
+      }
     } catch { /* roots 不可用：保持默认提示 */ }
     let shadow = shadows.get(sessionId);
     if (!shadow) {
@@ -373,6 +433,80 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     }
     shadow.push({ role: 'user', content: prompt });
 
+    // ---- 上下文压缩（spec §5.2；对齐 simple_ai chat_loop：先压缩再请求） ----
+    const acc = usageAcc.get(sessionId) ?? new UsageAccumulator();
+    usageAcc.set(sessionId, acc);
+    const policy = { ...DEFAULT_CTX_POLICY, ...(ctxPolicies.get(sessionId) ?? {}) };
+    const window = ctxWindows.get(sessionId) ?? DEFAULT_CONTEXT_WINDOW;
+
+    /** 非流式补全：复用 /api/model-relay（key 在服务端注入），摘要请求不进 shadow */
+    const complete: NonStreamComplete = async ({ system, user, maxTokens }) => {
+      if (!hostApi) throw new Error('host api missing');
+      // 供应商解析走 cap.model.admin（与 real-engine 同源；masked 视图无 key）
+      const res = await hostApi.dispatch<{ config?: { id?: string; activeModel?: string } }>({ target: 'cap.model.admin', action: 'resolveActive' });
+      const providerId = res.ok ? res.data?.config?.id : undefined;
+      const model = res.ok ? res.data?.config?.activeModel : undefined;
+      if (!providerId) throw new Error('no provider for compact');
+      const resp = await fetch('/api/model-relay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          providerId,
+          body: {
+            ...(model ? { model } : {}),
+            stream: false,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
+            ],
+            max_tokens: maxTokens,
+          },
+        }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`compact HTTP ${resp.status}: ${text.slice(0, 160)}`);
+      }
+      const json = await resp.json().catch(() => null) as {
+        choices?: {
+          message?: { content?: string | { text?: string }[]; reasoning?: unknown; reasoning_content?: unknown };
+          finish_reason?: string;
+        }[];
+      } | null;
+      const choice = json?.choices?.[0];
+      let text = '';
+      const content = choice?.message?.content;
+      if (typeof content === 'string') text = content;
+      else if (Array.isArray(content)) text = content.map((p) => p?.text ?? '').join('');
+      const truncated = choice?.finish_reason === 'length'
+        || (!text.trim() && (choice?.message?.reasoning !== undefined || choice?.message?.reasoning_content !== undefined));
+      return { text, truncated };
+    };
+
+    // 触发压缩：水位（真实 usage 优先）达阈值 + 未熔断 + 未在压
+    if (policy.autoCompact && !compacting.has(sessionId) && acc.shouldCompact(window, policy.threshold, shadow)) {
+      compacting.add(sessionId);
+      emitTo(emit, 'context.compacting', {
+        sessionId, messageId: assistantId,
+        estimatedTokens: acc.lastInput > 0 ? acc.lastInput : estimateTokens(shadow),
+        window,
+      });
+      const outcome = await compactShadow(shadow, window, policy.keepRecent, complete);
+      compacting.delete(sessionId);
+      if (outcome.ok) {
+        acc.resetLast();
+        emitTo(emit, 'context.compacted', {
+          sessionId, messageId: assistantId,
+          summary: outcome.summary, removedMessages: outcome.removedMessages,
+          tokensBefore: outcome.tokensBefore, tokensAfter: outcome.tokensAfter, at: Date.now(),
+        });
+      } else if (outcome.error !== 'range-too-small') {
+        emitTo(emit, 'context.compact-failed', { sessionId, messageId: assistantId, reason: outcome.error ?? 'unknown' });
+      }
+      // range-too-small：静默跳过（下一轮消息增多后区间可选再压），不打扰 UI
+    }
+
     let turn = 0;
     let totalToolCalls = 0;
     for (; !abortedFlag; turn += 1) {
@@ -380,6 +514,9 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       // onDelta：引擎可见增量实时转发（messageId=assistantId，chat-lite 流式渲染）
       const t = engineTurn(sessionId, turnMessageId, shadow, toolDefs, (delta) => {
         emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta });
+      }, (delta) => {
+        // 思考流转发（messageId=assistantId，chat-lite 落 thinking 块并喂看门狗）
+        emitTo(emit, 'message.reasoning', { sessionId, messageId: assistantId, delta });
       });
       running.set(`${sessionId}::turn`, t.cancel);
       let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string };
@@ -536,6 +673,16 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       emitTo(emit, 'message.done', { sessionId, messageId: assistantId, interrupted: true });
       return;
     }
+    // 上下文水位快照：ContextMeter 的数据源（估算口径，含工具上下文；spec §5.2）
+    emitTo(emit, 'context.snapshot', {
+      sessionId, messageId: assistantId,
+      usedTokens: acc.lastInput > 0 ? acc.lastInput : estimateTokens(shadow),
+      window,
+      percent: window > 0 ? Math.min(1, (acc.lastInput > 0 ? acc.lastInput : estimateTokens(shadow)) / window) : 0,
+      messages: shadow.length,
+      compacted: acc.roundsSinceCompact !== null,
+      exhausted: acc.exhausted,
+    });
     emitTo(emit, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
     emitTo(emit, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
   } catch (err) {
@@ -597,7 +744,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render', 'cap.model.admin'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],
@@ -608,6 +755,29 @@ export const agentLoopPlugin: LitePlugin = {
     api.registerCapability.registerStreaming('cap.agent.loop', loopHandler);
     // 迟到的工具注册（loop 先于工具装配时的兜底；主路径是启动时主动拉取）
     api.listen('tool-registered', () => void discoverTools());
+    // ai.usage（real-engine 流末发出）：更新压缩触发基准 + 留存速率样本（spec §4.1/§5.2）
+    api.listen('cap.ai.chat:event', (envelope) => {
+      const ev = envelope as { source?: string; payload?: AiUsageEvent } & AiUsageEvent;
+      const inner = (ev.payload ?? {}) as NonNullable<AiUsageEvent['payload']>;
+      if (ev.kind !== 'ai.usage' || !inner.sessionId) return;
+      const sid = inner.sessionId;
+      const acc = usageAcc.get(sid) ?? new UsageAccumulator();
+      usageAcc.set(sid, acc);
+      if (inner.inputTokens !== undefined) acc.add(inner.inputTokens);
+      // 压缩后冷却期结束：以本轮真实 usage 判断是否熔断（压缩无效则本会话不再自动压）
+      acc.notePostCompactRound(inner.inputTokens !== undefined && inner.inputTokens >= (inner.contextWindow ?? DEFAULT_CONTEXT_WINDOW) * DEFAULT_CTX_POLICY.threshold);
+      if (inner.contextWindow && inner.contextWindow > 0) ctxWindows.set(sid, inner.contextWindow);
+      lastUsage.set(sid, {
+        inputTokens: inner.inputTokens ?? 0,
+        outputTokens: inner.outputTokens ?? 0,
+        estimated: inner.estimated,
+        at: Date.now(),
+        durationMs: inner.durationMs ?? 0,
+        ...(inner.totalTokens !== undefined ? { totalTokens: inner.totalTokens } : {}),
+        ...(inner.model ? { model: inner.model } : {}),
+        ...(inner.contextWindow !== undefined ? { contextWindow: inner.contextWindow } : {}),
+      });
+    });
     // 全局工作区切换（file-browser 树上点「工作区」按钮）→ 更新 globalActive 缓存，
     // 供未显式绑定工作区的会话跟随（cwd 解析优先级：会话绑定 > 全局 active > builtin）
     api.listen('workspace-changed', (envelope) => {

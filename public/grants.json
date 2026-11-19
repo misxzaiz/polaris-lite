@@ -25,7 +25,8 @@
         "user.prompt",
         "interactive.created",
         "interactive.answered",
-        "artifact.created"
+        "artifact.created",
+        "workspace-renamed"
       ]
     },
     "model-admin": {
@@ -100,7 +101,8 @@
         "cap.meta",
         "cap.tool.fs",
         "cap.interactive",
-        "cap.tool.render"
+        "cap.tool.render",
+        "cap.model.admin"
       ],
       "provides": [
         "cap.agent.loop"
