@@ -10,8 +10,11 @@
  * 只读：不写 chat-lite 的任何状态，不接管审批 UI，不改变请求行为。
  *
  * 已知边界（面板上有说明，不掩饰）：
- * - 用户输入原文不经过事件通道，只能靠轮次次序辨认；
- * - 上游 API Key 只在服务端，curl 里用 $API_KEY 占位。
+ * - 上游 API Key 只在服务端，curl 里用 $API_KEY 占位；
+ * - XHR / WebSocket 未拦截（当前应用只用 fetch）；
+ * - 只存本机，多设备共享要服务端端点（C 档）。
+ *
+ * 用户输入原文由 chat-lite 的 user.prompt 事件补齐，见 turnStore 与文档 §13.5。
  */
 import type { LitePlugin } from '@sdk';
 import { installNetTap } from './netTap';
@@ -26,8 +29,8 @@ export const aiEventsPlugin: LitePlugin = {
     version: '0.2.0',
     capabilities: [],
     provides: [],
-    // listen 是 fail-closed：这两个事件名必须同时出现在 manifest 与 grants.json
-    events: ['cap.agent.loop:event', 'cap.ai.chat:event'],
+    // listen 是 fail-closed：每个事件名必须同时出现在 manifest 与 grants.json
+    events: ['cap.agent.loop:event', 'cap.ai.chat:event', 'user.prompt'],
     contributes: {
       // panel 的 order 2/3/6 已被模型/Bash/文件占用；4 字以内否则 tab 会截断
       slots: [{ slot: 'panel', component: 'TimelinePanel', order: 7, title: '取证' }],
@@ -36,6 +39,12 @@ export const aiEventsPlugin: LitePlugin = {
   setup(api) {
     api.listen('cap.agent.loop:event', ingest);
     api.listen('cap.ai.chat:event', ingest);
+    // 用户输入原文（chat-lite 发送时广播），按 messageId 归到同一轮次。
+    // emit 通道的 envelope 是 {source, payload}（无 kind），而流式事件是 {source, kind, payload}；
+    // ingest 统一读 kind，所以这里补一个 kind 字段再交给它。
+    api.listen('user.prompt', (raw) => {
+      ingest({ ...(raw as Record<string, unknown>), kind: 'user.prompt' });
+    });
     // 孤儿兜底常驻：插件不卸载，所以不需要保存清理句柄
     startWatchdog();
     // 网络取证：只包一层 fetch，不阻断、不改变任何调用行为

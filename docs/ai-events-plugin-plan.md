@@ -211,8 +211,8 @@ manifest 里 `requires: ['agent-loop']` 不是必须的（只是旁听），但�
 
 | 缺口 | 影响 | 对策 |
 |---|---|---|
-| 没有用户输入原文 | 时间线只能显示"第 N 轮"，不能显示"用户问了什么" | 显示 `turnId` 尾号；用户可在导出包里手写一句 |
-| 没有 provider / model | 不知道这段回答用的哪个模型 | 同会话内通常固定；跨模型对比要等 B 档 |
+| ~~没有用户输入原文~~ | ~~时间线只能显示"第 N 轮"~~ | **已补**（见 §13.5）：chat-lite 发送时广播 `user.prompt`，按 `assistantId` 归到同一轮 |
+| 没有 provider / model | 不知道这段回答用的哪个模型 | 请求视图已从 `/api/model-relay` 请求体直接拿到（见 §13.2） |
 | 没有 token | 无法算成本 | B 档 |
 | 输出 > 8KB 被截断 | 长日志看不到尾部 | 详情里明确标 `truncated`，并在文案里写"完整输出见 Bash 面板" |
 | 只有本机 | 换设备就没了 | C 档 |
@@ -431,6 +431,24 @@ SSE 不存全量帧（一次长回答几千帧）：存帧数 + 首 6 / 尾 4 �
 
 ### 13.4 仍未覆盖
 
-- 用户输入原文（chat-lite 不发事件，见 §5.6）；
 - XHR / WebSocket（应用当前未使用，接入时需另补）；
 - 多设备共享（C 档，服务端端点）。
+
+### 13.5 补：用户输入原文（chat-lite 广播 `user.prompt`）
+
+HTTP 取证解决了「模型收到什么、回了什么」，但「用户这一轮问了什么」仍缺——请求视图
+里虽能从 messages 推出，轮次视图却只有 `turnId` 尾号。补法是加一路最小的事件：
+
+- **chat-lite**：`sendUserMessage` 生成 `assistantId` 后 `emit('user.prompt', {sessionId,
+  messageId: assistantId, text, at, attachments?})`。用 `assistantId` 当 `messageId` 是关键——
+  ai-events 的 TurnRecord 键就是 `(sessionId, assistant messageId)`，两者天然落在同一轮，
+  不需要新建映射表；附件只报名字，不带 base64。
+- **登记**：`user.prompt` 同时写进 chat-lite 与 ai-events 的 manifest.events 与 grants.json
+  （emit / listen 两侧都是 fail-closed，单边登记会在运行时抛 "not granted"）。
+- **ai-events**：`ingest` 增 `user.prompt` 分支，用事件的 `at` 作为轮次起始时间（比收到首个
+  delta 更准），原文进 `TurnRecord.prompt`；面板展开后置于顶部，导出 JSON 一并带上。
+- **容错**：emit 包在 `try/catch` 里，取证插件未启用或广播失败都不影响发消息这条主链路。
+
+改动量：chat-lite 两处（manifest 声明 + 发送处 emit）、grants 两处、ai-events 四处，
+**未碰 agent-loop / 引擎**。并行线对 chat-lite 的改动集中在 `setup()` 与 `resolveApproval()`，
+与本次两处不重叠。

@@ -18,6 +18,12 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+.aie-privacy {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
 .aie-seg {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -136,6 +142,16 @@
   border-top: 1px solid var(--border);
 }
 .aie-sub { font-size: var(--plite-fs-xs); color: var(--text-dim); }
+/* 用户输入原文：一轮的起点，用强调色左边框与下面的工具/输出区分 */
+.aie-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0 3px 8px;
+  border-left: 2px solid rgba(var(--accent-rgb), 0.55);
+}
+.aie-prompt .aie-code { max-height: 120px; color: var(--text); }
+.aie-prompt-att { font-size: var(--plite-fs-xs); color: var(--text-faint); word-break: break-word; }
 .aie-err {
   padding: 5px 7px;
   border-radius: var(--plite-radius-sm);

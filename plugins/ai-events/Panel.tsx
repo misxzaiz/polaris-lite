@@ -167,8 +167,8 @@ function TurnPanel() {
         <div className="aie-empty">
           <strong>{turns.length === 0 ? '还没有轮次记录' : '当前筛选下没有记录'}</strong>
           <p>
-            发一条对话后，这里会按轮次列出：模型跳了几次、调了哪些工具、参数与输出、每一步花了多久。
-            记录只留在本机；用户输入原文暂不采集（对话侧还没有这一路事件）。
+            发一条对话后，这里会按轮次列出：用户输入原文、模型跳了几次、调了哪些工具、参数与输出、每一步花了多久。
+            记录只留在本机。
           </p>
         </div>
       ) : (
@@ -196,6 +196,15 @@ function TurnPanel() {
 
                 {isOpen && (
                   <div className="aie-body">
+                    {turn.prompt !== undefined && (
+                      <div className="aie-prompt">
+                        <span className="aie-out-label">用户输入</span>
+                        <pre className="aie-code">{turn.prompt || '（空）'}</pre>
+                        {turn.attachments && turn.attachments.length > 0 && (
+                          <div className="aie-prompt-att">附件：{turn.attachments.join('、')}</div>
+                        )}
+                      </div>
+                    )}
                     <div className="aie-sub">
                       会话 {sessionTail(turn.sessionId)}
                       {turn.steps.length > 0 && (

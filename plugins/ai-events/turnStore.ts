@@ -6,6 +6,7 @@
  * 查询、导出、对比都直白，也不需要 seq / 回放 / 投影这一整套。
  *
  * 数据来源（全部为现有事件，零改动旁听）：
+ *   user.prompt（chat-lite 发送时广播，带用户输入原文）
  *   message.delta / message.done / tool.calls / tool.card
  *   / tool.approval.required / tool.approval.resolved / tool.result
  *   / loop.done / stream.error
@@ -63,6 +64,9 @@ export interface TurnRecord {
   outcome: 'done' | 'aborted' | 'error';
   error?: string;
   textLen: number;
+  /** 用户输入原文（来自 user.prompt 事件；附件只含名字） */
+  prompt?: string;
+  attachments?: string[];
   /** agent-loop 自报的轮数，用于交叉校验 steps 是否缺跳 */
   loopTurns?: number;
 }
@@ -80,6 +84,8 @@ interface Draft {
   curStep: number;
   textLen: number;
   error?: string;
+  prompt?: string;
+  attachments?: string[];
   loopTurns?: number;
 }
 
@@ -291,14 +297,14 @@ function pickNum(source: Record<string, unknown>, key: string): number | undefin
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
-function ensureDraft(sessionId: string, turnId: string): Draft {
+function ensureDraft(sessionId: string, turnId: string, at?: number): Draft {
   const key = `${sessionId}::${turnId}`;
   const found = drafts.get(key);
   if (found) {
     found.lastAt = Date.now();
     return found;
   }
-  const now = Date.now();
+  const now = Number.isFinite(at) ? (at as number) : Date.now();
   const made: Draft = {
     key,
     turnId,
@@ -328,6 +334,8 @@ function toRecord(d: Draft, outcome: TurnRecord['outcome'], error?: string): Tur
     tools: d.tools,
     outcome,
     textLen: d.textLen,
+    ...(d.prompt !== undefined ? { prompt: d.prompt } : {}),
+    ...(d.attachments && d.attachments.length > 0 ? { attachments: d.attachments } : {}),
     ...(error ? { error } : {}),
     ...(d.loopTurns !== undefined ? { loopTurns: d.loopTurns } : {}),
   };
@@ -365,6 +373,17 @@ export function ingest(raw: unknown): void {
   const callId = pickStr(payload, 'callId');
 
   switch (kind) {
+    case 'user.prompt': {
+      const prompt = pickStr(payload, 'text');
+      if (prompt === undefined) return;
+      const d = ensureDraft(sessionId, messageId, pickNum(payload, 'at'));
+      d.prompt = prompt;
+      const atts = payload.attachments;
+      if (Array.isArray(atts)) {
+        d.attachments = atts.filter((a): a is string => typeof a === 'string');
+      }
+      return;
+    }
     case 'message.delta': {
       const delta = pickStr(payload, 'delta');
       if (!delta) return;

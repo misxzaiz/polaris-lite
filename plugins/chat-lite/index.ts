@@ -73,7 +73,8 @@ export const chatLitePlugin: LitePlugin = {
     capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.agent.loop', 'cap.meta'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event'],
+    // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -230,6 +231,21 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   } satisfies ChatMessage);
 
   const assistantId = nextMsgId();
+
+  // 对外广播用户输入原文（ai-events 旁听：按 messageId=assistantId 归到同一轮次）。
+  // 取证是旁路职责：这里绝不因为 emit 失败而影响发送；附件只报名字，不带 base64 原文。
+  try {
+    api.emit('user.prompt', {
+      sessionId: sid,
+      messageId: assistantId,
+      text,
+      at: Date.now(),
+      ...(hasAttachments ? { attachments: attachments!.map((a) => a.name) } : {}),
+    });
+  } catch {
+    /* 无监听者或取证插件未启用：静默跳过 */
+  }
+
   store.appendMessage(sid, {
     id: assistantId,
     role: 'assistant',
