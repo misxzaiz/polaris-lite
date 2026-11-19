@@ -1,0 +1,215 @@
+/* ===== ai-events 插件（对话事件面板） ===== */
+/* 基于 300px 面板设计；只消费宿主令牌，不重定义、不选中宿主类名 */
+
+.aie-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 16px;
+  font-size: var(--plite-fs-md);
+  color: var(--text);
+}
+
+/* ---- 工具条 ---- */
+.aie-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.aie-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm);
+  overflow: hidden;
+}
+.aie-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--plite-fs-xs);
+  padding: 5px 7px;
+  cursor: pointer;
+  transition: color var(--plite-dur), background var(--plite-dur);
+}
+.aie-seg-btn + .aie-seg-btn { border-left: 1px solid var(--border); }
+.aie-seg-btn:hover { color: var(--text); }
+.aie-seg-btn.is-on { background: var(--accent-soft); color: var(--accent); }
+.aie-num { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+.aie-actions { display: inline-flex; gap: 6px; }
+.aie-btn {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: var(--plite-fs-xs);
+  cursor: pointer;
+  transition: border-color var(--plite-dur), color var(--plite-dur);
+}
+.aie-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--accent); }
+.aie-btn:disabled { opacity: 0.45; cursor: default; }
+.aie-btn-ghost { color: var(--text-faint); }
+
+.aie-seg-btn:focus-visible,
+.aie-btn:focus-visible,
+.aie-head:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* ---- 轮次列表 ---- */
+.aie-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aie-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color var(--plite-dur);
+}
+.aie-card.is-open { border-color: var(--border-strong); }
+
+.aie-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.aie-head:hover { background: rgba(var(--border-rgb), 0.03); }
+
+.aie-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+.aie-dot-done { background: var(--plite-success); }
+.aie-dot-error { background: var(--plite-danger); }
+.aie-dot-aborted { background: var(--text-faint); }
+
+.aie-time {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-soft);
+  flex: 0 0 auto;
+}
+.aie-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-dim);
+}
+.aie-sep { margin: 0 4px; color: var(--text-faint); }
+
+.aie-tag {
+  flex: 0 0 auto;
+  font-size: var(--plite-fs-xs);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.aie-tag-done { color: var(--plite-success); background: var(--plite-success-soft); }
+.aie-tag-error { color: var(--plite-danger); background: var(--plite-danger-soft); }
+.aie-tag-aborted { color: var(--text-dim); background: var(--plite-neutral-soft); }
+
+/* ---- 展开体 ---- */
+.aie-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 9px 9px;
+  border-top: 1px solid var(--border);
+}
+.aie-sub { font-size: var(--plite-fs-xs); color: var(--text-dim); }
+.aie-err {
+  padding: 5px 7px;
+  border-radius: var(--plite-radius-sm);
+  background: var(--plite-danger-soft);
+  color: var(--plite-danger);
+  font-size: var(--plite-fs-xs);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.aie-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.aie-step {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-dim);
+}
+.aie-step-idx { color: var(--text-soft); }
+.aie-step-meta { font-variant-numeric: tabular-nums; }
+
+/* ---- 工具卡 ---- */
+.aie-tools { display: flex; flex-direction: column; gap: 6px; }
+.aie-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm);
+  background: rgba(var(--accent-rgb), 0.012);
+}
+.aie-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--plite-fs-xs);
+}
+.aie-tool-name { font-weight: 500; color: var(--text); }
+.aie-tool-status { color: var(--plite-success); }
+.aie-tool-status.is-bad { color: var(--plite-danger); }
+.aie-tool-ms { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.aie-tool-approve { margin-left: auto; color: var(--text-faint); }
+
+.aie-code {
+  margin: 0;
+  padding: 5px 6px;
+  border-radius: 4px;
+  background: var(--plite-neutral-soft);
+  color: var(--text-soft);
+  font-family: var(--plite-font-mono);
+  font-size: var(--plite-fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  /* 不在单词中间硬断：break-all 会把 directory 拆成 dire/catory，窄面板里极难读 */
+  word-break: normal;
+  overflow-wrap: anywhere;
+  max-height: 190px;
+  overflow: auto;
+}
+.aie-cmd { color: var(--text); }
+.aie-code-bad { color: var(--plite-danger); background: var(--plite-danger-soft); }
+
+.aie-out { display: flex; flex-direction: column; gap: 3px; }
+.aie-out-label { font-size: var(--plite-fs-xs); color: var(--text-faint); }
+.aie-out-bad { color: var(--plite-danger); }
+
+/* ---- 空态 ---- */
+.aie-empty { padding: 22px 6px; text-align: center; color: var(--text-dim); }
+.aie-empty strong {
+  display: block;
+  font-size: var(--plite-fs-md);
+  font-weight: 500;
+  color: var(--text-soft);
+}
+.aie-empty p { margin: 7px 0 0; font-size: var(--plite-fs-xs); line-height: 1.75; }

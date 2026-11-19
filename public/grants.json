@@ -114,6 +114,14 @@
         "tool-registered",
         "workspace-changed"
       ]
+    },
+    "ai-events": {
+      "capabilities": [],
+      "provides": [],
+      "events": [
+        "cap.agent.loop:event",
+        "cap.ai.chat:event"
+      ]
     }
   }
 }

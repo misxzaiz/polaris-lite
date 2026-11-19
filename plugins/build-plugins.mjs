@@ -74,6 +74,7 @@ const plugins = [
   { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 9, enabled: false },
   { id: 'file-browser', config: 'file-browser/vite.config.ts', dist: 'file-browser/dist', order: 10 },
   { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 11 },
+  { id: 'ai-events', config: 'ai-events/vite.config.ts', dist: 'ai-events/dist', order: 12 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
