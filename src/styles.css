@@ -532,7 +532,19 @@ body.ws-dragging-tab { cursor: grabbing; }
   .ws-split-row, .ws-split-col { flex-direction: column; }
   .ws-splitter { display: none; }
   .ws-close { display: none; }
-  .ws-pane { flex: 1 1 auto; }
+
+  /* 窗格溶解成 contents 后，它的子元素直接变成祖父 split 的 flex item，
+     但 `.ws-pane > *` 的 `flex: 1 1 auto` 依然按 DOM 父子关系命中它们——
+     输入区因此被拉成「剩余空间的一半」（实测 844 高视口里占 354px），
+     内容贴在顶部、下方整片空白，看起来就是「输入框不在底部」。
+     这里按锚点语义复位：只有主区可增长，其余按内容高。 */
+  .ws-pane { flex: 0 0 auto; }
+  /* 只复位**叶子**：嵌套的 .ws-split / .ws-tabs 仍是切分容器，必须继续吃剩余高度，
+     否则整棵内层子树退化成内容高（实测 stream 直接变成 0px）。 */
+  .ws-pane > :not(.ws-split):not(.ws-tabs):not([data-anchor='stream']) { flex: 0 0 auto; }
+  .ws-pane > [data-anchor='stream'] { flex: 1 1 0; }
+  /* tabs 组是二级切分容器，它自己的窗格同样是 contents，需要继续分配剩余高度 */
+  .ws-pane > .ws-tabs { flex: 1 1 auto; min-height: 0; }
 
   .shell-sidebar {
     position: fixed;
