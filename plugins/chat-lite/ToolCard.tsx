@@ -79,34 +79,30 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
   const hasBody = !isApproval && (tool.command || tool.stdout || tool.stderr || tool.exitCode !== undefined);
   const spin = tool.status === 'running';
 
-  // 审批卡：独立视觉（warning 色边 + 按钮组）；决策直接回填 cap.agent.loop
+  // 审批卡：独立视觉（warning 色边 + 按钮组）；决策直接回填 cap.agent.loop。
+  // 卡片内嵌于 assistant 气泡（blocks 模式），左侧已有 AI 头像——不再重复放字母块。
   if (isApproval) {
     return (
-      <div className="chat-msg tool">
-        <div className="chat-avatar" aria-hidden="true"><span className="tc-letter">{tool.name.slice(0, 1).toUpperCase()}</span></div>
-        <div className="tc-approval" data-call-id={tool.callId} data-testid={`tc-approval-${tool.callId}`}>
-          <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
-          <pre className="tc-cmd">{tool.command}</pre>
-          <div className="tc-approval-btns">
-            <button className="tc-btn primary" onClick={() => resolveApproval(tool.callId, 'once')}>允许一次</button>
-            <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'always')}>总是允许该前缀</button>
-            <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'trust')}>本会话信任</button>
-            <button className="tc-btn danger" onClick={() => resolveApproval(tool.callId, 'deny')}>拒绝</button>
-          </div>
+      <div className="tc-approval" data-call-id={tool.callId} data-testid={`tc-approval-${tool.callId}`}>
+        <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
+        <pre className="tc-cmd">{tool.command}</pre>
+        <div className="tc-approval-btns">
+          <button className="tc-btn primary" onClick={() => resolveApproval(tool.callId, 'once')}>允许一次</button>
+          <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'always')}>总是允许该前缀</button>
+          <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'trust')}>本会话信任</button>
+          <button className="tc-btn danger" onClick={() => resolveApproval(tool.callId, 'deny')}>拒绝</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="chat-msg tool">
-      <div className="chat-avatar" aria-hidden="true"><span className="tc-letter">{tool.name.slice(0, 1).toUpperCase()}</span></div>
-      <div
-        className={`tc-card ${tool.status === 'error' || tool.status === 'denied' ? 'tc-fail' : ''} ${open ? 'tc-open' : ''}`}
-        data-call-id={tool.callId}
-        data-testid={`tc-${tool.callId}`}
-        style={{ borderLeftColor: CARD_ACCENT }}
-      >
+    <div
+      className={`tc-card ${tool.status === 'error' || tool.status === 'denied' ? 'tc-fail' : ''} ${open ? 'tc-open' : ''}`}
+      data-call-id={tool.callId}
+      data-testid={`tc-${tool.callId}`}
+      style={{ borderLeftColor: CARD_ACCENT }}
+    >
         <button className="tc-head" onClick={() => hasBody && setOpen(!open)} disabled={!hasBody}>
           <span className={`tc-status ${spin ? 'spin' : ''}`} aria-hidden="true"><StatusIcon status={tool.status} /></span>
           <span className="tc-name">{tool.name}</span>
@@ -139,7 +135,6 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
             {tool.exitCode !== undefined && <div className="tc-exit">退出码 {tool.exitCode}{tool.truncated ? ' · 输出已截断' : ''}</div>}
           </div>
         )}
-      </div>
     </div>
   );
 }
