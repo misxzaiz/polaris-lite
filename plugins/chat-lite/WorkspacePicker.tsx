@@ -1,13 +1,11 @@
 /**
  * 会话「设置工作区」弹层（参考 Polaris PermissionRequest 的收敛交互）：
- * - 列出 file-browser 登记的所有工作区根（名称+路径），当前绑定高亮 ✓；
+ * - 列出 file-browser 登记的所有工作区根（名称+路径），当前绑定用对勾标记；
  * - 「跟随全局」= 清除会话绑定（undefined，回落默认 workspace/全局 activeRoot）；
  * - 「新建工作区」= 输入绝对路径，经服务端 /api/fs/roots/from-path 一步登记并绑定；
  * - 选择即生效：store.setSessionWorkspace 落盘 + 关闭弹层。
  */
 import { useEffect, useState } from 'react';
-import type { ChatSession } from '@sdk';
-import { useSessionStore } from './store';
 import { CloseIcon, FolderIcon } from './icons';
 
 interface RootRow {
@@ -23,7 +21,7 @@ export function WorkspacePicker({
   onPick,
   onClose,
 }: {
-  session: ChatSession & { workspaceId?: string };
+  session: { id: string; title: string; workspaceId?: string };
   onPick: (workspaceId: string | undefined) => void;
   onClose: () => void;
 }) {
@@ -85,7 +83,7 @@ export function WorkspacePicker({
           >
             <span className="ws-row-name">跟随全局默认</span>
             <span className="ws-row-path">内建 workspace / 全局 activeRoot</span>
-            {!session.workspaceId && <span className="ws-check">✓</span>}
+            {!session.workspaceId && <span className="ws-check">当前</span>}
           </button>
           {roots.map((r) => (
             <button
@@ -96,7 +94,7 @@ export function WorkspacePicker({
             >
               <span className="ws-row-name">{r.label}</span>
               <span className="ws-row-path" title={r.path}>{r.path}</span>
-              {session.workspaceId === r.id && <span className="ws-check">✓</span>}
+              {session.workspaceId === r.id && <span className="ws-check">当前</span>}
             </button>
           ))}
           {roots.length === 0 && <div className="ws-picker-hint">暂无已登记的工作区根。</div>}

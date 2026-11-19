@@ -738,3 +738,17 @@
 }
 .chat-ws-chip:hover { border-color: var(--accent); color: var(--accent); }
 .chat-ws-chip.pinned { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+/* markdown 表格 */
+.md-table-wrap { overflow-x: auto; margin: 10px 0; }
+.md-table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  min-width: 100%;
+}
+.md-table th, .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-table th { background: var(--bg-hover); font-weight: 600; }

@@ -67,6 +67,8 @@ const inFlightExec = new Map<string, string>();
 const sessionAllow = new Map<string, Set<string>>();
 /** 会话级信任工具集（审批卡「本会话信任」沉淀；内存态，不跨会话不持久化） */
 const sessionTrustedTools = new Map<string, Set<string>>();
+/** 全局 activeRoot（file-browser 树上点「工作区」即全局切换；会话未显式绑定时跟随它） */
+const globalActive = new Map<string, string>(); // rootId -> path
 
 let hostApi: SlotHostApi | null = null;
 
@@ -305,20 +307,44 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     }
 
     // ---- shadow transcript 播种/续用 ----
-    // 工作区提示必须与工具执行模型一致：
-    // - bash 的 cwd 由服务端 tool-exec 锁死在 <dataDir>/workspace，不可越界（EXEC_CWD_ESCAPED）；
-    // - file-browser 登记的其它 roots 只是 files 工具的**只读可见范围**，bash 根本到不了。
-    // 因此只把 builtin 根描述为 cwd，其余 roots 明确标注「只读、bash 不可达」，
-    // 否则 AI 会按错误的 cwd 找文件、或让 bash 去访问它访问不了的目录。
+    // 工作区解析（会话级绑定优先）：
+    // - chat-lite 的 start payload 若带 workspaceId，则该会话绑定该根：bash cwd=根路径（服务端
+    //   tool-exec 已白名单放行任一登记根），system prompt 同步；
+    // - 无绑定/根失效 → 回落内建 workspace，并在 prompt 里注明回落原因；
+    // - 其余登记 roots 是 files 工具的只读可见范围。
     let cwdHint = '<dataDir>/workspace（默认工作区）';
     let readonlyHint = '';
+    let execCwd: string | undefined;
     try {
       const wsRes = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
       const list = wsRes.data?.roots ?? [];
+      const boundId = (payload as { workspaceId?: string }).workspaceId;
+      const bound = boundId ? list.find((r) => r.id === boundId) : undefined;
       const builtin = list.find((r) => r.builtin);
-      if (builtin?.path) cwdHint = builtin.path;
-      const readonly = list.filter((r) => !r.builtin && r.path !== builtin?.path);
-      if (readonly.length) readonlyHint = ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
+      if (bound?.path) {
+        cwdHint = `${bound.label}（${bound.path}）`;
+        execCwd = bound.path;
+      } else if (boundId) {
+        // 绑定的根已失效（被移除/盘符不在）：回落默认并在 prompt 说明
+        readonlyHint = ` 注意：会话绑定的工作区已失效（id=${boundId}），已回落默认工作区。`;
+      }
+      // 无会话绑定 → 跟随全局 activeRoot（file-browser 树上点「工作区」即全局切换）
+      if (!execCwd) {
+        // 根是否仍有效由服务端 roots 列表裁定（插件运行在浏览器，不能碰 node:fs）；
+        // 列表里找得到 id 即视为有效，服务端已对 missing 根做标记与 cwd 校验。
+        const globalEntry = [...globalActive.entries()].find(([id]) => list.some((r) => r.id === id));
+        if (globalEntry) {
+          const label = list.find((r) => r.id === globalEntry[0])?.label ?? globalEntry[0];
+          cwdHint = `${label}（${globalEntry[1]}）`;
+          execCwd = globalEntry[1];
+        } else if (builtin?.path) {
+          cwdHint = builtin.path;
+        }
+      } else if (builtin?.path && builtin.path !== execCwd) {
+        // 会话绑定优先；builtin 与其它登记根退居「只读可见」提示
+      }
+      const readonly = list.filter((r) => !r.builtin && r.path !== (execCwd ?? builtin?.path));
+      if (readonly.length) readonlyHint += ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
     } catch { /* roots 不可用：保持默认提示 */ }
     let shadow = shadows.get(sessionId);
     if (!shadow) {
@@ -411,13 +437,14 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         }
 
         // 执行（经工具插件的 cap；approved 标记供服务端二次校验）
+        // cwd=本会话绑定的工作区根（无绑定/失效回落时 execCwd 为空 → 服务端用默认 workspace）
         inFlightExec.set(sessionId, callId);
         let exec: { ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean };
         try {
           const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
             target: desc.cap,
             action: 'exec',
-            payload: { ...safeArgs(call.arguments), sessionId, approved: true },
+            payload: { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) },
           });
           exec = res.data ?? { ok: false, error: 'empty response' };
         } catch (err) {
@@ -484,7 +511,7 @@ export const agentLoopPlugin: LitePlugin = {
     capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
-    events: ['cap.ai.chat:event', 'tool-registered'],
+    events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],
     contributes: { slots: [] },
   },
   setup(api: SlotHostApi) {
@@ -492,6 +519,22 @@ export const agentLoopPlugin: LitePlugin = {
     api.registerCapability.registerStreaming('cap.agent.loop', loopHandler);
     // 迟到的工具注册（loop 先于工具装配时的兜底；主路径是启动时主动拉取）
     api.listen('tool-registered', () => void discoverTools());
+    // 全局工作区切换（file-browser 树上点「工作区」按钮）→ 更新 globalActive 缓存，
+    // 供未显式绑定工作区的会话跟随（cwd 解析优先级：会话绑定 > 全局 active > builtin）
+    api.listen('workspace-changed', (envelope) => {
+      console.log('[agent-loop] got workspace-changed:', JSON.stringify(envelope));
+      // 宿主投递的是信封 { source, payload }；真正载荷在 payload 字段
+      const p = (envelope as { payload?: { activeRootId?: string; linkedRootIds?: string[] } }).payload;
+      if (!p?.activeRootId) return;
+      void (async () => {
+        try {
+          const res = await hostApi!.dispatch<{ roots?: { id: string; path: string }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+          const match = (res.data?.roots ?? []).find((r) => r.id === p.activeRootId);
+          if (match) globalActive.set(match.id, match.path);
+          else globalActive.delete(p.activeRootId);
+        } catch { /* roots 不可用：保持旧值 */ }
+      })();
+    });
     void discoverTools();
   },
 };

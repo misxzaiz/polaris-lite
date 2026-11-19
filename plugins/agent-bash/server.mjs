@@ -1,9 +1,12 @@
 /**
- * 工具执行通道（POST /api/tool/exec + GET/POST /api/tool/config）。
+ * agent-bash 插件的服务端半边（POST /api/tool/exec + GET/POST /api/tool/config）。
  *
- * 定位：与 relay/auth 同层的宿主平台基础设施——浏览器沙箱无法 spawn 进程，
- * AI 工具（bash 等）的执行只能走这条服务端通道。本文件自包含，不含任何业务语义；
- * 业务编排（何时调用、审批交互、结果喂回模型）全部在 agent-bash / agent-loop 插件。
+ * 这是「插件双入口」的服务端那一半：浏览器沙箱无法 spawn 进程，工具执行必须
+ * 在 Node 侧；但「允许哪些命令、几档审批、cwd 范围」全是 agent-bash 的业务裁决，
+ * 所以实现跟插件走，由 plugins/server-registry.mjs 登记、server/host.mjs 装配。
+ * 本文件被删除时宿主照常启动，只是 bash 工具不可用。
+ *
+ * 编排侧（何时调用、审批卡、结果喂回模型）在 agent-bash/index.ts 与 agent-loop。
  *
  * 安全设计（这是「AI 有了 bash 就有了一切能力」的另一面——有了一切风险）：
  * - 会话 cookie 硬门禁（auth.getSession 注入）；外部 curl 无 cookie 一律 401；
@@ -17,7 +20,7 @@
  * - 全量审计落 <dataDir>/tool-exec-audit.log。
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, renameSync, writeFileSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -46,7 +49,7 @@ const DENYLIST = [
   /\b(Invoke-Expression|iex)\b/i,
 ];
 
-export function createToolExecMiddleware(options = {}) {
+export function createServerPart(options = {}) {
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const workspaceRoot = resolve(dataDir, 'workspace');

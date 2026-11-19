@@ -105,7 +105,7 @@ export function FileBrowserPanel() {
   }, [refresh, cwd.path, loadDir]);
 
   // 工作区状态同步：file-browser 模块层持有 activeRootId/linked（含 cap.config 回读），
-  // 变更时广播 workspace-changed——面板订阅以跨刷新保持 ✓ 徽标一致
+  // 变更时广播 workspace-changed——面板订阅以跨刷新保持徽标一致
   useEffect(() => {
     const onChanged = (payload: unknown) => {
       const p = payload as { activeRootId?: string; linkedRootIds?: string[] } | undefined;

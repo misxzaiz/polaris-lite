@@ -1,9 +1,13 @@
 /**
- * 文件浏览器 API（GET /api/fs/*）：盘符枚举 + 工作区根白名单 + 只读浏览/预览。
+ * file-browser 插件的服务端半边（GET/POST /api/fs/*）：盘符 + 工作区根 + 只读浏览/预览。
  *
- * 定位：与 relay/tool-exec 同层的宿主平台设施（浏览器沙箱无法读文件系统）；
- * 业务（面板 UI、工作区语义、AI 工具）在 file-browser 插件。设计见
- * docs/file-browser-analysis.md。
+ * 这是「插件双入口」的服务端那一半：UI 半边是 Panel.tsx（浏览器），本文件是它在
+ * Node 侧的能力实现，由 plugins/server-registry.mjs 登记、server/host.mjs 统一装配。
+ * 宿主不认识 /api/fs/* 的任何语义——本文件被删除时宿主照常启动，只是该端点 404。
+ *
+ * 为什么必须放服务端：浏览器沙箱无法读本地文件系统；但「读哪些目录、暴露多少」
+ * 是 file-browser 的业务决策（工作区语义、L0 漫游），所以实现跟插件走，而不是留在宿主。
+ * 设计见 docs/file-browser-analysis.md。
  *
  * 安全设计（公网穿透形态下这是第一议题）：
  * - 会话 cookie 硬门禁；PLITE_FS=0 一键禁用；
@@ -46,7 +50,7 @@ function pathDepth(p) {
   return norm.split(/[\\/]/).filter(Boolean).length;
 }
 
-export function createFsApi(options = {}) {
+export function createServerPart(options = {}) {
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const rootsFile = resolve(dataDir, 'workspace-roots.json');

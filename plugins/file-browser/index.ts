@@ -56,6 +56,7 @@ function savePrefs(): void {
 
 function emitWorkspaceChanged(): void {
   const payload = { activeRootId, linkedRootIds: [...linkedRootIds] };
+  console.log('[file-browser] emit workspace-changed:', JSON.stringify(payload));
   hostApi?.emit('workspace-changed', payload);
   // 同步 DOM 自定义事件：本插件 Panel 订阅（同插件内自发自收，跨组件状态同步）
   window.dispatchEvent(new CustomEvent('workspace-changed', { detail: payload }));
