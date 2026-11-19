@@ -569,11 +569,19 @@ body.ws-dragging-tab { cursor: grabbing; }
      这里按锚点语义复位：只有主区可增长，其余按内容高。 */
   .ws-pane { flex: 0 0 auto; }
   /* 只复位**叶子**：嵌套的 .ws-split / .ws-tabs 仍是切分容器，必须继续吃剩余高度，
-     否则整棵内层子树退化成内容高（实测 stream 直接变成 0px）。 */
-  .ws-pane > :not(.ws-split):not(.ws-tabs):not([data-anchor='stream']) { flex: 0 1 auto; }
-  /* 主区保底 50vh：自定义预设里若主区旁边是一个很高的 auto 内容，两者相加会超过视口，
-     没有保底时主区被压成 0（实测 h=0，变成一条线且无法使用）。保底 + 整列滚动即可。 */
-  .ws-pane > [data-anchor='stream'] { flex: 1 1 auto; min-height: 50vh; }
+     否则整棵内层子树退化成内容高（实测 stream 直接变成 0px）。
+     主区与输入区各自单独定规则（见下），这里排除掉，免得被 `flex: 0 1 auto` 覆盖。 */
+  .ws-pane > :not(.ws-split):not(.ws-tabs):not([data-anchor='stream']):not([data-anchor='input']) { flex: 0 1 auto; }
+  /* 主区：basis 必须是 0，不能是 auto。
+     basis:auto 取的是消息内容的自然高度——消息越长 basis 越大，flex 收缩时按 basis
+     加权分配，结果几乎是全部压缩量都落在输入区（实测 390×844：0 条消息 123px，
+     4 条 65px，12 条 31px，30 条只剩 22px，输入框彻底不可用）。用户看到的就是
+     「聊得越多输入框越扁」。改成 1 1 0 后主区只吃剩余空间，超出部分自己滚动，
+     与消息条数完全无关。min-height 保留一个温和保底，防止自定义预设把主区压成 0。 */
+  .ws-pane > [data-anchor='stream'] { flex: 1 1 0; min-height: 120px; }
+  /* 输入区：不参与收缩。它是整个布局里唯一不该让出高度的部分——输入框要一直能写、
+     发送按钮要一直点得到。高度按内容取，上限仍由 .shell-input 的 max-height 封顶。 */
+  .ws-pane > [data-anchor='input'] { flex: 0 0 auto; }
   /* tabs 组是二级切分容器，它自己的窗格同样是 contents，需要继续分配剩余高度 */
   .ws-pane > .ws-tabs { flex: 1 1 auto; min-height: 0; }
   /* 单列超过视口时整列滚动，而不是把某一侧压没 */
