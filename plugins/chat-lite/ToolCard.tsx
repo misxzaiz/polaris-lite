@@ -66,10 +66,21 @@ function statusLabel(data: ToolCardData): string {
   }
 }
 
-/** 单行命令摘要（去换行，限宽省略） */
-function oneLine(s: string | undefined, max = 64): string {
-  const t = (s ?? '').replace(/\s+/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max)}…` : t;
+/**
+ * 单行命令摘要（限宽省略）。
+ * 旧实现直接 slice(0,64)，会把 `grep -n "cap.tool.fs\|fi...` 断在转义符中间——
+ * grep 的 `\|`（BRE 或）对普通用户也是噪音。这里做两件事：
+ * 1. 去掉转义反斜杠（`\|` → `|`、`\(` → `(` 等），只保留可读 token；
+ * 2. 超长按「完整参数」边界截断，宁可少显示一个 token，也不切在词中间。
+ */
+function oneLine(s: string | undefined, max = 48): string {
+  const raw = (s ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const clean = raw.replace(/\\([|(){}?+*\[\]])/g, '$1');
+  if (clean.length <= max) return clean;
+  // 找 max 之前最后一个空格作为截断点，避免半个参数；找不到就硬截（单个超长 token）
+  const cut = clean.lastIndexOf(' ', max);
+  return `${clean.slice(0, cut > max * 0.5 ? cut : max)}…`;
 }
 
 export function ToolCard({ msg }: { msg: ToolCardMessage }) {
@@ -132,7 +143,11 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
                 </pre>
               </>
             )}
-            {tool.exitCode !== undefined && <div className="tc-exit">退出码 {tool.exitCode}{tool.truncated ? ' · 输出已截断' : ''}</div>}
+            {/* 退出码 0 是成功默认值，属于噪音；仅在非 0（失败）时显示，输出截断提示同样只在有意义时出现 */}
+            {tool.exitCode !== undefined && tool.exitCode !== 0 && (
+              <div className="tc-exit fail">退出码 {tool.exitCode}</div>
+            )}
+            {tool.truncated && <div className="tc-exit">输出已截断</div>}
           </div>
         )}
     </div>

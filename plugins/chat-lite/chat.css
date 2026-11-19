@@ -523,6 +523,7 @@
 }
 .tc-output.tc-stderr { color: var(--plite-danger); }
 .tc-exit { font-size: 10.5px; color: var(--text-dim); margin-top: 6px; }
+.tc-exit.fail { color: var(--plite-danger); }
 
 /* 审批卡（warning 色独立视觉） */
 .tc-approval {
@@ -582,7 +583,10 @@
   transition: background var(--plite-dur) var(--plite-ease), border-color var(--plite-dur) var(--plite-ease);
 }
 .tc-group-summary:hover { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.tc-group-summary.live { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
 .tc-group-icon { width: 15px; height: 15px; color: var(--text-dim); flex-shrink: 0; }
+.tc-group-summary.live .tc-group-icon { color: var(--accent); animation: tc-group-pulse 1.6s ease-in-out infinite; }
+@keyframes tc-group-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 .tc-group-label { font-weight: 600; flex-shrink: 0; }
 .tc-group-chip {
   font-size: 10.5px;
@@ -639,10 +643,11 @@
   transition: border-color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
 }
 .chat-trust-chip:hover { border-color: var(--accent); color: var(--text); }
+/* 信任模式 = AI 命令免审批直接执行 = 安全门槛降低，用琥珀警示色而非绿色的"安全/正常" */
 .chat-trust-chip.trusted {
-  border-color: color-mix(in srgb, var(--plite-success) 55%, var(--border));
-  background: var(--plite-success-soft);
-  color: var(--plite-success);
+  border-color: color-mix(in srgb, var(--plite-warning) 55%, var(--border));
+  background: var(--plite-warning-soft);
+  color: var(--plite-warning);
   font-weight: 600;
 }
 

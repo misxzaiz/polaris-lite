@@ -1,10 +1,15 @@
 /**
  * 可折叠块组（参考 Polaris chat-desk blockGrouping 的收敛版）。
  *
- * 规则（对齐 Polaris plans/tool-block-collapse-behavior-fix.md）：
+ * 规则：
  * - 连续 tool 块归为一个折叠组（lite 无 thinking 块）；非空 text 块打断分组；
- * - 流式期间平铺（过程可见，无组壳）；结束后自动折叠为一条汇总条；
- * - 展开态：块平铺 + 底部轻量「收起」。
+ * - 默认折叠为一条汇总条（含流式期间，过程密度可控）：
+ *   · 流式中显示「执行中 · N 项」，有失败即时显示「有失败」；
+ *   · 结束后显示「全部完成 / 有失败 · N 项」；
+ * - 展开态：块平铺，工具卡自身仍可展开看命令/输出 + 底部轻量「收起」。
+ *
+ * 变更说明：旧版流式全程平铺，4~6 个 bash 调用会把消息区铺满（截图中 4 张卡
+ * 连续展开即此场景）。改为默认折叠，想看过程点一下汇总条即可，兼顾密度与可见性。
  */
 import { useEffect, useState } from 'react';
 import { Markdown } from './markdown';
@@ -43,33 +48,40 @@ function identifyGroups(blocks: AsstBlock[]): { start: number; blocks: ToolBlock
   return groups;
 }
 
-function GroupSummary({ count, anyFail, onExpand }: { count: number; anyFail: boolean; onExpand: () => void }) {
+function GroupSummary({ count, anyFail, streaming, onExpand }: {
+  count: number; anyFail: boolean; streaming: boolean; onExpand: () => void;
+}) {
   return (
-    <button type="button" className="tc-group-summary" onClick={onExpand} aria-expanded={false}>
+    <button type="button" className={`tc-group-summary ${streaming ? 'live' : ''}`} onClick={onExpand} aria-expanded={false}>
       <svg className="tc-group-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
       <span className="tc-group-label">工具调用</span>
-      <span className={`tc-group-chip ${anyFail ? 'fail' : ''}`}>{anyFail ? '有失败' : '全部完成'}</span>
-      <span className="tc-group-count">{count} 项</span>
+      <span className={`tc-group-chip ${anyFail ? 'fail' : ''}`}>
+        {anyFail ? '有失败' : streaming ? '执行中' : '全部完成'}
+      </span>
+      <span className="tc-group-count">{count} 项{streaming ? ' · 点击查看' : ''}</span>
       <svg className="tc-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
     </button>
   );
 }
 
-/** 单个折叠组：流式平铺 / 结束折叠汇总条 */
+/**
+ * 单个折叠组：默认折叠汇总条，点开看平铺。
+ * 流式期间也默认折叠（但用户可点开看实时过程）；流结束时若处于展开态则自动收起，
+ * 回到汇总条——与「结束后收敛」的既有语义保持一致。
+ */
 function CollapsibleGroup({ blocks, streaming }: { blocks: ToolBlock[]; streaming: boolean }) {
-  const [expanded, setExpanded] = useState(streaming);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     if (!streaming && expanded) setExpanded(false);
-  }, [streaming]);
+  }, [streaming]); // eslint-disable-line react-hooks/exhaustive-deps -- 仅在流结束那一瞬收起，用户主动展开不应被其它渲染打断
 
   const anyFail = blocks.some((b) => b.card.status === 'error' || b.card.status === 'denied');
 
-  if (streaming) {
-    return <>{blocks.map((b, i) => <CardShim key={b.card.callId || i} card={b.card} />)}</>;
-  }
   return (
     <div className="tc-group">
-      {!expanded && <GroupSummary count={blocks.length} anyFail={anyFail} onExpand={() => setExpanded(true)} />}
+      {!expanded && (
+        <GroupSummary count={blocks.length} anyFail={anyFail} streaming={streaming} onExpand={() => setExpanded(true)} />
+      )}
       {expanded && (
         <>
           {blocks.map((b, i) => <CardShim key={b.card.callId || i} card={b.card} />)}

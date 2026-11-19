@@ -21,8 +21,8 @@ import { PaperclipIcon, SendIcon, StopIcon } from './icons';
 import './chat-input.css';
 
 const MAX_CHARS = 200_000;
-const MAX_HEIGHT = 200;
-const MIN_HEIGHT = 42;
+// 增高的 min/max 不再在 JS 里硬编码：直接读 textarea 的计算样式（CSS 里用 dvh 做视口自适应，
+// 浏览器会把它解析成当前 px）。这样旧内核兜底与 CSS 天然同口径，消除「JS 42/200 vs CSS 46/120」的错位。
 
 /** prompt 历史（localStorage）：append 去重只比最后一条；up 聚最旧；down 翻尽退出浏览态 */
 const HISTORY_KEY = 'chat-lite.prompt-history';
@@ -98,8 +98,18 @@ export function ChatInput() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null); // null=非浏览态
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachErr, setAttachErr] = useState('');
+  /** 助手抽屉（工作区 / 信任模式 / 队列）：默认收起，把手点击或上拉展开 */
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  /**
+   * 展开编辑器：长文本时把 textarea 增高到输入区允许的上限（受 .shell-input 的 42dvh 约束）。
+   * 不用 fixed 浮层——插件 CSS 门禁禁止 position:fixed（会逃出窗格盖住分隔条/抽屉），
+   * 且宿主暂无 cap.ui.overlay 能力。沿用同一个 textarea，草稿/IME/发送逻辑全部复用。
+   */
+  const [expanded, setExpanded] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const grabberRef = useRef<HTMLDivElement>(null);
+  const dragStartY = useRef<number | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interruptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -231,17 +241,41 @@ export function ChatInput() {
     });
   }), [activeId]);
 
+  // 助手抽屉手势：上拉展开、下拉收起；轻微移动视为点击（切换）。
+  // 用 pointer 事件 + setPointerCapture，触屏/鼠标一致；不 preventDefault 以免妨碍正常滚动。
+  const onGrabberDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragStartY.current = e.clientY;
+    (e.currentTarget as HTMLDivElement).setPointerCapture?.(e.pointerId);
+  }, []);
+  const onGrabberUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragStartY.current === null) return;
+    const dy = dragStartY.current - e.clientY; // 正值=上拉
+    dragStartY.current = null;
+    if (Math.abs(dy) < 6) setAssistantOpen((v) => !v); // 点击切换
+    else setAssistantOpen(dy > 0); // 上拉展开 / 下拉收起
+  }, []);
+
+  /** 展开/收起编辑器：同一 textarea，只需切状态并聚焦（光标位置由浏览器自动保留） */
+  const toggleEditor = useCallback(() => {
+    setExpanded((v) => !v);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
+
   // 自适应增高：现代内核走 CSS field-sizing:content（见 chat-input.css）；
-  // 旧内核 JS 兜底——scrollHeight 不含 2px 边框，需补边框口径，与 CSS min/max 42/200 对齐
+  // 旧内核 JS 兜底——高度上/下限读计算样式（CSS 用 dvh，浏览器解析成 px），
+  // 与 CSS 天然同口径。scrollHeight 不含边框，需补 border 口径。
   useLayoutEffect(() => {
     if (typeof CSS !== 'undefined' && CSS.supports?.('field-sizing: content')) return;
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = 'auto';
+    const cs = getComputedStyle(ta);
+    const min = parseFloat(cs.minHeight) || 42;
+    const max = parseFloat(cs.maxHeight) || 200;
     const border = ta.offsetHeight - ta.clientHeight;
-    const next = Math.min(Math.max(ta.scrollHeight + border, MIN_HEIGHT), MAX_HEIGHT);
+    const next = Math.min(Math.max(ta.scrollHeight + border, min), max);
     ta.style.height = `${next}px`;
-  }, [text]);
+  }, [text, expanded]);
 
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -256,6 +290,7 @@ export function ChatInput() {
     const hasContent = t.length > 0 || attachments.length > 0;
     if (!hasContent || tooLong) return;
     const carryAttachments = attachments;
+    if (expanded) setExpanded(false); // 发送后收起编辑器
     if (streaming) {
       // 流式中有草稿 → 入队（附件随队列项完整保留，不再压成文本）
       enqueuePending(t, carryAttachments);
@@ -330,6 +365,11 @@ export function ChatInput() {
       return;
     }
     if (e.key === 'Escape') {
+      if (native.isComposing) return; // IME 组词中的 Esc 是取消候选，不收起编辑器
+      if (expanded) {
+        setExpanded(false);
+        return;
+      }
       if (historyIndex !== null) {
         setHistoryIndex(null);
         setText('');
@@ -350,84 +390,133 @@ export function ChatInput() {
   const showStop = streaming && !interrupting;
   const showBoth = streaming && canSend; // 流式+有草稿：停止与发送并排（发送=入队）
 
+  const placeholder = streaming
+    ? '回复生成中，可继续输入并排入队列…'
+    : '向 Polaris 提问，或记录一个想法…';
+  const trustTitle = trustMode
+    ? '信任模式：AI 可直接执行命令（点击关闭）'
+    : '审批模式：命令需确认（点击开启信任）';
+  const trustLabel = trustMode ? '信任模式' : '审批模式';
+
   return (
     <div
-      className="chat-input-bar"
+      className={`chat-input-bar ${assistantOpen ? 'assistant-open' : ''} ${expanded ? 'editor-expanded' : ''}`}
       data-testid="chat-input"
       onPaste={handlePaste}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {attachErr && <div className="chat-input-warn">{attachErr}</div>}
-      {queueLen > 0 && (
-        <div className="chat-queue-hint">
-          <span>已排队 {queueLen} 条，本次回复结束后自动发送</span>
-          <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
-        </div>
-      )}
-      <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
-      <textarea
-        ref={taRef}
-        className="chat-textarea"
-        placeholder={streaming ? '回复生成中，可继续输入并排入队列…' : '向 Polaris 提问，或记录一个想法…'}
-        value={text}
-        rows={1}
-        enterKeyHint="send"
-        onChange={onChange}
-        onKeyDown={onKeyDown}
-      />
-      <input
-        ref={fileRef}
-        type="file"
-        multiple
-        accept={acceptAttr()}
-        style={{ display: 'none' }}
-        onChange={handleFilePicker}
-      />
-      <div className="chat-input-btns">
-        {wsLabel && (
-          <span className="chat-ws-chip pinned" title="当前会话绑定的工作区（AI 命令在此目录内执行）">
-            {wsLabel}
-          </span>
-        )}
-        {trustMode !== null && (
-          <button
-            className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
-            onClick={() => void toggleTrust()}
-            title={trustMode ? '信任模式：AI 可直接执行命令（点击关闭）' : '审批模式：命令需确认（点击开启信任）'}
-            aria-pressed={trustMode}
-          >
-            {trustMode ? '信任模式' : '审批模式'}
-          </button>
-        )}
-        <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
-        <button
-          className="chat-send attach"
-          onClick={() => fileRef.current?.click()}
-          disabled={streaming}
-          title="添加附件"
-          aria-label="添加附件"
+        {/* 把手：点击切换助手抽屉，上拉展开 / 下拉收起 */}
+        <div
+          ref={grabberRef}
+          className="chat-assistant-grabber"
+          onPointerDown={onGrabberDown}
+          onPointerUp={onGrabberUp}
+          role="button"
+          tabIndex={0}
+          aria-label="展开或收起助手面板（工作区、信任模式、队列）"
+          aria-expanded={assistantOpen}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAssistantOpen((v) => !v); } }}
         >
-          <PaperclipIcon />
-        </button>
-        {showBoth && (
-          <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}><StopIcon />停止</button>
-        )}
-        {showStop && !showBoth && (
-          <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}>
-            <StopIcon />{interrupting ? '停止中…' : '停止'}
+          <span className="chat-grabber-bar" />
+          <span className="chat-grabber-label">工作区 · 模式 · 队列</span>
+        </div>
+        {/* 助手抽屉：收纳工作区 / 信任模式 / 队列，主行不再被 chip 挤占 */}
+        <div className={`chat-assistant-drawer ${assistantOpen ? 'open' : ''}`} aria-hidden={!assistantOpen}>
+          <div className="chat-assistant-inner">
+            {wsLabel && (
+              <div className="chat-assistant-row">
+                <span className="chat-assistant-key">工作区</span>
+                <span className="chat-ws-chip pinned" title="当前会话绑定的工作区（AI 命令在此目录内执行）">
+                  {wsLabel}
+                </span>
+              </div>
+            )}
+            {trustMode !== null && (
+              <div className="chat-assistant-row">
+                <span className="chat-assistant-key">执行模式</span>
+                <button
+                  className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
+                  onClick={() => void toggleTrust()}
+                  title={trustTitle}
+                  aria-pressed={trustMode}
+                >
+                  {trustLabel}
+                </button>
+              </div>
+            )}
+            <div className="chat-assistant-row">
+              <span className="chat-assistant-key">待发队列</span>
+              <span className="chat-assistant-val">{queueLen > 0 ? `已排队 ${queueLen} 条` : '无'}</span>
+              {queueLen > 0 && (
+                <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {attachErr && <div className="chat-input-warn">{attachErr}</div>}
+        <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
+        <textarea
+          ref={taRef}
+          className={`chat-textarea ${expanded ? 'expanded' : ''}`}
+          placeholder={placeholder}
+          value={text}
+          rows={1}
+          enterKeyHint="send"
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+        />
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept={acceptAttr()}
+          style={{ display: 'none' }}
+          onChange={handleFilePicker}
+        />
+        <div className="chat-input-btns">
+          <button
+            className={`chat-send expand ${expanded ? 'on' : ''}`}
+            onClick={toggleEditor}
+            title={expanded ? '收起编辑器（Esc）' : '展开编辑器（长文本更好编辑）'}
+            aria-label={expanded ? '收起编辑器' : '展开编辑器'}
+            aria-pressed={expanded}
+          >
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16" aria-hidden="true">
+              {expanded
+                ? <path d="M9 3v6H3M15 21v-6h6M3 15h6v6M21 9h-6V3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                : <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />}
+            </svg>
           </button>
-        )}
-        {!streaming && (
-          <button className="chat-send" onClick={doSend} disabled={!canSend}>
-            <SendIcon />发送
+          <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
+          <button
+            className="chat-send attach"
+            onClick={() => fileRef.current?.click()}
+            disabled={streaming}
+            title="添加附件"
+            aria-label="添加附件"
+          >
+            <PaperclipIcon />
           </button>
-        )}
-        {streaming && (
-          <button className="chat-send queue" onClick={doSend} disabled={!canSend} title="流式中发送将进入待发队列">
-            排队
-          </button>
-        )}
+          {showBoth && (
+            <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}><StopIcon />停止</button>
+          )}
+          {showStop && !showBoth && (
+            <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}>
+              <StopIcon />{interrupting ? '停止中…' : '停止'}
+            </button>
+          )}
+          {!streaming && (
+            <button className="chat-send" onClick={doSend} disabled={!canSend}>
+              <SendIcon />发送
+            </button>
+          )}
+          {streaming && (
+            <button className="chat-send queue" onClick={doSend} disabled={!canSend} title="流式中发送将进入待发队列">
+              排队
+            </button>
+          )}
       </div>
     </div>
   );
