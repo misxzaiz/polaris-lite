@@ -102,6 +102,18 @@
         "cap.ai.chat:event",
         "tool-registered"
       ]
+    },
+    "file-browser": {
+      "capabilities": [
+        "cap.config"
+      ],
+      "provides": [
+        "cap.tool.fs"
+      ],
+      "events": [
+        "tool-registered",
+        "workspace-changed"
+      ]
     }
   }
 }
