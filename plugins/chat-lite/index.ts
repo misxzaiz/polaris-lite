@@ -79,8 +79,8 @@ export const chatLitePlugin: LitePlugin = {
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
-    // interactive.*：interactive-cards 的交互卡事件（经宿主广播；来源=提供方插件 id）
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered'],
+    // interactive.*：interactive-cards 的交互卡事件；artifact.created：html-preview 等产物插件
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -134,6 +134,34 @@ export const chatLitePlugin: LitePlugin = {
     };
     api.listen('interactive.created', onInteractive(true));
     api.listen('interactive.answered', onInteractive(false));
+    // 通用产物事件（html-preview 等产物插件直发）：一次性落块，无回填流；
+    // 渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记，chat-lite 只认
+    // {rendererType, callId, title, data} 契约——第二个产物插件起零改动。
+    api.listen('artifact.created', (envelope: unknown) => {
+      const ev = envelope as { source?: string; payload?: Record<string, unknown> };
+      const inner = (ev?.payload ?? {}) as {
+        sessionId?: string; messageId?: string; callId?: string;
+        rendererType?: string; title?: string; data?: Record<string, unknown>;
+      };
+      const sid = inner.sessionId;
+      const aid = inner.messageId;
+      const callId = inner.callId;
+      if (!sid || !aid || !callId || !inner.rendererType) return; // 无定位/无渲染器：丢弃
+      const st = useSessionStore.getState();
+      const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === aid);
+      if (!msg || !hasBlocks(msg)) return;
+      if (msg.blocks.some((b) => b.type === 'artifact' && b.card.callId === callId)) return; // 幂等
+      st.appendAssistantBlock(sid, aid, {
+        type: 'artifact',
+        card: {
+          callId,
+          rendererType: inner.rendererType,
+          title: inner.title ?? '产物',
+          status: 'ready',
+          data: inner.data ?? {},
+        },
+      });
+    });
   },
 };
 

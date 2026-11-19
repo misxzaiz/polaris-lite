@@ -76,6 +76,7 @@ const plugins = [
   { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 11 },
   { id: 'ai-events', config: 'ai-events/vite.config.ts', dist: 'ai-events/dist', order: 12 },
   { id: 'interactive-cards', config: 'interactive-cards/vite.config.ts', dist: 'interactive-cards/dist', order: 13 },
+  { id: 'html-preview', config: 'html-preview/vite.config.ts', dist: 'html-preview/dist', order: 14 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

@@ -13,7 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Markdown } from './markdown';
-import type { AsstBlock, ToolCardData, ToolCardMessage } from './store';
+import type { AsstBlock, ArtifactCardData, ToolCardData, ToolCardMessage } from './store';
 import { ToolCard } from './ToolCard';
 import { InteractiveCard } from './InteractiveCard';
 
@@ -128,10 +128,32 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
       }
     } else if (b.type === 'interactive') {
       result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
+    } else if (b.type === 'artifact') {
+      // 通用产物块：渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记（rendererType → 组件），
+      // chat-lite 不再为每种可视化产物加硬编码分支。未登记（插件被停用）渲兜底提示，不崩不空白。
+      result.push(<ArtifactSlot key={`af-${b.card.callId}`} card={b.card} />);
     } else if (b.type === 'text') {
       result.push(<div key={`t-${i}`} className="tc-text"><Markdown text={b.text} /></div>);
       if (streaming && i === blocks.length - 1) result.push(<span key={`cur-${i}`} className="cursor" />);
     }
   });
   return result;
+}
+
+/** 产物渲染器类型（window 桥；组件由 html-preview 等产物插件在 setup 时登记） */
+type ArtifactRenderer = (props: { callId: string; title: string; data: Record<string, unknown> }) => React.ReactNode;
+
+function ArtifactSlot({ card }: { card: ArtifactCardData }): React.ReactNode {
+  const registry = (window as unknown as Record<string, unknown>).__PLITE_ARTIFACT_RENDERERS__ as
+    | Record<string, ArtifactRenderer>
+    | undefined;
+  const Renderer = card.rendererType ? registry?.[card.rendererType] : undefined;
+  if (!Renderer) {
+    return (
+      <div className="tc-text" data-testid={`af-missing-${card.rendererType}`}>
+        产物「{card.title}」的渲染插件未启用（{card.rendererType}）
+      </div>
+    );
+  }
+  return <Renderer callId={card.callId} title={card.title} data={card.data} />;
 }

@@ -363,6 +363,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             'bash 的读写只能发生在 cwd 内；需要浏览或读取 cwd 之外的文件时，用 files 工具的 roots/list/read（只读）。' +
             'interactive 工具可向用户发起结构化提问/表单/确认（question/form/confirm）；' +
             '当任务缺少用户的必要信息或需要用户拍板时，优先用 interactive 直接问，不要自行猜测用户偏好。' +
+            'render 工具可生成自包含 HTML 交互面板（小游戏/原型/图表/教具），在对话卡片与「预览」面板中运行；' +
+            'HTML 必须自包含：内联 CSS/JS、不引 CDN、不 fetch、模型与贴图用 base64；改动旧面板传 basePreviewId。' +
             readonlyHint,
         },
         ...(payload.history ?? []).map((m) => ({ role: m.role as ShadowMsg['role'], content: m.content })),
@@ -448,6 +450,29 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             : ia.ok && ia.answer
               ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
               : `[交互卡失败] ${ia.error ?? 'no answer'}`;
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+          continue;
+        }
+
+        // HTML 预览：免审批（HTML 惰性无行为 + 服务端扫描/配额锁死写入面 + CSP 沙箱硬边界；
+        // 迭代场景连改多版，逐次审批是 UX 灾难）。dispatch cap.tool.render 落盘，
+        // 只回 previewId 引用（HTML 留服务端，token 与 localStorage 容量双友好），
+        // 卡片渲染由 html-preview 经 artifact.created 事件自行落块，loop 不碰 UI。
+        if (desc?.cap === 'cap.tool.render') {
+          let pr: { ok?: boolean; previewId?: string; url?: string; versionLabel?: string; title?: string; error?: string };
+          try {
+            const res = await hostApi.dispatch<{ ok?: boolean; previewId?: string; url?: string; versionLabel?: string; title?: string; error?: string }>({
+              target: 'cap.tool.render',
+              action: 'render',
+              payload: { ...safeArgsRender(call.arguments), sessionId, messageId: assistantId },
+            });
+            pr = res.data ?? { ok: false, error: 'empty response' };
+          } catch (err) {
+            pr = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          const feedback = pr.ok
+            ? `[预览已生成] previewId=${pr.previewId} 版本=${pr.versionLabel ?? '?'} 标题=${pr.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
+            : `[预览生成失败] ${pr.error ?? 'unknown error'}`;
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -553,12 +578,26 @@ function safeArgsJson(raw: string): { kind?: string; title?: string; options?: s
   }
 }
 
+/** HTML 预览参数解析（render：透传 html/title/basePreviewId；html 超长截断交服务端拒） */
+function safeArgsRender(raw: string): { html?: string; title?: string; basePreviewId?: string } {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return {
+      ...(typeof p.html === 'string' && p.html ? { html: p.html } : {}),
+      ...(p.title !== undefined ? { title: String(p.title).slice(0, 120) } : {}),
+      ...(typeof p.basePreviewId === 'string' && p.basePreviewId ? { basePreviewId: p.basePreviewId } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export const agentLoopPlugin: LitePlugin = {
   manifest: {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

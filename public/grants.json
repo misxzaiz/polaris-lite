@@ -24,7 +24,8 @@
         "cap.agent.loop:event",
         "user.prompt",
         "interactive.created",
-        "interactive.answered"
+        "interactive.answered",
+        "artifact.created"
       ]
     },
     "model-admin": {
@@ -98,7 +99,8 @@
         "cap.tool.bash",
         "cap.meta",
         "cap.tool.fs",
-        "cap.interactive"
+        "cap.interactive",
+        "cap.tool.render"
       ],
       "provides": [
         "cap.agent.loop"
@@ -142,6 +144,15 @@
         "tool-registered",
         "interactive.created",
         "interactive.answered"
+      ]
+    },
+    "html-preview": {
+      "capabilities": [],
+      "provides": [
+        "cap.tool.render"
+      ],
+      "events": [
+        "artifact.created"
       ]
     }
   }

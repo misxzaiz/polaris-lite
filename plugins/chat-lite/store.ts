@@ -56,7 +56,8 @@ export interface ToolCardMessage {
 export type AsstBlock =
   | { type: 'text'; text: string }
   | { type: 'tool'; card: ToolCardData }
-  | { type: 'interactive'; card: InteractiveCardData };
+  | { type: 'interactive'; card: InteractiveCardData }
+  | { type: 'artifact'; card: ArtifactCardData };
 
 /** 交互卡数据（AI 发起 question/form/confirm，用户作答后回填） */
 export interface InteractiveCardData {
@@ -66,6 +67,19 @@ export interface InteractiveCardData {
   payload: Record<string, unknown>;
   answer?: Record<string, unknown>;
   status: 'awaiting' | 'answered';
+}
+
+/**
+ * 通用产物块（第二个可视化插件起不再动 chat-lite）：渲染器由产物插件经
+ * __PLITE_ARTIFACT_RENDERERS__ 登记（rendererType → 组件），BlockGroup 查表渲染；
+ * data 是渲染器私有载荷（html-preview 存 previewId/url 等）。一次性落块，无回填流。
+ */
+export interface ArtifactCardData {
+  callId: string;
+  rendererType: string;
+  title: string;
+  status: 'ready' | 'error';
+  data: Record<string, unknown>;
 }
 
 export interface AssistantBlocks {
@@ -269,11 +283,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             }
             return { ...cur, blocks: [...blocks, block], content: (cur.content ?? '') + block.text };
           }
-          // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive 卡原样保留
+          // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive/artifact 卡原样保留
           const next: AsstBlock =
             block.type === 'tool'
               ? { type: 'tool', card: trimCard(block.card) }
-              : { type: 'interactive', card: block.card };
+              : block.type === 'interactive'
+                ? { type: 'interactive', card: block.card }
+                : { type: 'artifact', card: block.card };
           return { ...cur, blocks: [...blocks, next] };
         }),
       })),
