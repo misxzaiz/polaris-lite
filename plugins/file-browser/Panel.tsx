@@ -8,12 +8,8 @@
  * - activeRoot 徽标与底部胶囊提示（审批可见性同款交互语言）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SlotHostApi } from '@sdk';
 import type { FsRoot } from './index';
 import { setActiveRoot, toggleLinkedRoot, workspaceState } from './index';
-
-let api: SlotHostApi | null = null;
-export function setPanelApi(a: SlotHostApi | null): void { api = a; }
 
 interface FsNode {
   name: string;
@@ -59,7 +55,6 @@ export function FileBrowserPanel() {
   const [preview, setPreview] = useState<{ name: string; path: string; isText: boolean; text?: string; data?: string; mime?: string; tooLarge?: boolean; hint?: string; size?: number } | null>(null);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   /** 当前展示的列表是否来自缓存（后台刷新中）——置灰提示而非清空列表 */
-  const [stale, setStale] = useState(false);
   /**
    * 目录缓存（防跳变核心）：path → nodes。
    * 进入目录先展示缓存（若有），后台刷新后无缝替换——列表不再「清空→载入→重建」三段闪。
@@ -78,13 +73,11 @@ export function FileBrowserPanel() {
   const loadDir = useCallback(async (dir: string, label: string) => {
     // 乐观渲染：有缓存先上屏（stale 置灰），无缓存才出「载入中」——列表不再清空闪烁
     const cached = dirCache.current.get(dir);
-    setStale(!!cached);
     setLoading(!cached);
     setErr('');
     const q = new URLSearchParams(dir ? { dir } : {});
     const r = await fsGet<{ nodes: FsNode[]; sessionRoam?: boolean }>(`tree?${q}`);
     setLoading(false);
-    setStale(false);
     if (r.status !== 200) {
       // 失败且无缓存才报错；有缓存保留旧视图（不打断浏览）
       if (!cached) setErr(r.error ?? '浏览失败');
@@ -230,8 +223,8 @@ export function FileBrowserPanel() {
             <div className="fb-node-ops">
               {n.isDir && (
                 <>
-                  <button className="fb-mini" title="设为当前工作区（AI 的 bash cwd；自动登记为根）" disabled={busyPath === n.path} onClick={() => void makeWorkspace(n)}>
-                    {n.path === activeRoot?.path ? '✓工作区' : '工作区'}
+                  <button className="fb-mini" title="设为当前工作区（浏览/文件工具根目录；非根自动登记）" disabled={busyPath === n.path} onClick={() => void makeWorkspace(n)}>
+                    {n.path === activeRoot?.path ? '当前' : '工作区'}
                   </button>
                   <button className={`fb-mini ${linked.has(roots.find((r) => r.path === n.path)?.id ?? '') ? 'on' : ''}`} title="关联为只读上下文" disabled={busyPath === n.path} onClick={() => void toggleLink(n)}>链</button>
                 </>

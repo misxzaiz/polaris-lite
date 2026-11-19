@@ -167,12 +167,34 @@ export function createFsApi(options = {}) {
       const roots = currentRoots();
       const findRoot = (id) => roots.find((r) => r.id === id || r.path === id);
 
+      /**
+       * L0 会话漫游校验（v2 三级访问模型，docs/fs-tree-analysis.md §3.1）：
+       * 任意非禁区目录只读浏览；不落盘、不进根表。PLITE_FS_SESSION=0 可单独禁用。
+       * 禁区（dataDir 除 workspace 外/系统目录）与 realpath 校验复用，绝不放宽。
+       */
+      const sessionRoam = process.env.PLITE_FS_SESSION !== '0';
+      const safeAbs = (rawPath) => {
+        let real;
+        try {
+          real = realpathSync(resolve(String(rawPath ?? '')));
+        } catch {
+          return { error: '路径不存在或不可访问', code: 'FS_NOT_FOUND' };
+        }
+        if (inZone(real, dataDirZone) && !inZone(real, builtinRoot)) {
+          return { error: `禁止访问：${dataDirZone}`, code: 'FS_FORBIDDEN' };
+        }
+        for (const z of zones) {
+          if (inZone(real, z)) return { error: `禁止访问：${z}`, code: 'FS_FORBIDDEN' };
+        }
+        return { real };
+      };
+
       if (pathname === '/api/fs/roots' && req.method === 'GET') {
-        return send(200, { roots });
+        return send(200, { roots, sessionRoam });
       }
 
       if (pathname === '/api/fs/drives' && req.method === 'GET') {
-        return send(200, { drives: drives() });
+        return send(200, { drives: drives(), sessionRoam });
       }
 
       if (pathname === '/api/fs/roots' && req.method === 'POST') {
@@ -216,17 +238,137 @@ export function createFsApi(options = {}) {
         return send(200, { roots: currentRoots() });
       }
 
-      if (pathname === '/api/fs/list' && req.method === 'GET') {
+      /**
+       * 树主通道（v2）：单层节点 + hasChildren（懒加载契约）。
+       * - dir 缺省：返回盘符 + 所有 L1 根（树的顶层骨架）
+       * - dir=盘符/绝对路径：L0 漫游单层（sessionRoam 开关）
+       * - rootId + path：L1 根内单层（与 list 同源同校验）
+       */
+      if (pathname === '/api/fs/tree' && req.method === 'GET') {
         const q = new URLSearchParams((req.url.split('?')[1] ?? ''));
-        const root = findRoot(q.get('rootId') ?? '');
-        if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
-        const sv = safeResolve(root.path, q.get('path') ?? '');
+        const rootId = q.get('rootId') ?? '';
+        const dir = (q.get('dir') ?? '').trim();
+        const filter = (q.get('filter') ?? '').trim().toLowerCase();
+
+        // 顶层骨架：盘符 + L1 根
+        if (!rootId && !dir) {
+          const top = [];
+          for (const r of roots) {
+            top.push({ name: r.label, isDir: true, path: r.path, isRoot: true, rootId: r.id, builtin: !!r.builtin, missing: !!r.missing, hasChildren: !r.missing });
+          }
+          if (sessionRoam) {
+            for (const d of drives()) {
+              top.push({ name: d.label, isDir: true, path: d.path, isDrive: true, hasChildren: true });
+            }
+          }
+          return send(200, { nodes: top, sessionRoam });
+        }
+
+        // L1 根内单层
+        if (rootId) {
+          const root = findRoot(rootId);
+          if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
+          const sv = safeResolve(root.path, dir);
+          if (sv.error) return send(403, sv);
+          let names;
+          try { names = readdirSync(sv.real); } catch (e) {
+            return send(403, { error: String(e.message ?? e), code: 'FS_LIST_DENIED' });
+          }
+          const nodes = [];
+          for (const name of names.sort((a, b) => a.localeCompare(b, 'zh'))) {
+            if (name.startsWith('.') && name !== '.gitignore') continue;
+            if (filter && !name.toLowerCase().includes(filter)) continue;
+            if (nodes.length >= LIST_LIMIT) break;
+            try {
+              const full = join(sv.real, name);
+              const s = statSync(full);
+              nodes.push({
+                name, isDir: s.isDirectory(), path: join(dir === '' ? '' : dir, name).replace(/\\/g, '/'),
+                relDir: dir, rootId, size: s.isDirectory() ? undefined : s.size, mtime: s.mtimeMs,
+                hasChildren: s.isDirectory() ? hasChildrenSync(full) : undefined,
+              });
+            } catch { /* 权限/占用跳过 */ }
+          }
+          audit({ at: Date.now(), op: 'tree', rootId, path: dir, count: nodes.length, user: session.user?.name });
+          return send(200, { nodes, absoluteBase: sv.real });
+        }
+
+        // L0 漫游单层（dir 为绝对路径）
+        if (!sessionRoam) return send(403, { error: '会话漫游已被禁用（PLITE_FS_SESSION=0）', code: 'FS_ROAM_DISABLED' });
+        const sv = safeAbs(dir);
         if (sv.error) return send(403, sv);
         const st = statSync(sv.real);
         if (!st.isDirectory()) return send(400, { error: 'not a directory', code: 'FS_NOT_DIR' });
         let names;
+        try { names = readdirSync(sv.real); } catch (e) {
+          return send(403, { error: String(e.message ?? e), code: 'FS_LIST_DENIED' });
+        }
+        const nodes = [];
+        for (const name of names.sort((a, b) => a.localeCompare(b, 'zh'))) {
+          if (name.startsWith('.') && name !== '.gitignore') continue;
+          if (filter && !name.toLowerCase().includes(filter)) continue;
+          if (nodes.length >= LIST_LIMIT) break;
+          try {
+            const full = join(sv.real, name);
+            const s = statSync(full);
+            nodes.push({
+              name, isDir: s.isDirectory(), path: full,
+              size: s.isDirectory() ? undefined : s.size, mtime: s.mtimeMs,
+              hasChildren: s.isDirectory() ? hasChildrenSync(full) : undefined,
+            });
+          } catch { /* 跳过 */ }
+        }
+        audit({ at: Date.now(), op: 'tree-roam', path: sv.real, count: nodes.length, user: session.user?.name });
+        return send(200, { nodes, absoluteBase: sv.real });
+      }
+
+      /** 「树上选文件夹设为工作区」的一步登记（内部=add root，前端从树节点直接调） */
+      if (pathname === '/api/fs/roots/from-path' && req.method === 'POST') {
+        const body = JSON.parse((await readBody()) || '{}');
+        const raw = String(body.path ?? '').trim();
+        const label = String(body.label ?? '').trim();
+        if (!raw) return send(400, { error: 'path required', code: 'BAD_REQUEST' });
+        const sv = safeAbs(raw);
+        if (sv.error) return send(403, sv);
+        if (!statSync(sv.real).isDirectory()) return send(400, { error: '只能登记目录', code: 'FS_ROOT_NOT_DIR' });
+        if (process.platform === 'win32' && pathDepth(sv.real) < 2) {
+          return send(400, { error: '不能把盘符根目录登记为工作区（范围过大）', code: 'FS_ROOT_TOO_SHALLOW' });
+        }
+        if (roots.some((r) => realpathSafe(r.path) === sv.real)) {
+          // 已是根：直接返回（前端随后标记 active 即可）
+          return send(200, { roots: currentRoots(), existing: true });
+        }
+        const entry = { id: hashId(sv.real), path: sv.real, label: label || sv.real.split(/[\\/]/).filter(Boolean).pop() || sv.real, builtin: false };
+        writeRoots([...roots.filter((r) => !r.builtin), entry]);
+        audit({ at: Date.now(), op: 'add-root-from-tree', path: sv.real, user: session.user?.name });
+        return send(200, { roots: currentRoots() });
+      }
+
+      if (pathname === '/api/fs/list' && req.method === 'GET') {
+        const q = new URLSearchParams((req.url.split('?')[1] ?? ''));
+        const rootId = q.get('rootId') ?? '';
+        // v2：无 rootId = L0 漫游（绝对路径）；有 rootId = L1 根内相对路径
+        let baseReal;
+        let mode;
+        if (rootId) {
+          const root = findRoot(rootId);
+          if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
+          const sv = safeResolve(root.path, q.get('path') ?? '');
+          if (sv.error) return send(403, sv);
+          baseReal = sv.real;
+          mode = 'root';
+        } else {
+          if (!sessionRoam) return send(403, { error: '会话漫游已被禁用（PLITE_FS_SESSION=0）', code: 'FS_ROAM_DISABLED' });
+          const sv = safeAbs(q.get('path') ?? '');
+          if (sv.error) return send(403, sv);
+          baseReal = sv.real;
+          mode = 'roam';
+        }
+        const st = statSync(baseReal);
+        if (!st.isDirectory()) return send(400, { error: 'not a directory', code: 'FS_NOT_DIR' });
+        let names;
         try {
-          names = readdirSync(sv.real);
+          names = readdirSync(baseReal);
         } catch (e) {
           return send(403, { error: String(e.message ?? e), code: 'FS_LIST_DENIED' });
         }
@@ -236,36 +378,50 @@ export function createFsApi(options = {}) {
           if (name.startsWith('.') && name !== '.gitignore') continue; // 隐藏文件噪声过滤
           if (entries.length >= LIST_LIMIT) { truncated = true; break; }
           try {
-            const s = statSync(join(sv.real, name));
+            const s = statSync(join(baseReal, name));
             entries.push({ name, isDir: s.isDirectory(), size: s.isDirectory() ? undefined : s.size, mtime: s.mtimeMs });
           } catch { /* 单项 stat 失败跳过（权限/占用） */ }
         }
-        audit({ at: Date.now(), op: 'list', rootId: root.id, path: q.get('path') ?? '', count: entries.length, user: session.user?.name });
+        audit({ at: Date.now(), op: 'list', mode, rootId: rootId || undefined, path: q.get('path') ?? '', count: entries.length, user: session.user?.name });
         return send(200, { entries, truncated });
       }
 
       if (pathname === '/api/fs/read' && req.method === 'GET') {
         const q = new URLSearchParams((req.url.split('?')[1] ?? ''));
-        const root = findRoot(q.get('rootId') ?? '');
-        if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
+        const rootId = q.get('rootId') ?? '';
         const rel = q.get('path') ?? '';
         const head = Math.max(0, Number(q.get('head')) || 0);
         const tail = Math.max(0, Number(q.get('tail')) || 0);
-        const sv = safeResolve(root.path, rel);
-        if (sv.error) return send(403, sv);
-        const st = statSync(sv.real);
+        // v2：L0 漫游绝对路径 or L1 根内相对路径；L0 预览限额更紧（roam 256KB）
+        let real;
+        let roam = false;
+        if (rootId) {
+          const root = findRoot(rootId);
+          if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
+          const sv = safeResolve(root.path, rel);
+          if (sv.error) return send(403, sv);
+          real = sv.real;
+        } else {
+          if (!sessionRoam) return send(403, { error: '会话漫游已被禁用（PLITE_FS_SESSION=0）', code: 'FS_ROAM_DISABLED' });
+          const sv = safeAbs(rel);
+          if (sv.error) return send(403, sv);
+          real = sv.real;
+          roam = true;
+        }
+        const st = statSync(real);
         if (st.isDirectory()) return send(400, { error: 'is directory', code: 'FS_IS_DIR' });
-        const ext = extname(sv.real).toLowerCase();
+        const ext = extname(real).toLowerCase();
         const isText = !BINARY_EXT.has(ext) && looksTextable(ext);
-        if (st.size > (isText ? TEXT_PREVIEW_CAP : BINARY_PREVIEW_CAP)) {
-          audit({ at: Date.now(), op: 'read-oversize', rootId: root.id, path: rel, size: st.size, user: session.user?.name });
+        const textCap = roam ? 256 * 1024 : TEXT_PREVIEW_CAP;
+        if (st.size > (isText ? textCap : BINARY_PREVIEW_CAP)) {
+          audit({ at: Date.now(), op: 'read-oversize', mode: roam ? 'roam' : 'root', path: rel, size: st.size, user: session.user?.name });
           return send(200, {
             tooLarge: true, size: st.size, isText,
-            hint: isText ? '文件超过 512KB 预览上限，可用 head/tail 参数取片段（或让 AI 用 bash 取）' : '文件超过 1MB 二进制预览上限',
+            hint: isText ? `文件超过 ${Math.round(textCap / 1024)}KB 预览上限，可用 head/tail 参数取片段（或让 AI 用 bash 取）` : '文件超过 1MB 二进制预览上限',
           });
         }
-        const buf = readFileSync(sv.real);
-        audit({ at: Date.now(), op: 'read', rootId: root.id, path: rel, size: st.size, user: session.user?.name });
+        const buf = readFileSync(real);
+        audit({ at: Date.now(), op: 'read', mode: roam ? 'roam' : 'root', rootId: rootId || undefined, path: rel, size: st.size, user: session.user?.name });
         if (isText) {
           let text = buf.toString('utf8');
           if (head) text = text.split('\n').slice(0, head).join('\n');
@@ -275,7 +431,7 @@ export function createFsApi(options = {}) {
           }
           return send(200, { isText: true, text, size: st.size, mtime: st.mtimeMs, truncated: head > 0 || tail > 0 });
         }
-        return send(200, { isText: false, ext, data: buf.toString('base64'), size: st.size, mtime: st.mtimeMs });
+        return send(200, { isText: false, ext, mime: extMime(ext), data: buf.toString('base64'), size: st.size, mtime: st.mtimeMs });
       }
 
       return send(404, { error: 'unknown fs endpoint', code: 'FS_NOT_FOUND' });
@@ -294,4 +450,24 @@ function looksTextable(ext) {
 
 function realpathSafe(p) {
   try { return realpathSync(resolve(p)); } catch { return resolve(p); }
+}
+
+/** 目录是否有子项（只取第一个有效项判断，避免空目录出现展开箭头） */
+function hasChildrenSync(dir) {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith('.') && name !== '.gitignore') continue;
+      return true;
+    }
+  } catch { /* 权限失败视为无子项（展开时报错） */ }
+  return false;
+}
+
+/** 二进制预览 mime（修 v1 写死 png 的坑：按扩展名给） */
+function extMime(ext) {
+  const m = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
+  };
+  return m[ext] ?? 'application/octet-stream';
 }

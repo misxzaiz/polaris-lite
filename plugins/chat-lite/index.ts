@@ -85,6 +85,8 @@ export const chatLitePlugin: LitePlugin = {
   },
   setup(api) {
     hostApi = api;
+    // 跨插件输入注入通道（file-browser「发到对话」等使用；经本函数保证走合法发送路径）
+    (window as unknown as Record<string, unknown>).__FILE_BROWSER_COMPOSE__ = (text: string) => requestCompose(text);
   },
 };
 
@@ -430,7 +432,7 @@ export function interruptChat(): void {
 }
 
 /** 审批决策回填（ToolCard 按钮调用；仅 loop 模式会出现审批卡） */
-export function resolveApproval(callId: string, decision: 'once' | 'always' | 'deny'): void {
+export function resolveApproval(callId: string, decision: 'once' | 'always' | 'trust' | 'deny'): void {
   const api = hostApi;
   const sessionId = useSessionStore.getState().activeId;
   if (!api || !sessionId || !callId) return;

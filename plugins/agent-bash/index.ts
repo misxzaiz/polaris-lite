@@ -44,8 +44,6 @@ const DESCRIPTOR: ToolDescriptor = {
   danger: 'execute',
 };
 
-let hostApi: SlotHostApi | null = null;
-
 /** 服务端工具配置（模式/白名单）缓存；exec 前刷新 */
 let serverConfig: { enabled: boolean; mode: string; allowPrefixes: string[]; hardOff?: boolean } | null = null;
 
@@ -138,7 +136,6 @@ export const agentBashPlugin: LitePlugin = {
     },
   },
   setup(api: SlotHostApi) {
-    hostApi = api;
     api.registerCapability.register('cap.tool.bash', createBashHandler());
     // 广播工具注册（loop 若已装配也能收到；主要发现路径是 loop 启动时主动拉取 describe）
     api.emit('tool-registered', { cap: 'cap.tool.bash', name: DESCRIPTOR.name });

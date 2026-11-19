@@ -39,7 +39,7 @@ export interface ToolCardData {
   exitCode?: number;
   durationMs?: number;
   truncated?: boolean;
-  decision?: 'once' | 'always' | 'deny';
+  decision?: 'once' | 'always' | 'trust' | 'deny';
 }
 
 /** role:'tool' 的消息形态（旧数据兼容；新编排输出改为 assistant.blocks 内嵌块） */
@@ -61,16 +61,23 @@ export interface AssistantBlocks {
   blocks: AsstBlock[];
 }
 
-export function isToolCard(m: ChatMessage): m is ChatMessage & ToolCardMessage {
+/**
+ * 带 blocks 的 assistant 消息：核心 ChatMessage 的 chat-lite 私有扩展。
+ * 不能写成 `ChatMessage & AssistantBlocks` 去做类型守卫——Core 的 role 联合不含 'tool'，
+ * 与 ToolCardMessage 交叉会把 role 推断成 never，导致 m.tool 等属性全部不可达。
+ */
+export type AssistantBlockMessage = ChatMessage & AssistantBlocks;
+
+/** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
+export type StoreMessage = ChatMessage | ToolCardMessage | AssistantBlockMessage;
+
+export function isToolCard(m: StoreMessage): m is ToolCardMessage {
   return (m as ToolCardMessage).role === 'tool' && !!(m as ToolCardMessage).tool;
 }
 
-export function hasBlocks(m: ChatMessage): m is ChatMessage & AssistantBlocks {
-  return Array.isArray((m as AssistantBlocks).blocks) && (m as AssistantBlocks).blocks!.length > 0;
+export function hasBlocks(m: StoreMessage): m is AssistantBlockMessage {
+  return Array.isArray((m as AssistantBlockMessage).blocks) && (m as AssistantBlockMessage).blocks!.length > 0;
 }
-
-/** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
-export type StoreMessage = ChatMessage | ToolCardMessage;
 
 /** 卡片数据体积上限（localStorage 1.5MB 全库额度；服务端输出 64KB 全量不留存） */
 const CARD_STORE_CAP = 16 * 1024;
@@ -81,13 +88,16 @@ function trimCard(card: ToolCardData): ToolCardData {
 }
 
 interface PersistShape {
-  sessions: ChatSession[];
+  sessions: (ChatSessionShape & { messages: StoreMessage[] })[];
   activeId: string | null;
   savedAt: number;
 }
 
+/** 会话的 store 形态：核心 ChatSession 的 role 不足以容纳工具卡，消息用 StoreMessage 放宽 */
+type ChatSessionShape = Omit<ChatSession, 'messages'>;
+
 interface SessionState {
-  sessions: (ChatSession & { messages: StoreMessage[] })[];
+  sessions: (ChatSessionShape & { messages: StoreMessage[] })[];
   activeId: string | null;
   /** 待发队列：sessionId → 队列（内存态，不落盘） */
   pending: Record<string, PendingSend[]>;
@@ -139,7 +149,7 @@ function schedulePersist(get: () => SessionState): void {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-function hydrate(): { sessions: ChatSession[]; activeId: string | null } {
+function hydrate(): { sessions: (ChatSessionShape & { messages: StoreMessage[] })[]; activeId: string | null } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { sessions: [], activeId: null };
@@ -206,7 +216,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((st) => ({
       sessions: st.sessions.map((s) =>
         s.id === sessionId
-          ? { ...s, messages: s.messages.map((m) => (m.id === msgId ? { ...m, ...patch } : m)) }
+          ? { ...s, messages: s.messages.map((m) => (m.id === msgId ? ({ ...m, ...patch } as StoreMessage) : m)) }
           : s,
       ),
     }));
@@ -215,11 +225,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   appendAssistantBlock: (sessionId, msgId, block) => {
     set((st) => ({
-      sessions: st.sessions.map((s) => ({
+      sessions: st.sessions.map((s) => (s.id !== sessionId ? s : {
         ...s,
         messages: s.messages.map((m) => {
           if (m.id !== msgId) return m;
-          const cur = m as ChatMessage & AssistantBlocks;
+          const cur = m as AssistantBlockMessage;
           const blocks = cur.blocks ?? [];
           // delta 语义：text 块追加进末尾 text 块（无则新建）——工具块之后的 delta
           // 自然开新 text 块，交错时序天然保序
@@ -243,11 +253,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   patchAssistantToolBlock: (sessionId, msgId, callId, patch) => {
     set((st) => ({
-      sessions: st.sessions.map((s) => ({
+      sessions: st.sessions.map((s) => (s.id !== sessionId ? s : {
         ...s,
         messages: s.messages.map((m) => {
           if (m.id !== msgId) return m;
-          const cur = m as ChatMessage & AssistantBlocks;
+          const cur = m as AssistantBlockMessage;
           if (!cur.blocks) return m;
           return {
             ...cur,
@@ -322,7 +332,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-export function activeSession(): ChatSession | undefined {
+export function activeSession(): (ChatSessionShape & { messages: StoreMessage[] }) | undefined {
   const { sessions, activeId } = useSessionStore.getState();
   return sessions.find((s) => s.id === activeId);
 }

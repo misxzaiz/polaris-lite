@@ -16,7 +16,7 @@
  *
  * 边界：无工具注册时进入直通模式（start 原样透传 cap.ai.chat，自身不监听不转发）。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
+import type { LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 
 // 轮次/工具调用数量上限：应用户要求移除（曾为 8 轮 / 16 次）——任务时长靠用户
 // 「停止」即时收敛与单条命令超时兜底。
@@ -60,7 +60,7 @@ const shadows = new Map<string, ShadowMsg[]>();
 const running = new Map<string, () => void>();
 const tools = new Map<string, ToolDescriptorProto>();
 /** callId → resolve(decision)；confirm 模式挂起点 */
-const pendingApprovals = new Map<string, (d: 'once' | 'always' | 'deny') => void>();
+const pendingApprovals = new Map<string, (d: 'once' | 'always' | 'trust' | 'deny') => void>();
 /** 会话在途 exec 的 callId（中断时用于立即回执工具卡） */
 const inFlightExec = new Map<string, string>();
 /** sessionId → 会话级「总是允许」前缀（内存；持久化在服务端白名单） */
@@ -222,7 +222,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     sessionId?: string;
     messageId?: string;
     callId?: string;
-    decision?: 'once' | 'always' | 'deny';
+    decision?: 'once' | 'always' | 'trust' | 'deny';
     prompt?: string;
     history?: { role: string; content: string }[];
   };
@@ -236,7 +236,6 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
   }
   if (action === 'interrupt') {
     const cancel = running.get(sessionId);
-    const found = !!cancel;
     cancel?.();
     running.delete(sessionId);
     // 立即收敛 UI：中断回执 + 在途工具卡置为已中断（在途服务端 exec 由其 timeout 兜底回收）
@@ -251,7 +250,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     if (payload.messageId) {
       emitTo(emit, 'message.done', { sessionId, messageId: payload.messageId, interrupted: true });
     }
-    return { ok: true, found };
+    return;
   }
   if (action && action !== 'start') return; // 未知动作不进主循环
 
@@ -280,15 +279,16 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     // 无工具：直通模式（start 原样透传 cap.ai.chat；引擎事件直达 chat-lite）。
     // interrupt 语义：注册取消柄，中断时向引擎转发 interrupt——否则直通流无法被「停止」打断。
     if (toolDefs.length === 0) {
+      const api = hostApi!; // 上方 272 行已有运行时守卫，闭包内 TS 无法保持窄化
       running.set(sessionId, () => {
-        void hostApi.dispatch({
+        void api.dispatch({
           target: 'cap.ai.chat.interrupt',
           action: 'interrupt',
           payload: { sessionId },
         }).catch(() => undefined);
       });
       try {
-        await hostApi.dispatch({
+        await api.dispatch({
           target: 'cap.ai.chat',
           action: 'start',
           payload: {
@@ -305,16 +305,33 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     }
 
     // ---- shadow transcript 播种/续用 ----
+    // 工作区提示必须与工具执行模型一致：
+    // - bash 的 cwd 由服务端 tool-exec 锁死在 <dataDir>/workspace，不可越界（EXEC_CWD_ESCAPED）；
+    // - file-browser 登记的其它 roots 只是 files 工具的**只读可见范围**，bash 根本到不了。
+    // 因此只把 builtin 根描述为 cwd，其余 roots 明确标注「只读、bash 不可达」，
+    // 否则 AI 会按错误的 cwd 找文件、或让 bash 去访问它访问不了的目录。
+    let cwdHint = '<dataDir>/workspace（默认工作区）';
+    let readonlyHint = '';
+    try {
+      const wsRes = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+      const list = wsRes.data?.roots ?? [];
+      const builtin = list.find((r) => r.builtin);
+      if (builtin?.path) cwdHint = builtin.path;
+      const readonly = list.filter((r) => !r.builtin && r.path !== builtin?.path);
+      if (readonly.length) readonlyHint = ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
+    } catch { /* roots 不可用：保持默认提示 */ }
     let shadow = shadows.get(sessionId);
     if (!shadow) {
       shadow = [
         {
           role: 'system',
           content:
-            '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具在工作区执行命令。' +
-            `当前宿主平台：${navigator.platform || 'unknown'}；工作区是你的默认 cwd。` +
+            '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具与 files 工具（浏览/读取文件，只读）。' +
+            `当前宿主平台：${navigator.platform || 'unknown'}；bash 的 cwd 固定为：${cwdHint}。` +
             '需要读写文件、跑脚本、查状态时优先用工具，不要凭空编造输出；' +
-            '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。',
+            '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。' +
+            'bash 的读写只能发生在 cwd 内；需要浏览或读取 cwd 之外的文件时，用 files 工具的 roots/list/read（只读）。' +
+            readonlyHint,
         },
         ...(payload.history ?? []).map((m) => ({ role: m.role as ShadowMsg['role'], content: m.content })),
       ];

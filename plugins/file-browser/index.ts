@@ -11,7 +11,7 @@
  * 选择，不做任何写操作（写走 bash 工具的审批链）。只依赖 /api/fs/* 与 @sdk。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
-import { FileBrowserPanel, setPanelApi } from './Panel';
+import { FileBrowserPanel } from './Panel';
 import './fs.css';
 
 export interface FsRoot {
@@ -111,7 +111,7 @@ function createFsHandler(): CapabilityHandler {
             id: r.id, label: r.label, path: r.path, builtin: !!r.builtin,
             active: r.id === ws.activeRootId, linked: ws.linkedRootIds.includes(r.id),
           })),
-          note: 'active=当前工作区（bash cwd）；linked=只读关联目录',
+          note: 'active=files 工具当前浏览根；linked=只读关联目录；bash 的 cwd 固定为内置 workspace，不受 active/linked 影响',
         };
       }
       case 'list': {
@@ -152,7 +152,6 @@ export const fileBrowserPlugin: LitePlugin = {
   },
   setup(api: SlotHostApi) {
     hostApi = api;
-    setPanelApi(api);
     api.registerCapability.register('cap.tool.fs', createFsHandler());
     api.emit('tool-registered', { cap: 'cap.tool.fs', name: 'files' });
     loadPrefs();
