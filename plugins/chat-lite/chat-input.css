@@ -3,7 +3,7 @@
   position: relative;
   width: min(100%, 840px);
   margin: 0 auto;
-  padding: 10px 12px 8px;
+  padding: 8px 12px 8px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -168,34 +168,7 @@
   cursor: pointer;
 }
 
-/* ===== 助手抽屉把手：点击切换 / 上拉展开 / 下拉收起 ===== */
-.chat-assistant-grabber {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  height: 20px;
-  flex: 0 0 auto;
-  cursor: pointer;
-  touch-action: none; /* 让 pointer 手势不被浏览器滚动吞掉 */
-  user-select: none;
-  color: var(--text-faint);
-  transition: color var(--plite-dur);
-}
-.chat-assistant-grabber:hover { color: var(--text-dim); }
-.chat-grabber-bar {
-  width: 34px;
-  height: 3px;
-  border-radius: 3px;
-  background: var(--border-strong);
-  transition: background var(--plite-dur);
-}
-.chat-assistant-grabber:hover .chat-grabber-bar { background: var(--accent); }
-.chat-grabber-label { font-size: 9.5px; letter-spacing: 0.04em; line-height: 1; }
-.chat-input-bar.assistant-open .chat-grabber-bar { background: var(--accent); }
-.chat-assistant-grabber:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-
+/* ===== 助手面板：操作行调谐图标触发，内联展开在按钮行上方 ===== */
 .chat-assistant-drawer {
   max-height: 0;
   opacity: 0;
@@ -209,7 +182,6 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 10px 8px;
-  margin-bottom: 4px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-hover);
@@ -226,32 +198,29 @@
 .chat-assistant-val { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 .chat-assistant-row .chat-queue-clear { margin-left: auto; }
 
-/* 展开编辑器入口（主行，图标按钮） */
-.chat-send.expand {
-  min-width: 40px;
-  width: 40px;
+/* 调谐入口（操作行图标按钮）：展开工作区 / 执行模式 / 队列面板 */
+.chat-send.tune {
+  position: relative;
+  min-width: 36px;
+  width: 36px;
   padding: 0;
   background: transparent;
   border-color: transparent;
   color: var(--text-faint);
 }
-.chat-send.expand:hover:not(:disabled),
-.chat-send.expand.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-bright); }
-
-/* ===== 就地展开编辑：textarea 增高到输入区上限（受 .shell-input 的 42dvh 约束） =====
-   不用 fixed 浮层：插件 CSS 门禁禁止 position:fixed，宿主也无 cap.ui.overlay 能力。
-   展开态给整条输入栏更强的边框/背景，视觉上进入"专注编辑"，且仍是同一个 textarea。 */
-.chat-input-bar.editor-expanded {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: var(--plite-shadow-1), 0 0 0 3px rgba(var(--accent-rgb), 0.08);
-}
-.chat-textarea.expanded {
-  max-height: min(300px, 36dvh);
-  line-height: 1.7;
-  font-size: 15px;
-}
-@media (max-width: 768px) {
-  .chat-textarea.expanded { max-height: min(280px, 34dvh); }
+.chat-send.tune:hover:not(:disabled),
+.chat-send.tune.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-bright); }
+/* 信任模式角标：仅信任开启时出现在调谐图标右上角（琥珀=安全门槛降低），不占独立控件位 */
+.chat-tune-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--plite-warning);
+  box-shadow: 0 0 0 2px var(--bg-translucent);
+  pointer-events: none;
 }
 
 /* 附件 */
@@ -295,7 +264,7 @@
   .chat-input-hint { display: none; }
   .chat-input-btns { min-height: 42px; }
   .chat-send { height: 40px; min-height: 40px; }
-  .chat-send.attach { min-width: 40px; width: 40px; }
+  .chat-send.attach, .chat-send.tune { min-width: 40px; width: 40px; }
   .chat-attach-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .chat-attach-thumb img { width: 48px; height: 48px; }
 }
