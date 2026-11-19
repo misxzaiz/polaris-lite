@@ -22,7 +22,9 @@
       "events": [
         "cap.ai.chat:event",
         "cap.agent.loop:event",
-        "user.prompt"
+        "user.prompt",
+        "interactive.created",
+        "interactive.answered"
       ]
     },
     "model-admin": {
@@ -95,7 +97,8 @@
         "cap.ai.chat.interrupt",
         "cap.tool.bash",
         "cap.meta",
-        "cap.tool.fs"
+        "cap.tool.fs",
+        "cap.interactive"
       ],
       "provides": [
         "cap.agent.loop"

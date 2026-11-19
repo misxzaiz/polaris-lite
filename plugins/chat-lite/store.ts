@@ -127,6 +127,8 @@ interface SessionState {
   appendAssistantBlock: (sessionId: string, msgId: string, block: AsstBlock) => void;
   /** 按 callId 更新 assistant 消息内的工具块 */
   patchAssistantToolBlock: (sessionId: string, msgId: string, callId: string, patch: Partial<ToolCardData>) => void;
+  /** 按 callId 更新 assistant 消息内的交互卡块（interactive.answered 事件回填答案） */
+  patchAssistantInteractiveBlock: (sessionId: string, msgId: string, callId: string, patch: Partial<InteractiveCardData>) => void;
   /** 新消息即过期：本会话所有 awaiting 工具块/旧版审批卡置为拒绝 */
   expirePendingApprovals: (sessionId: string) => void;
   enqueue: (sessionId: string, item: PendingSend) => void;
@@ -267,7 +269,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             }
             return { ...cur, blocks: [...blocks, block], content: (cur.content ?? '') + block.text };
           }
-          return { ...cur, blocks: [...blocks, { type: 'tool' as const, card: trimCard(block.card) }] };
+          // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive 卡原样保留
+          const next: AsstBlock =
+            block.type === 'tool'
+              ? { type: 'tool', card: trimCard(block.card) }
+              : { type: 'interactive', card: block.card };
+          return { ...cur, blocks: [...blocks, next] };
         }),
       })),
     }));
@@ -286,6 +293,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ...cur,
             blocks: cur.blocks.map((b) =>
               b.type === 'tool' && b.card.callId === callId ? { type: 'tool' as const, card: { ...b.card, ...patch } } : b,
+            ),
+          };
+        }),
+      })),
+    }));
+    schedulePersist(get);
+  },
+
+  patchAssistantInteractiveBlock: (sessionId, msgId, callId, patch) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => (s.id !== sessionId ? s : {
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== msgId) return m;
+          const cur = m as AssistantBlockMessage;
+          if (!cur.blocks) return m;
+          return {
+            ...cur,
+            blocks: cur.blocks.map((b) =>
+              b.type === 'interactive' && b.card.callId === callId
+                ? { type: 'interactive' as const, card: { ...b.card, ...patch } }
+                : b,
             ),
           };
         }),

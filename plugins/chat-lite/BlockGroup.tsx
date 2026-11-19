@@ -115,7 +115,7 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
         if (blocks[k].type === 'tool') { processed.add(k); seen += 1; }
       }
     } else if (b.type === 'interactive') {
-      result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} />);
+      result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
     } else if (b.type === 'text') {
       result.push(<div key={`t-${i}`} className="tc-text"><Markdown text={b.text} /></div>);
       if (streaming && i === blocks.length - 1) result.push(<span key={`cur-${i}`} className="cursor" />);

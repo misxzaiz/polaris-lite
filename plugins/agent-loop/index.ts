@@ -82,12 +82,13 @@ function capText(text: string, cap = FEEDBACK_CAP): string {
   return `${text.slice(0, cap / 2)}\n…[输出过长已截断 ${text.length}B]…\n${text.slice(-cap / 2)}`;
 }
 
-/** 发现工具：主动拉取（cap.meta/list 过滤 cap.tool.* → /describe） */
+/** 发现工具：主动拉取（cap.meta/list 过滤 cap.tool.* → /describe；
+ *  另拉 cap.interactive——交互卡不走 cap.tool.* 前缀但同按 describe 约定提供描述） */
 async function discoverTools(): Promise<void> {
   if (!hostApi) return;
   try {
     const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
-    const caps = (res.data?.capabilities ?? []).filter((c) => c.startsWith('cap.tool.'));
+    const caps = (res.data?.capabilities ?? []).filter((c) => c.startsWith('cap.tool.') || c === 'cap.interactive');
     for (const cap of caps) {
       const r = await hostApi.dispatch<{ descriptor?: ToolDescriptorProto }>({ target: cap, action: 'describe' });
       const d = r.data?.descriptor;
@@ -105,7 +106,7 @@ async function decideApproval(
   emit: (ev: { kind: string; payload: unknown }) => void,
   assistantId: string,
   aborted: () => boolean,
-): Promise<'ok' | 'deny'> {
+): Promise<'ok' | 'deny' | 'timeout'> {
   // 取服务端配置（confirm/allowlist/yolo 由服务端最终裁决，这里只做「是否需要问用户」）
   let mode = 'confirm';
   try {
@@ -122,18 +123,21 @@ async function decideApproval(
   // allowlist 模式：本地未命中白名单仍进审批（服务端白名单由「总是允许」沉淀，服务端最终裁决）
 
   emitTo(emit, 'tool.approval.required', { sessionId, messageId: assistantId, callId, name: call.name, command });
+  let autoRejected = false;
   const decision = await new Promise<'once' | 'always' | 'trust' | 'deny'>((resolve) => {
     pendingApprovals.set(callId, resolve);
     setTimeout(() => {
       if (pendingApprovals.has(callId)) {
         pendingApprovals.delete(callId);
+        autoRejected = true; // 无人值守：用户长期不看 → 120s 内未决策，自动拒绝
         resolve('deny');
       }
     }, APPROVAL_TIMEOUT_MS);
   });
   pendingApprovals.delete(callId);
-  emitTo(emit, 'tool.approval.resolved', { sessionId, messageId: assistantId, callId, decision });
-  if (aborted() || decision === 'deny') return 'deny';
+  emitTo(emit, 'tool.approval.resolved', { sessionId, messageId: assistantId, callId, decision, autoRejected });
+  if (aborted()) return 'deny';
+  if (decision === 'deny') return autoRejected ? 'timeout' : 'deny';
   if (decision === 'always') {
     const set = sessionAllow.get(sessionId) ?? new Set<string>();
     set.add(command);
@@ -357,6 +361,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             '需要读写文件、跑脚本、查状态时优先用工具，不要凭空编造输出；' +
             '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。' +
             'bash 的读写只能发生在 cwd 内；需要浏览或读取 cwd 之外的文件时，用 files 工具的 roots/list/read（只读）。' +
+            'interactive 工具可向用户发起结构化提问/表单/确认（question/form/confirm）；' +
+            '当任务缺少用户的必要信息或需要用户拍板时，优先用 interactive 直接问，不要自行猜测用户偏好。' +
             readonlyHint,
         },
         ...(payload.history ?? []).map((m) => ({ role: m.role as ShadowMsg['role'], content: m.content })),
@@ -421,6 +427,31 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           name: call.name, command, argsJson: call.arguments,
         });
 
+        // 交互卡：不走审批（无危险面，问用户本身就是「审批」），dispatch cap.interactive.ask
+        // 把用户作答作为工具结果喂回 shadow transcript，下一轮模型按作答继续。
+        if (desc?.cap === 'cap.interactive') {
+          let ia: { ok?: boolean; answer?: Record<string, unknown>; error?: string };
+          try {
+            const res = await hostApi.dispatch<{ ok?: boolean; answer?: Record<string, unknown>; error?: string }>({
+              target: 'cap.interactive',
+              action: 'ask',
+              payload: { ...safeArgsJson(call.arguments), sessionId, messageId: assistantId },
+            });
+            ia = res.data ?? { ok: false, error: 'empty response' };
+          } catch (err) {
+            ia = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          // 无人值守：用户长期不看 → 交互卡超时返回 {__timeout:true}，明确告诉 AI 用已有信息继续，别空等
+          const timedOut = ia.ok && ia.answer && ia.answer.__timeout === true;
+          const feedback = timedOut
+            ? `[无人值守：交互卡等待超时，用户未作答。请用已有信息继续当前任务，做出合理默认选择或直接给出结论；不要停下来等待用户回复，也不要重复发起同一提问。]`
+            : ia.ok && ia.answer
+              ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
+              : `[交互卡失败] ${ia.error ?? 'no answer'}`;
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+          continue;
+        }
+
         if (!desc) {
           const msg = `工具 ${call.name} 未注册`;
           emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'error', stderr: msg });
@@ -430,9 +461,13 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
         // 审批（confirm/allowlist 模式且未在会话级白名单）
         const verdict = await decideApproval(sessionId, callId, call, command, emit, assistantId, aborted);
-        if (verdict === 'deny') {
+        if (verdict !== 'ok') {
           emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command });
-          shadow.push({ role: 'tool', content: '[工具被用户拒绝执行。请尊重用户决定，改用其他方式或直接回答。]', tool_call_id: call.id, name: call.name });
+          // 无人值守超时自动拒绝 ≠ 用户主动否决：给 AI 明确可执行的继续指令，避免它停下来等待或反复重试同一命令。
+          const feedback = verdict === 'timeout'
+            ? `[无人值守：该工具调用等待 ${APPROVAL_TIMEOUT_MS / 1000}s 无用户审批，已自动拒绝（并非用户否决本次操作）。请改用不需要危险权限的安全方式继续当前任务——例如用只读工具查看信息、把需要执行的命令作为建议写给用户、或继续处理其它可自动完成的步骤。不要停下等待用户回复，也不要原样重试同一被拒命令。]`
+            : '[工具被用户拒绝执行。请尊重用户决定，改用其他方式或直接回答。]';
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
 
@@ -490,7 +525,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
   }
 };
 
-/** 安全解析工具参数（只透传 command/timeoutMs，防参数注入面扩张） */
+/** 安全解析工具参数（bash：只透传 command/timeoutMs，防参数注入面扩张） */
 function safeArgs(raw: string): { command?: string; timeoutMs?: number } {
   try {
     const p = JSON.parse(raw || '{}') as Record<string, unknown>;
@@ -503,12 +538,27 @@ function safeArgs(raw: string): { command?: string; timeoutMs?: number } {
   }
 }
 
+/** 交互卡参数解析（interactive：透传 kind/title/options/fields；其余字段丢弃） */
+function safeArgsJson(raw: string): { kind?: string; title?: string; options?: string[]; fields?: unknown[] } {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return {
+      ...(p.kind !== undefined ? { kind: String(p.kind) } : {}),
+      ...(p.title !== undefined ? { title: String(p.title) } : {}),
+      ...(Array.isArray(p.options) ? { options: p.options.map(String) } : {}),
+      ...(Array.isArray(p.fields) ? { fields: p.fields } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export const agentLoopPlugin: LitePlugin = {
   manifest: {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],
@@ -526,13 +576,14 @@ export const agentLoopPlugin: LitePlugin = {
       // 宿主投递的是信封 { source, payload }；真正载荷在 payload 字段
       const p = (envelope as { payload?: { activeRootId?: string; linkedRootIds?: string[] } }).payload;
       if (!p?.activeRootId) return;
+      const activeRootId = p.activeRootId;
       void (async () => {
         try {
           const res = await hostApi!.dispatch<{ roots?: { id: string; path: string }[] }>({ target: 'cap.tool.fs', action: 'roots' });
-          const match = (res.data?.roots ?? []).find((r) => r.id === p.activeRootId);
-          console.log('[agent-loop] resolve:', p.activeRootId, '->', match ? match.path : '(missing)');
+          const match = (res.data?.roots ?? []).find((r) => r.id === activeRootId);
+          console.log('[agent-loop] resolve:', activeRootId, '->', match ? match.path : '(missing)');
           if (match) globalActive.set(match.id, match.path);
-          else globalActive.delete(p.activeRootId);
+          else globalActive.delete(activeRootId);
         } catch { /* roots 不可用：保持旧值 */ }
       })();
     });
