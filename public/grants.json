@@ -94,14 +94,16 @@
         "cap.ai.chat",
         "cap.ai.chat.interrupt",
         "cap.tool.bash",
-        "cap.meta"
+        "cap.meta",
+        "cap.tool.fs"
       ],
       "provides": [
         "cap.agent.loop"
       ],
       "events": [
         "cap.ai.chat:event",
-        "tool-registered"
+        "tool-registered",
+        "workspace-changed"
       ]
     },
     "file-browser": {
@@ -113,7 +115,8 @@
       ],
       "events": [
         "tool-registered",
-        "workspace-changed"
+        "workspace-changed",
+        "workspace-renamed"
       ]
     },
     "ai-events": {

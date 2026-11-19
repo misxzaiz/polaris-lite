@@ -76,7 +76,7 @@ async function postConfig(patch: Record<string, unknown>): Promise<boolean> {
 }
 
 /** 执行一条命令（loop 调用；已通过 loop 层的审批） */
-async function execCommand(payload: { command?: string; timeoutMs?: number; approved?: boolean; sessionId?: string }) {
+async function execCommand(payload: { command?: string; timeoutMs?: number; approved?: boolean; sessionId?: string; cwd?: string }) {
   const command = String(payload.command ?? '').trim();
   if (!command) return { ok: false, error: 'command required' };
   const resp = await fetch('/api/tool/exec', {
@@ -88,6 +88,7 @@ async function execCommand(payload: { command?: string; timeoutMs?: number; appr
       timeoutMs: payload.timeoutMs,
       approved: payload.approved === true,
       sessionId: payload.sessionId,
+      cwd: payload.cwd,
     }),
   });
   const json = (await resp.json().catch(() => null)) as
