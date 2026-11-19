@@ -5,6 +5,7 @@
  * 卡片头一行给出「时间 · 工具数 · 总耗时 · 结果」，展开才显示步骤与输出。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { NetPanel } from './NetPanel';
 import { buildExport, clearAll, loadRecent, subscribe } from './turnStore';
 import type { ToolCallRecord, TurnRecord } from './turnStore';
 
@@ -60,7 +61,7 @@ function outcomeLabel(turn: TurnRecord): string {
   return '错误';
 }
 
-export function TimelinePanel() {
+function TurnPanel() {
   const [turns, setTurns] = useState<TurnRecord[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -273,6 +274,43 @@ export function TimelinePanel() {
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+type View = 'turn' | 'net';
+
+/**
+ * 两个视图的分工是刻意的：
+ * - 轮次回答「这一轮发生了什么」（对话语义，工具/审批/耗时）
+ * - 请求回答「模型到底收到了什么、回了什么」（协议层，可复制 curl 复现）
+ * 放同一个页签里切换，避免为同一份数据开两个 tab 占右栏。
+ */
+export function TimelinePanel() {
+  const [view, setView] = useState<View>('turn');
+  return (
+    <div className="aie-shell">
+      <div className="aie-viewtabs" role="tablist" aria-label="事件视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'turn'}
+          className={`aie-viewtab${view === 'turn' ? ' is-on' : ''}`}
+          onClick={() => setView('turn')}
+        >
+          轮次
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'net'}
+          className={`aie-viewtab${view === 'net' ? ' is-on' : ''}`}
+          onClick={() => setView('net')}
+        >
+          请求
+        </button>
+      </div>
+      {view === 'turn' ? <TurnPanel /> : <NetPanel />}
     </div>
   );
 }

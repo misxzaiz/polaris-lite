@@ -388,3 +388,49 @@ P1 的价值密度最高：零现有代码改动、零风险，且能立刻回�
 3. **C 档的会话权威源**：接受"localStorage 主、服务端为辅（同步副本）"，还是彻底反转
    （服务端主、本地为缓存）？前者改动小、离线可用，后者多设备一致性更干净。
    建议先做前者，出现"两台设备同时改"的实际问题再反转。
+
+---
+
+## 十三、落地补记：B 档用「fetch 拦截」实现，未改引擎
+
+第一版 A 档（旁听事件）上线后暴露了一个真实的期待落差：**用户要看的不是「这一轮调了什么工具」，
+而是「模型到底收到了什么、回了什么」**——原始 messages / tools / 参数、上游返回的 SSE 帧、
+可复制的 curl。这部分信息在事件里没有，原计划要改引擎（B 档）。
+
+实施时发现更短的路径：**应用的所有网络调用都走 `window.fetch`**，且模型请求经
+`/api/model-relay` 时请求体就是上游 payload（`{providerId, body}`，body 原样转发）。
+因此插件在同源层包一层 fetch 即可拿到全部协议细节，**零改动引擎**。
+
+### 13.1 拦截边界
+
+| 项 | 说明 |
+|---|---|
+| 范围 | 同源 `/api/*`（model-relay / tool / fs / auth / 其它） |
+| 不改行为 | 请求原样透传；SSE 用 `tee()` 分一条旁路，主分支立即交还调用方 |
+| 必做修正 | 重包装 SSE 时剔除 `content-encoding` / `content-length`（body 已被浏览器解码） |
+| 脱敏 | `cookie` / `authorization` / `x-api-key` / `set-cookie` 值替换为「‹已脱敏›」 |
+| curl | 应用层 curl 带 `Cookie: plite.sid=<占位>`（浏览器不把 cookie 暴露给 `Request.headers`）；模型请求另生成上游 curl，key 用 `$API_KEY` 占位 |
+| 上限 | 请求体 64KB / 响应体 48KB / SSE 原文 32KB，超出标「已截断」；保留 300 条 |
+
+### 13.2 数据模型（HttpRecord，与 TurnRecord 并存）
+
+两个视图分工明确，互不替代：
+
+- **轮次**：对话语义——几跳、调了哪些工具、谁批准、多久（轻量，长留）
+- **请求**：协议层——messages/tools/参数、SSE 帧、finish_reason、usage、curl（重量，滚动淘汰）
+
+SSE 不存全量帧（一次长回答几千帧）：存帧数 + 首 6 / 尾 4 帧原文 + 解析出的
+`finishReason` / `usage` / `toolCalls`（参数按 `index` 分片拼接）。
+
+### 13.3 实测（CDP + 伪造 SSE）
+
+- 真实发一条对话 → agent-loop → real-engine → 被拦截的 `/api/model-relay`：助手消息正常渲染，
+  说明重包装没有破坏流式；记录里 `reqBody` 含 system prompt 与 agent-loop 的 tools，`usage` 完整。
+- 一次带 `tool_calls` 的 SSE：帧数、`finish_reason=tool_calls`、工具名与参数分片全部还原。
+- 刷新后记录仍在；导出 JSON 可读；300px 面板无横向溢出。
+
+### 13.4 仍未覆盖
+
+- 用户输入原文（chat-lite 不发事件，见 §5.6）；
+- XHR / WebSocket（应用当前未使用，接入时需另补）；
+- 多设备共享（C 档，服务端端点）。

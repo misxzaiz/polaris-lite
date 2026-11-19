@@ -213,3 +213,158 @@
   color: var(--text-soft);
 }
 .aie-empty p { margin: 7px 0 0; font-size: var(--plite-fs-xs); line-height: 1.75; }
+
+/* ===== 视图切换 ===== */
+.aie-shell { display: flex; flex-direction: column; min-height: 0; }
+.aie-viewtabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+  padding: 6px 12px 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.aie-viewtab {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--plite-fs-xs);
+  padding: 5px 10px 6px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--plite-dur), border-color var(--plite-dur);
+}
+.aie-viewtab:hover { color: var(--text); }
+.aie-viewtab.is-on { color: var(--accent); border-bottom-color: var(--accent); }
+.aie-viewtab:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+
+/* ===== 请求视图 ===== */
+.aie-net {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 16px;
+  font-size: var(--plite-fs-md);
+  color: var(--text);
+}
+
+.aie-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+}
+.aie-kind-model { color: var(--accent); border-color: var(--accent); }
+.aie-kind-tool { color: var(--text-soft); }
+
+.aie-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--plite-font-mono);
+  font-size: var(--plite-fs-xs);
+  color: var(--text-soft);
+}
+
+.aie-status {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--plite-fs-xs);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.aie-status.is-ok { color: var(--plite-success); background: var(--plite-success-soft); }
+.aie-status.is-bad { color: var(--plite-danger); background: var(--plite-danger-soft); }
+.aie-status.is-live { color: var(--text-dim); background: var(--plite-neutral-soft); }
+
+.aie-dot.is-ok { background: var(--plite-success); }
+.aie-dot.is-bad { background: var(--plite-danger); }
+.aie-dot.is-live { background: var(--accent); animation: aie-pulse 1.4s ease-in-out infinite; }
+@keyframes aie-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .aie-dot.is-live { animation: none; } }
+
+.aie-net-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-family: var(--plite-font-mono);
+  font-size: var(--plite-fs-xs);
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.aie-pill {
+  font-family: inherit;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--plite-neutral-soft);
+  color: var(--text-dim);
+}
+.aie-pill-warn { color: var(--plite-danger); background: var(--plite-danger-soft); }
+
+.aie-net-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.aie-btn-sm { height: 24px; padding: 0 7px; }
+
+/* SSE 摘要 */
+.aie-sse {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm);
+  background: rgba(var(--accent-rgb), 0.012);
+}
+.aie-sse-row { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--plite-fs-xs); color: var(--text-dim); }
+.aie-kv b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.aie-sse-tools { display: flex; flex-direction: column; gap: 5px; }
+.aie-sse-tool { display: flex; flex-direction: column; gap: 3px; }
+
+/* 折叠块：details 原生语义，键盘可达 */
+.aie-fold { display: block; }
+.aie-fold > summary {
+  cursor: pointer;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-soft);
+  padding: 2px 0;
+  list-style-position: inside;
+}
+.aie-fold > summary:hover { color: var(--accent); }
+.aie-fold > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.aie-fold[open] > summary { margin-bottom: 4px; }
+
+.aie-code-tight { max-height: 130px; }
+.aie-dim { color: var(--text-faint); }
+
+.aie-up {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-dim);
+}
+.aie-up code {
+  font-family: var(--plite-font-mono);
+  color: var(--text-soft);
+  word-break: break-all;
+}
+
+/* 请求卡头：路径独占一行，状态与耗时折到第二行（300px 面板里路径才看得清） */
+.aie-net-card .aie-head { flex-wrap: wrap; row-gap: 2px; }
+.aie-net-card .aie-path { flex: 1 1 auto; }
+.aie-net-sub {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 12px;
+}
+.aie-net-sub .aie-meta { flex: 0 0 auto; }

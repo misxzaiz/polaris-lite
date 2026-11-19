@@ -19,7 +19,8 @@
  */
 
 const DB_NAME = 'plite-ai-events';
-const DB_VERSION = 1;
+/** 2：新增 requests 存储（HTTP 请求取证，见 netStore.ts） */
+const DB_VERSION = 2;
 const DEVICE_KEY = 'plite-ai-events.device';
 /** 单库保留上限（条）。一次对话 1-5 条，2000 条约等于数百次对话 */
 const MAX_TURNS = 2000;
@@ -115,7 +116,7 @@ function deviceId(): string {
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
-function openDb(): Promise<IDBDatabase | null> {
+export function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') {
@@ -136,6 +137,11 @@ function openDb(): Promise<IDBDatabase | null> {
         store.createIndex('byStarted', 'startedAt');
         store.createIndex('bySession', ['sessionId', 'startedAt']);
       }
+      // HTTP 取证与轮次分开存：两者生命周期与体积差异很大（一条请求可能带几十 KB 原文）
+      if (!db.objectStoreNames.contains('requests')) {
+        const store = db.createObjectStore('requests', { keyPath: 'id' });
+        store.createIndex('byAt', 'at');
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => resolve(null);
@@ -144,7 +150,7 @@ function openDb(): Promise<IDBDatabase | null> {
   return dbPromise;
 }
 
-function txDone(tx: IDBTransaction): Promise<void> {
+export function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => resolve();
