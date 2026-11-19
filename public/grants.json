@@ -127,6 +127,19 @@
         "cap.ai.chat:event",
         "user.prompt"
       ]
+    },
+    "interactive-cards": {
+      "capabilities": [
+        "cap.config"
+      ],
+      "provides": [
+        "cap.interactive"
+      ],
+      "events": [
+        "tool-registered",
+        "interactive.created",
+        "interactive.answered"
+      ]
     }
   }
 }

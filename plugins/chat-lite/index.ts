@@ -200,6 +200,37 @@ function handleToolEvent(
     }));
     return;
   }
+  // 结构化交互卡（对齐 Polaris ask_user_question / form / confirm）：
+  // AI 经 cap.interactive.ask 发起 → chat-lite 渲染交互卡 → 用户作答 →
+  // cap.interactive.respond 回填 → agent-loop 继续下一轮。
+  if (kind === 'interactive.created' || kind === 'interactive.answered') {
+    const callId = inner.callId ?? '';
+    const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+    if (!msg || !hasBlocks(msg)) return;
+    const exists = msg.blocks.some((b) => b.type === 'interactive' && b.card.callId === callId);
+    if (!exists) {
+      st.appendAssistantBlock(sid, assistantId, {
+        type: 'interactive',
+        card: {
+          callId,
+          kind: (inner.kind as 'question' | 'form' | 'confirm') ?? 'question',
+          title: inner.title ?? '请确认',
+          payload: inner.payload ?? {},
+          status: kind === 'interactive.created' ? 'awaiting' : 'answered',
+        },
+      });
+      return;
+    }
+    // 已存在：answered 事件更新答案与状态
+    if (kind === 'interactive.answered') {
+      st.patchAssistantToolBlock(sid, assistantId, callId, (c) => ({
+        ...c,
+        answer: inner.answer ?? c.answer,
+        status: 'answered',
+      }));
+    }
+    return;
+  }
 }
 
 /** 由 ChatInput / 快捷建议 / 队列泵调用：发送用户消息并触发流式回复 */

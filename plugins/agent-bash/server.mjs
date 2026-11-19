@@ -50,6 +50,9 @@ const DENYLIST = [
 ];
 
 export function createServerPart(options = {}) {
+  /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
+  const tempTokens = options.tempTokens ?? new Map();
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const workspaceRoot = resolve(dataDir, 'workspace');
@@ -276,6 +279,26 @@ export function createServerPart(options = {}) {
       audit({ at: Date.now(), sessionId, command, verdict: 'unapproved', mode: cfg.mode });
       res.writeHead(403, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'approval required', code: 'EXEC_APPROVAL_REQUIRED', denied: true }));
+    }
+
+    // ⑤' 临时凭证：Authorization: Bearer <temp-token>（auth-session 签发，仅本地回环 IP）。
+    // 有效 → 视为已审批（approved）；与 cookie 会话二选一。
+    const authHeader = String(req.headers.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const isLocal = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '') === '127.0.0.1';
+    let bearerOk = false;
+    if (bearerToken && typeof verifyTempToken === 'function') {
+      if (!isLocal) {
+        audit({ at: Date.now(), sessionId, command, verdict: 'bearer-remote-rejected', mode: cfg.mode });
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'temp credential only allowed from localhost', code: 'EXEC_BEARER_REMOTE', denied: true }));
+      }
+      bearerOk = verifyTempToken(bearerToken);
+      if (!bearerOk) {
+        audit({ at: Date.now(), sessionId, command, verdict: 'bearer-invalid', mode: cfg.mode });
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'invalid or expired temp credential', code: 'EXEC_BEARER_INVALID', denied: true }));
+      }
     }
 
     // ⑥ cwd 允许范围：内建 workspace 或任一已登记工作区根（realpath 防符号链接逃逸）

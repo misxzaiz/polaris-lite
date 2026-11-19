@@ -94,3 +94,36 @@ start(sessionId)：
 2. loop 的 cwd 现在是 exec 请求参数——**服务端白名单校验已覆盖**（roots/from-path），无新增风险；
 3. 多会话并发各绑不同工作区：bash exec 天然按请求 cwd，无共享态，安全；唯一要小心的是 loop 内缓存（shadow transcript）仍按 sessionId 隔离，不混工作区；
 4. 「跟随全局」与「显式绑定」的优先级要在 UI 文案里写清，避免用户困惑为什么切了全局某个会话没变。
+
+
+---
+
+# 附：Polaris 交互组件在 lite 的纯插件支持分析（本轮新增）
+
+## Polaris 的交互组件机制（实读 UiFrameCard.tsx + chatCardRegistry.ts + ask 插件）
+
+1. **渲染载体**：chatCardRegistry（key=tool:{name} 兜底 block:tool_call）→ UiFrameCard 直接以 **React 组件**嵌入聊天气泡（非 iframe；仅 Chart 预览用 iframe+blob URL）。
+2. **frame 类型**：template（DSL+footer buttons+值收集）/ question（多选+customInput）/ form（表单值）/ confirm / custom（JSON 折叠）。
+3. **数据流**：AI 调 ask_user_question（MCP）→ 宿主 AskListener → cap.ui.render → UiFrameCard 渲染 → 用户点按钮 → respond(answer) → plugin_card_answered 事件 → status pending→answered。
+4. **interactive 条件**：mode==='interaction' && status==='pending' && typeof respond==='function'。
+
+## lite 纯插件支持方案（推荐 B：复用 tool_calls 审批卡扩展）
+
+lite 已有 tool 卡（bash 执行卡）。Polaris 的 question/form/confirm 本质是「结构化审批卡」。最小纯插件方案：
+
+- **新插件 interactive-cards**（或并入 agent-loop）：
+  - cap.interactive.ask 工具：AI 传 {question, options[], form?, confirm?} → loop 弹出交互卡（新 AsstBlock 类型 interactive）；
+  - 用户作答 → cap.interactive.respond 回写 → loop 继续下一轮（对齐 Polaris plugin_card_answered）。
+- chat-lite 新增 interactive 块渲染（按钮组/表单/确认），无需 iframe——lite 卡片是纯 React，Polaris 的 iframe 仅用于 Chart 的 HTML 隔离，lite 的交互卡是受控 React，直接渲染更安全（无 postMessage 协议面）。
+- 应答协议对齐 Polaris：question→{answers:[{selected,customInput}]}、form→{values}、confirm→{confirmed}。
+
+## 与 Polaris 的差异表
+
+| 维度 | Polaris | lite 方案 |
+|---|---|---|
+| 渲染载体 | chatCardRegistry + UiFrameCard（React 直嵌；Chart 用 iframe） | chat-lite interactive 块（纯 React 直嵌） |
+| 生成方式 | MCP ask_user_question（TCP 回连宿主） | 插件 cap.interactive.ask（loop 工具调用） |
+| 应答 | respond 回调 → plugin_card_answered | respond → cap.interactive.respond → loop 继续 |
+| 沙箱 | Chart iframe sandbox | 无需 iframe（受控 React） |
+
+结论：**可行，且比 Polaris 更简**（无 postMessage 协议面）。Polaris 的 iframe 仅服务于「AI 生成 HTML 图表」的隔离渲染；lite 的交互卡是结构化数据 + 受控渲染，不需要 iframe。

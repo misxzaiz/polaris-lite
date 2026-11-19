@@ -55,7 +55,18 @@ export interface ToolCardMessage {
 /** assistant 消息的内容块（Polaris ContentBlock 收敛版）：按事件到达序追加，保序交错 */
 export type AsstBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool'; card: ToolCardData };
+  | { type: 'tool'; card: ToolCardData }
+  | { type: 'interactive'; card: InteractiveCardData };
+
+/** 交互卡数据（AI 发起 question/form/confirm，用户作答后回填） */
+export interface InteractiveCardData {
+  callId: string;
+  kind: 'question' | 'form' | 'confirm';
+  title: string;
+  payload: Record<string, unknown>;
+  answer?: Record<string, unknown>;
+  status: 'awaiting' | 'answered';
+}
 
 export interface AssistantBlocks {
   blocks: AsstBlock[];
