@@ -29,7 +29,7 @@ export function createHost({ dataDir = '.polaris-lite', secureCookies = false, p
 
   // 领域中间件全部来自插件注册表的 server 半边；宿主按清单顺序装配，不认识任何领域语义。
   const pluginMiddlewares = SERVER_PARTS.map(({ id, createServerPart }) => {
-    const mw = createServerPart({ dataDir, getSession: auth.getSession, store, policy });
+    const mw = createServerPart({ dataDir, getSession: auth.getSession, store, policy, verifyTempToken: auth.verifyTempToken, tempTokens: auth.tempTokens });
     if (typeof mw !== 'function') throw new Error(`服务端插件 ${id} 的 createServerPart 未返回中间件函数`);
     return mw;
   });
