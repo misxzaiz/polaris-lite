@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { Markdown } from './markdown';
 import type { AsstBlock, ToolCardData, ToolCardMessage } from './store';
 import { ToolCard } from './ToolCard';
+import { InteractiveCard } from './InteractiveCard';
 
 /** ToolCard 契约是 ToolCardMessage（msg.tool）；块内只有 card 数据——shim 适配 */
 function CardShim({ card }: { card: ToolCardData }) {
@@ -80,8 +81,9 @@ function CollapsibleGroup({ blocks, streaming }: { blocks: ToolBlock[]; streamin
 }
 
 /**
- * assistant blocks 渲染入口：分组 + 平铺（text→Markdown，tool→ToolCard）。
- * 连续 tool 块归组；非空 text 块打断分组并原序渲染（流式末尾带光标）。
+ * assistant blocks 渲染入口：分组 + 平铺（text→Markdown，tool→ToolCard，
+ * interactive→InteractiveCard）。连续 tool 块归组；非空 text 块打断分组并原序渲染
+ * （流式末尾带光标）；interactive 块独立渲染（不归组）。
  */
 export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.ReactNode {
   const groups = identifyGroups(blocks);
@@ -112,6 +114,8 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
       for (let k = i; k < blocks.length && seen < group.blocks.length; k++) {
         if (blocks[k].type === 'tool') { processed.add(k); seen += 1; }
       }
+    } else if (b.type === 'interactive') {
+      result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} />);
     } else if (b.type === 'text') {
       result.push(<div key={`t-${i}`} className="tc-text"><Markdown text={b.text} /></div>);
       if (streaming && i === blocks.length - 1) result.push(<span key={`cur-${i}`} className="cursor" />);
