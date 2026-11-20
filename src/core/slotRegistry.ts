@@ -7,6 +7,23 @@ export interface SlotEntry extends SlotDescriptor {
   pluginId: string;
 }
 
+/**
+ * 置顶排序（纯函数，slot tab 条溢出方案用）：置顶项按置顶顺序排最前，
+ * 其余保持 order 排序。key 形如 `pluginId:component`（与 SlotOutlet 的 entryKey 一致）。
+ * 未知 key（面板已下线后残留的置顶）静默忽略——脏置顶不应炸掉渲染。
+ */
+export function orderEntriesWithPins(entries: SlotEntry[], pins: string[]): SlotEntry[] {
+  if (pins.length === 0) return entries;
+  const pinSet = new Set(pins);
+  const keyOf = (e: SlotEntry): string => `${e.pluginId}:${e.component}`;
+  const pinned: SlotEntry[] = [];
+  const rest: SlotEntry[] = [];
+  for (const e of entries) (pinSet.has(keyOf(e)) ? pinned : rest).push(e);
+  // 置顶内部仍按 pin 声明顺序；两个都置顶的面板次序是用户操作出来的，不能被 order 洗掉
+  pinned.sort((a, b) => pins.indexOf(keyOf(a)) - pins.indexOf(keyOf(b)));
+  return [...pinned, ...rest];
+}
+
 export class SlotRegistry {
   private slots = new Map<SlotId, SlotEntry[]>();
 

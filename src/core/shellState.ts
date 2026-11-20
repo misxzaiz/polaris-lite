@@ -72,6 +72,10 @@ if (typeof window !== 'undefined') {
     // Safari 13 及更早
     (mq as MediaQueryList).addListener(onChange);
   }
+  // resize 兜底：部分 WebView（分数 DPI 缩放 / 视口注入式 resize）不派发 media query change
+  // 事件，断点会冻结在加载时的值（实测表现为窗口拉宽后仍单列堆叠、面板仍全宽）。
+  // resize 在真实浏览器里只在窗口变化时触发且已做事件合并，兜底成本为零。
+  window.addEventListener('resize', () => applyNarrow(readNarrow()));
 }
 
 /** 测试/SSR 用：强制设置断点状态 */

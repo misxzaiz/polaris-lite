@@ -280,28 +280,73 @@ body.ws-dragging-tab { cursor: grabbing; }
 .shell-panel > .slot { border-bottom: 1px solid var(--border); }
 .shell-panel > .slot:last-child { border-bottom: none; }
 
-/* ===== 多面板 Tab ===== */
+/* ===== 多面板 Tab（横向滚动 + 溢出收纳，panel-tabs-schemes 方案 C） ===== */
 .slot-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .ws-tabs { flex: 1 1 auto; }
-.slot-tabbar {
-  display: flex;
-  min-height: 55px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-translucent);
+/* wrap 是滚动容器与收纳菜单的定位上下文：mask/箭头/＋n 都贴在它上面 */
+.slot-tabbar-wrap {
   position: sticky;
   top: 0;
   z-index: 5;
+  display: flex;
+  align-items: stretch;
+  min-height: 55px;
+  background: var(--bg-translucent);
+  border-bottom: 1px solid var(--border);
+}
+/* 左侧渐隐：能向左滚才出现（data-can-left 由 SlotOutlet 实测滚动几何写入） */
+.slot-tabbar-wrap[data-can-left='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to right, var(--bg-translucent), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.slot-tabbar-wrap[data-can-right='true']::after {
+  content: '';
+  position: absolute;
+  right: 34px;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to left, var(--bg-translucent), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.slot-tabbar {
+  display: flex;
+  min-height: 55px;
+  /* 右侧预留 ＋n 按钮的宽度：溢出时末位 tab 不被收纳按钮盖住
+     （scrollIntoView 对齐的是滚动容器边缘，按钮浮在容器上层） */
+  padding: 0 12px 0 12px;
+  margin-right: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  /* 工作区树 TabsView 没有外层 wrap（那是 SlotOutlet 专属），sticky 留在这里兜底：
+     在 SlotOutlet 里外层 wrap 已 sticky，这里的 sticky 落在不滚动容器内无害 */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-translucent);
 }
+/* 只有溢出（出现 ＋n）时才补右侧让位；无溢出时 tab 条吃到最右 */
+.slot-tabbar-wrap[data-more='true'] .slot-tabbar { padding-right: 46px; }
 .slot-tabbar::-webkit-scrollbar { display: none; }
 .slot-tab {
   position: relative;
-  flex: 1 1 0;
+  /* 自然宽度：短名（2字）省空间，长名不截断——等分挤压在 9 面板时每格只剩 74px */
+  flex: 0 0 auto;
   min-width: 0;
   height: 55px;
   padding: 0 6px;
+  margin: 0 2px;
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -309,15 +354,13 @@ body.ws-dragging-tab { cursor: grabbing; }
   letter-spacing: 0.02em;
   cursor: pointer;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   transition: color var(--plite-dur) var(--plite-ease);
 }
 .slot-tab::after {
   content: '';
   position: absolute;
-  left: 12px;
-  right: 12px;
+  left: 6px;
+  right: 6px;
   bottom: -1px;
   height: 1px;
   background: var(--accent);
@@ -327,6 +370,104 @@ body.ws-dragging-tab { cursor: grabbing; }
 .slot-tab:hover { color: var(--text-dim); }
 .slot-tab.active { color: var(--accent-bright); }
 .slot-tab.active::after { transform: scaleX(1); }
+/* 置顶 tab 前的小圆点：不占额外宽度（::before 是绝对定位），标识「它在收藏里」 */
+.slot-tab.pinned::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 14px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+/* ＋n 收纳入口：只在有溢出时由 JS 挂载，宽度恒定不参与滚动 */
+.slot-tab-more {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--plite-dur) var(--plite-ease);
+}
+.slot-tab-more:hover, .slot-tab-more[aria-expanded='true'] { color: var(--accent-bright); }
+/* 收纳菜单：全量面板 + 搜索 + 置顶；绝对定位于 tab 条下方，宽度上限不超面板 */
+.slot-tabmenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-width: min(300px, 100%);
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--plite-shadow-2);
+}
+.slot-tabmenu-search {
+  margin: 2px 2px 6px;
+  padding: 0 10px;
+  height: var(--plite-h-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm, 6px);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--plite-fs-sm);
+  outline: none;
+}
+.slot-tabmenu-search:focus-visible { border-color: var(--accent); }
+.slot-tabmenu-empty { padding: 10px; color: var(--text-faint); font-size: var(--plite-fs-sm); text-align: center; }
+.slot-tabmenu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--plite-radius-sm, 6px);
+}
+.slot-tabmenu-row.active { background: var(--accent-soft); }
+.slot-tabmenu-item {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--plite-fs-md);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.slot-tabmenu-item:hover { background: var(--bg-hover); }
+.slot-tabmenu-row.active .slot-tabmenu-item { color: var(--accent-bright); }
+.slot-tabmenu-pin {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--plite-radius-sm, 6px);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.slot-tabmenu-pin svg { width: 15px; height: 15px; }
+.slot-tabmenu-pin:hover { background: var(--bg-hover); color: var(--text); }
+.slot-tabmenu-pin.pinned { color: var(--accent-bright); }
 .slot-tabbody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .slot-tabpanel,
 .ws-tabpanel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; }
@@ -561,6 +702,18 @@ body.ws-dragging-tab { cursor: grabbing; }
   .ws-close { display: none; }
   /* 窄屏窗格的 × 隐藏（手指容易误触），但 tabs 面板里的 × 是该视图唯一的关闭入口 */
   .ws-tabpanel > .ws-tab-close { display: inline-flex; }
+
+  /* 窄屏收纳菜单 sheet 化：面板抽屉宽度有限，绝对定位的下拉菜单在抽屉里容易溢出屏幕；
+     底部弹层（bottom sheet）是移动端全量面板列表的惯用形态，且天然避开顶部安全区 */
+  .slot-tabmenu {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    max-width: none;
+    max-height: 55vh;
+  }
 
   /* 窗格溶解成 contents 后，它的子元素直接变成祖父 split 的 flex item，
      但 `.ws-pane > *` 的 `flex: 1 1 auto` 依然按 DOM 父子关系命中它们——

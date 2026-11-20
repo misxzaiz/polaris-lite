@@ -387,6 +387,29 @@ function TabsView({ node }: { node: TabsNode }) {
     if (i >= 0) setFocusIdx(i);
   }, [active, children]);
 
+  // tab 条改自然宽度横向滚动后：激活项必须滚入视口（否则切 tab 后激活项停在视口外，
+  // 用户要靠「＋n」菜单找回它）。block:'nearest' 保证纵向不滚动容器。
+  const tabBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  useEffect(() => {
+    const i = children.findIndex((c) => c.id === active);
+    tabBtnRefs.current[i]?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  }, [active, children]);
+
+  // 纵向滚轮转横向：tab 条唯一滚动轴是 x（与 SlotOutlet 的 tab 条同一交互约定）
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = tabsBarRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent): void => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   const activate = useCallback(
     (id: string) => {
       workspaceStore.setActive(node.id, id);
@@ -434,6 +457,7 @@ function TabsView({ node }: { node: TabsNode }) {
         aria-orientation="horizontal"
         aria-label="视图标签"
         data-ws-drop={node.id}
+        ref={tabsBarRef}
         onKeyDown={onKeyDown}
       >
         {children.map((child, i) => {
@@ -444,6 +468,7 @@ function TabsView({ node }: { node: TabsNode }) {
               key={child.id}
               ref={(el) => {
                 tabRefs.current[i] = el;
+                tabBtnRefs.current[i] = el;
               }}
               type="button"
               role="tab"

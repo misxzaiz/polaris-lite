@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CapBus } from '../src/core/bus.ts';
 import { resolvePolicy } from '../src/core/policy.ts';
-import { SlotRegistry } from '../src/core/slotRegistry.ts';
+import { SlotRegistry, orderEntriesWithPins } from '../src/core/slotRegistry.ts';
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
@@ -147,4 +147,30 @@ test('槽位注册表：list 按 order 排序，title 原样透传（tab 名不�
   // 同一插件可给自己的 panel 块单独命名，与 manifest.name 解耦
   assert.equal(reg.list('panel')[2].title, '账号');
   assert.equal(reg.list('panel')[1].title, undefined);
+});
+
+test('置顶排序：置顶项按置顶顺序排最前，其余保持 order 顺序', () => {
+  const reg = new SlotRegistry();
+  reg.register('cap-panel', [{ slot: 'panel', component: 'Caps', order: 1, title: '能力' }]);
+  reg.register('model-admin', [{ slot: 'panel', component: 'Models', order: 2, title: '模型' }]);
+  reg.register('agent-bash', [{ slot: 'panel', component: 'Bash', order: 3, title: 'Bash' }]);
+  reg.register('mock-auth', [{ slot: 'panel', component: 'Creds', order: 4, title: '账号' }]);
+  const entries = reg.list('panel');
+
+  // 置顶两个：order 靠后的「账号」「Bash」提到最前，且次序跟随置顶操作顺序
+  const ordered = orderEntriesWithPins(entries, ['mock-auth:Creds', 'agent-bash:Bash']);
+  assert.deepEqual(
+    ordered.map((e) => e.title),
+    ['账号', 'Bash', '能力', '模型'],
+  );
+
+  // 无置顶时原样返回（同一引用，不制造多余的渲染）
+  assert.equal(orderEntriesWithPins(entries, []), entries);
+
+  // 面板下线后残留的脏置顶 key 静默忽略，不抛错
+  const stale = orderEntriesWithPins(entries, ['gone:Panel', 'model-admin:Models']);
+  assert.deepEqual(
+    stale.map((e) => e.title),
+    ['模型', '能力', 'Bash', '账号'],
+  );
 });
