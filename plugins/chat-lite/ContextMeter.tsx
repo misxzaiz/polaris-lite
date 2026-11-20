@@ -77,17 +77,25 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
         {ctx.lastUsage?.estimated && <MeterRow label="口径" value="估算（供应商未回 usage）" />}
         {ctx.cacheTotal && ctx.cacheTotal.rounds > 0 && (() => {
           const { cached, creation, inputWithCache } = ctx.cacheTotal;
-          // 命中占比 = 缓存读取 /（未命中输入 + 缓存读取），对齐 main 仓 usage_db 成本口径 B
+          // 累计命中占比 = 缓存读取 /（未命中输入 + 缓存读取），对齐 main 仓 usage_db 成本口径 B
           const denom = inputWithCache + cached;
           const pct = denom > 0 ? cached / denom : 0;
+          // 单轮命中率 = 最近一轮 cached / prompt_tokens（业界口径；前缀增长趋近 100%）
+          const lastPct = ctx.lastCacheHitRate;
           return (
             <>
+              {lastPct !== undefined && (
+                <MeterRow label="缓存命中率（最近轮）" value={`${Math.round(lastPct * 100)}%`} />
+              )}
               <MeterRow label="缓存命中" value={`${fmtTokens(cached)} tokens（${Math.round(pct * 100)}%）`} />
               {creation > 0 && <MeterRow label="缓存写入" value={`${fmtTokens(creation)} tokens`} />}
               <div className="ctx-cache-bar" aria-hidden="true">
-                <span className="ctx-cache-fill" style={{ width: `${Math.min(100, pct * 100)}%` }} />
+                <span className="ctx-cache-fill" style={{ width: `${Math.min(100, (lastPct ?? pct) * 100)}%` }} />
               </div>
-              <div className="ctx-detail-note">缓存命中占比：最近 {ctx.cacheTotal.rounds} 轮有缓存数据的请求，{fmtTokens(cached)} / {fmtTokens(denom)} 输入 tokens 命中缓存（更低价计费）</div>
+              <div className="ctx-detail-note">
+                {lastPct !== undefined && <>单轮命中率 = 命中 / 本轮 prompt tokens；前缀随对话增长，命中率应趋近 100%（短对话因最新问题不命中而偏低）。</>}
+                {' '}累计：最近 {ctx.cacheTotal.rounds} 轮有缓存数据的请求，{fmtTokens(cached)} / {fmtTokens(denom)} 输入 tokens 命中缓存（更低价计费）。
+              </div>
             </>
           );
         })()}

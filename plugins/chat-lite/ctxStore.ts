@@ -93,6 +93,8 @@ export interface CtxState {
   compactFailed?: string;
   /** 会话累计缓存命中/未命中 token（仅累计有缓存数据的轮次，供占比计算） */
   cacheTotal?: { cached: number; creation: number; inputWithCache: number; rounds: number };
+  /** 最近一轮缓存命中率（cached / prompt_tokens，业界口径；无缓存数据轮缺省） */
+  lastCacheHitRate?: number;
 }
 
 interface CtxStore {
@@ -136,7 +138,7 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
     set((st) => {
       const cur = st.ctx[p.sessionId] ?? emptyCtx();
       // 缓存累计：仅累计「网关回了缓存数据」的轮次（rec.cachedTokens 存在才计入），
-      // 未回缓存的轮次不稀释占比。命中占比 = cached / (input + cached)——input 口径
+      // 未回缓存的轮次不稀释占比。累计占比 = cached / (input + cached)——input 口径
       // 为未命中部分（对齐 main 仓 usage_db 的 cache_hit_rate 成本口径 B）。
       let cacheTotal = cur.cacheTotal;
       if (rec.cachedTokens !== undefined) {
@@ -148,6 +150,11 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
           rounds: prev.rounds + 1,
         };
       }
+      // 单轮命中率 = cached / prompt_tokens（cached 是 prompt 的子集，业界通说口径）；
+      // 随前缀增长趋近 100%，是「缓存是否正常工作」的直接指标。
+      const lastCacheHitRate = rec.cachedTokens !== undefined && rec.inputTokens > 0
+        ? Math.min(1, rec.cachedTokens / rec.inputTokens)
+        : cur.lastCacheHitRate;
       return {
         ctx: {
           ...st.ctx,
@@ -156,6 +163,7 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
             lastUsage: rec,
             history: [...cur.history, rec].slice(-16),
             ...(cacheTotal ? { cacheTotal } : {}),
+            ...(lastCacheHitRate !== undefined ? { lastCacheHitRate } : {}),
             ...(p.contextWindow && p.contextWindow > 0 ? { window: p.contextWindow } : {}),
             // 真实 usage 优先刷新水位（估算值不覆盖真实值）
             ...(!p.estimated && rec.inputTokens > 0 ? { usedTokens: rec.inputTokens } : {}),
