@@ -1,5 +1,5 @@
 {
-  "version": "7",
+  "version": "8",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -266,7 +266,9 @@
         "cap.tool.skill",
         "cap.skill.appendix"
       ],
-      "events": []
+      "events": [
+        "tool-registered"
+      ]
     },
     "hook-bridge": {
       "capabilities": [

@@ -89,7 +89,9 @@ const plugins = [
   { id: 'standalone-mode', config: 'standalone-mode/vite.config.ts', dist: 'standalone-mode/dist', order: 22 },
   // CodeBuddy CLI 引擎（服务端半边 spawn adapter.js → codebuddy CLI）。
   // 与 real-engine 互斥：cap.ai.chat 是单注册位，registry 里两者只能 enabled 一个。
-  { id: 'codebuddy-engine', config: 'codebuddy-engine/vite.config.ts', dist: 'codebuddy-engine/dist', order: 23 },
+  // 当前主用 real-engine（OpenAI 兼容中继），codebuddy-engine 产物保留但默认停用；
+  // 需要切引擎时把 enabled 改回 true 并同步把 real-engine 置 enabled: false。
+  { id: 'codebuddy-engine', config: 'codebuddy-engine/vite.config.ts', dist: 'codebuddy-engine/dist', order: 23, enabled: false },
   // 扩展能力插件（plans/extension-capability-pure-plugin-plan.md）：
   // skill-loader = SKILL.md 技能发现 + read_skill 工具 + 系统提示附录（AGENTS.md/CLAUDE.md）；
   // hook-bridge  = 生命周期钩子（CC/ZC hooks 兼容，进程执行器在 server 半边）。
