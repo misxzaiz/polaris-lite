@@ -662,6 +662,34 @@ export function flushPendingAll(): void {
   sendNextPending();
 }
 
+/** 删除指定队列项 */
+export function removePendingItem(itemId: string): void {
+  const st = useSessionStore.getState();
+  if (st.activeId) st.removePending(st.activeId, itemId);
+}
+
+/** 立即发送指定队列项（从队列摘除后直发；其余仍按 settle 串行） */
+export function sendPendingNow(itemId: string): void {
+  const st = useSessionStore.getState();
+  const sid = st.activeId;
+  if (!sid) return;
+  const item = (st.pending[sid] ?? []).find((it) => it.id === itemId);
+  if (!item) return;
+  st.removePending(sid, itemId);
+  void sendUserMessage(item.text, item.attachments);
+}
+
+/** 编辑队列项：从队列摘除并回填输入框（用户改完再发送/排队；附件保留随队列出栈的语义改为随编辑回填） */
+export function editPending(itemId: string): void {
+  const st = useSessionStore.getState();
+  const sid = st.activeId;
+  if (!sid) return;
+  const item = (st.pending[sid] ?? []).find((it) => it.id === itemId);
+  if (!item) return;
+  st.removePending(sid, itemId);
+  requestCompose(item.text);
+}
+
 /** 清空当前会话待发队列 */
 export function clearPending(): void {
   const st = useSessionStore.getState();

@@ -40,6 +40,10 @@ export function SendIcon() {
   return <Icon size={17}><path d="m4 4 17 8-17 8 3-8-3-8ZM7 12h14" {...stroke} /></Icon>;
 }
 
+export function QueueIcon() {
+  return <Icon size={17}><path d="M4 6h16M4 12h16M4 18h10" {...stroke} /></Icon>;
+}
+
 export function StopIcon() {
   return <Icon size={15}><rect x="6" y="6" width="12" height="12" rx="1.5" {...stroke} /></Icon>;
 }
@@ -71,4 +75,9 @@ export function CheckIcon() {
 /** 行尾「可进入」指示（替代 › 这类平台相关符号字符） */
 export function ChevronRightIcon() {
   return <Icon size={14}><path d="m9 5 7 7-7 7" {...stroke} /></Icon>;
+}
+
+/** 「换一批」刷新图标 */
+export function RefreshIcon() {
+  return <Icon size={13}><path d="M20 12a8 8 0 1 1-2.34-5.66" {...stroke} /><path d="M20 4v4h-4" {...stroke} /></Icon>;
 }

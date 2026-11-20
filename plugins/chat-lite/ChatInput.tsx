@@ -12,7 +12,7 @@
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { sendUserMessage, interruptChat, enqueuePending, clearPending, onCompose } from './index';
+import { sendUserMessage, interruptChat, enqueuePending, clearPending, sendPendingNow, editPending, removePendingItem, onCompose } from './index';
 import { useSessionStore } from './store';
 import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
@@ -20,7 +20,7 @@ import {
 import { AttachmentStrip } from './AttachmentStrip';
 import { useSessionSwipe } from './useSessionSwipe';
 import { SwipeIndicator } from './SwipeIndicator';
-import { PaperclipIcon, SendIcon, StopIcon, FolderIcon, ChevronRightIcon, PlusIcon } from './icons';
+import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, FolderIcon, ChevronRightIcon, PlusIcon } from './icons';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
 import { ContextMeter } from './ContextMeter';
@@ -119,7 +119,8 @@ export function ChatInput() {
   const streaming = useSessionStore((s) =>
     s.sessions.find((x) => x.id === s.activeId)?.messages.some((m) => m.streaming),
   );
-  const queueLen = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId]?.length ?? 0) : 0));
+  const queueItems = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId] ?? []) : []));
+  const queueLen = queueItems.length;
   /** 当前会话绑定的工作区（file-browser 登记的根；null=跟随全局默认） */
   const sessionWorkspaceId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.workspaceId ?? null);
   /** 关联只读目录（可读不可写，命令仍在主目录执行） */
@@ -488,8 +489,6 @@ export function ChatInput() {
     }
   };
 
-  const showStop = streaming && !interrupting;
-  const showBoth = streaming && canSend; // 流式+有草稿：停止与发送并排（发送=入队）
 
   const placeholder = streaming
     ? '回复生成中，可继续输入并排入队列…'
@@ -564,13 +563,30 @@ export function ChatInput() {
                   </button>
                 </div>
               )}
-              <div className="chat-assistant-row">
-                <span className="chat-assistant-key">待发队列</span>
-                <span className="chat-assistant-val">{queueLen > 0 ? `已排队 ${queueLen} 条` : '无'}</span>
-                {queueLen > 0 && (
-                  <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
-                )}
-              </div>
+              {queueLen === 0 ? (
+                <div className="chat-assistant-row">
+                  <span className="chat-assistant-key">待发队列</span>
+                  <span className="chat-assistant-val">无</span>
+                </div>
+              ) : (
+                <div className="chat-queue-list">
+                  <div className="chat-assistant-row">
+                    <span className="chat-assistant-key">待发队列（{queueLen}）</span>
+                    <span className="chat-assistant-val" />
+                    <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
+                  </div>
+                  {queueItems.map((it) => (
+                    <div key={it.id} className="chat-queue-item">
+                      <span className="chat-queue-text" title={it.text}>{it.text}</span>
+                      <span className="chat-queue-acts">
+                        <button className="chat-queue-act" onClick={() => sendPendingNow(it.id)} title="立即发送（跳过排队顺序）">立即发</button>
+                        <button className="chat-queue-act" onClick={() => editPending(it.id)} title="取回输入框编辑">编辑</button>
+                        <button className="chat-queue-act danger" onClick={() => removePendingItem(it.id)} title="删除">删除</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
         </div>
         <div className="chat-input-btns">
@@ -624,22 +640,23 @@ export function ChatInput() {
           </button>
           {/* 上下文进度圆圈（spec §5.3 v2）：紧贴发送/停止按钮左侧；点击经 portal 在输入条上方展开详情 */}
           <ContextMeter />
-          {showBoth && (
-            <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}><StopIcon />停止</button>
-          )}
-          {showStop && !showBoth && (
-            <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}>
-              <StopIcon />{interrupting ? '停止中…' : '停止'}
-            </button>
-          )}
-          {!streaming && (
-            <button className="chat-send" onClick={doSend} disabled={!canSend}>
-              <SendIcon />发送
-            </button>
-          )}
-          {streaming && canSend && (
-            <button className="chat-send queue" onClick={doSend} disabled={!canSend} title="流式中发送将进入待发队列">
-              排队
+          {/* 合并按钮（单按钮三态，纯图标避免按钮过大）：
+              空闲=发送；流式=停止；流式+有草稿=排队（点击入队）。
+              排队态用队列徽标显示待发条数。 */}
+          {streaming ? (
+            canSend ? (
+              <button className="chat-send queue" onClick={doSend} disabled={!canSend} title="排队（流式结束后自动发送）" aria-label="排队">
+                <QueueIcon />
+                {queueLen > 0 && <span className="chat-queue-badge">{queueLen}</span>}
+              </button>
+            ) : (
+              <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting} title={interrupting ? '停止中…' : '停止'} aria-label="停止">
+                <StopIcon />
+              </button>
+            )
+          ) : (
+            <button className="chat-send" onClick={doSend} disabled={!canSend} title="发送" aria-label="发送">
+              <SendIcon />
             </button>
           )}
       </div>
