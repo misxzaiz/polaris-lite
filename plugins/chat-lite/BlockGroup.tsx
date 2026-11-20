@@ -157,21 +157,18 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
   });
 
   const result: React.ReactNode[] = [];
-  const processed = new Set<number>();
+  // 已渲染块标记（按块对象引用，不用索引区间——组内块之间可能夹着 artifact 等
+  // 独立渲染块，按索引区间标记会把夹着的块误标为已处理而跳过渲染，
+  // 实测症状：浏览器截图（artifact 块）夹在工具与思考之间时刷新即消失）。
+  const processed = new Set<AsstBlock>();
   blocks.forEach((b, i) => {
-    if (processed.has(i)) return;
+    if (processed.has(b)) return;
     const g = owner.get(i);
     if (g !== undefined) {
       const group = groups[g];
       result.push(<ProcessGroup key={`g-${group.start}`} items={group.items} streaming={streaming} />);
-      // 组内所有块索引标记已处理（从 i 起到该组最后一项）
-      let lastIdx = i;
-      group.items.forEach((it) => {
-        for (let k = lastIdx; k < blocks.length; k++) {
-          if (blocks[k] === (it.kind === 'tool' ? it.block : it.block)) { lastIdx = k; break; }
-        }
-      });
-      for (let k = i; k <= lastIdx; k++) processed.add(k);
+      // 只标记组内实际包含的块（按引用）；夹在组内块之间的其它块（artifact 等）不受影响
+      group.items.forEach((it) => processed.add(it.block));
     } else if (b.type === 'interactive') {
       result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
     } else if (b.type === 'artifact') {
