@@ -122,20 +122,41 @@
 }
 .chat-send.new-session:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--border-strong); color: var(--accent-bright); }
 
-/* ===== 隐形滑切：输入条横向滑动切会话（零常驻 UI） ===== */
-/* 跟随位移由 JS 写 inline transform；这里只负责手势态的触感与边界提示。
-   touch-action 禁掉浏览器对手势的横向处理（pan-x），否则真机滑动会先被浏览器吃掉 */
+/* ===== 隐形滑切：输入条横向滑动切会话（零常驻 UI，零位移） =====
+   v4：不再 translateX 整个输入条（漂移观感根源）。反馈改由三件轻量物承担：
+   1) 上缘 2px 方向进度线（width 由 --swipe-progress 驱动，JS 写入）；
+   2) 指示器胶囊（.chat-swipe-indicator，仅滑动中浮现）；
+   3) 到头侧 3px 边界推压（data-swipe-edge）。
+   touch-action: pan-y 防真机浏览器吃掉横滑。 */
 .chat-input-bar { touch-action: pan-y; }
 .chat-input-bar[data-swiping='true'] { cursor: grabbing; }
-.chat-input-bar[data-swiping='true'] .chat-textarea { pointer-events: none; }
-/* 到头仍在划：轻微抖动提示「没有更多」，比静默阻尼更可读 */
-.chat-input-bar[data-swipe-edge='true'] { animation: swipe-edge-nudge 160ms ease-in-out; }
-@keyframes swipe-edge-nudge {
-  0%, 100% { margin-left: 0; }
-  50% { margin-left: -3px; }
+/* 进度线：从中心向滑动方向伸展，越接近阈值越长，过阈值变主色 */
+.chat-input-bar::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  height: 2px;
+  width: 0;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity var(--plite-dur) var(--plite-ease);
 }
+.chat-input-bar[data-swiping='true']::after { opacity: 0.9; }
+.chat-input-bar[data-swipe-dir='next']::after { right: 50%; left: auto; width: calc(var(--swipe-progress, 0) * 50%); }
+.chat-input-bar[data-swipe-dir='prev']::after { left: 50%; right: auto; width: calc(var(--swipe-progress, 0) * 50%); }
+.chat-input-bar[data-swipe-armed='true']::after { width: 50%; opacity: 1; }
+/* textarea 上起手时禁用其内部文本选择高亮，避免手势与选择态叠影 */
+.chat-input-bar[data-swiping='true'] .chat-textarea { pointer-events: none; user-select: none; }
+/* 到头仍在划：输入条向滑动方向推 3px（有「顶到墙」的实感），比静默更可读 */
+.chat-input-bar[data-swipe-edge='true'][data-swipe-dir='next'] { transform: translateX(-3px); }
+.chat-input-bar[data-swipe-edge='true'][data-swipe-dir='prev'] { transform: translateX(3px); }
+.chat-input-bar[data-swipe-edge='true'] { transition: transform 120ms var(--plite-ease, ease-out); }
 @media (prefers-reduced-motion: reduce) {
-  .chat-input-bar[data-swipe-edge='true'] { animation: none; }
+  .chat-input-bar[data-swipe-edge='true'] { transform: none; }
 }
 
 /* ===== 会话滑动指示器：仅滑动中浮现（输入条上方居中悬浮） ===== */
