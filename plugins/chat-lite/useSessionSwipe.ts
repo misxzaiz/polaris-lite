@@ -32,8 +32,19 @@ export interface SwipeState {
   atEdge: boolean;
 }
 
+/** 手势对外反馈（SessionEdgeArrows 联动高亮用） */
+export interface SwipeFeedback {
+  /** 手势进行中（已过抓取阈值） */
+  swiping: boolean;
+  /** 滑动方向：prev=向右滑（更旧）/ next=向左滑（更新） */
+  direction: 'prev' | 'next' | null;
+  /** 已过触发阈值（松手即切） */
+  armed: boolean;
+}
+
 export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
   const [state, setState] = useState<SwipeState>({ dx: 0, dragging: false, atEdge: false });
+  const [feedback, setFeedback] = useState<SwipeFeedback>({ swiping: false, direction: null, armed: false });
   /** 手势会话内所有可变量收进 ref：pointermove 高频，不进 React 状态 */
   const gesture = useRef<{
     pointerId: number;
@@ -44,6 +55,8 @@ export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement
   } | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingDx = useRef(0);
+  const pendingDir = useRef<'prev' | 'next' | null>(null);
+  const pendingArmed = useRef(false);
 
   const setFollow = useCallback((dx: number, dragging: boolean, atEdge: boolean) => {
     pendingDx.current = dx;
@@ -52,6 +65,7 @@ export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       setState({ dx: pendingDx.current, dragging, atEdge });
+      setFeedback({ swiping: dragging, direction: pendingDir.current, armed: pendingArmed.current });
     });
   }, []);
 
@@ -94,6 +108,9 @@ export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement
       // 向左滑（dx<0）= 下一个 = 下标-1；向右滑 = 上一个 = 下标+1
       const canSwipe = dx < 0 ? idx > 0 : idx < st.sessions.length - 1;
       g.atEdge = !canSwipe;
+      // 手势反馈（箭头高亮）：方向 + 是否已过触发阈值（松手即切）
+      pendingDir.current = dx < 0 ? 'next' : 'prev';
+      pendingArmed.current = Math.abs(dx) >= SWIPE_THRESHOLD && canSwipe;
       // 阻尼跟随；到头时阻尼加倍（更「黏」），提示没有更多
       const damp = canSwipe ? 3 : 6;
       const follow = Math.max(-MAX_FOLLOW, Math.min(MAX_FOLLOW, dx / damp));
@@ -116,6 +133,8 @@ export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement
         const target = st.sessions[dx < 0 ? idx - 1 : idx + 1];
         if (target) st.setActive(target.id); // 切换后焦点不抢：用户手上还有后续动作
       }
+      pendingDir.current = null;
+      pendingArmed.current = false;
       setFollow(0, false, false);
     },
     [setFollow],
@@ -154,5 +173,6 @@ export function useSessionSwipe(textareaRef: React.RefObject<HTMLTextAreaElement
       } as React.CSSProperties,
     },
     swiping: state.dragging,
+    feedback,
   };
 }
