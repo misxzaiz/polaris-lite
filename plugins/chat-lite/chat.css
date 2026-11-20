@@ -796,14 +796,23 @@
 .md-table {
   border-collapse: collapse;
   font-size: 12.5px;
+  /* 列宽可读性（用户反馈：字段列宽太短看着不舒服）：
+     - width:max-content 让表格按内容自然宽度展开（不再被容器宽度压成细长条）；
+     - min-width:100% 保证内容少时仍占满容器（视觉不碎）；
+     - 超宽表格经 .md-table-wrap 横向滚动查看。 */
+  width: max-content;
   min-width: 100%;
 }
 .md-table th, .md-table td {
   border: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: 6px 12px;
   text-align: left;
+  /* 单元格保底宽度；长文本 320px 封顶换行，避免一个超长字段把整表拉得不可读 */
+  min-width: 72px;
+  max-width: 320px;
+  overflow-wrap: anywhere;
 }
-.md-table th { background: var(--bg-hover); font-weight: 600; }
+.md-table th { background: var(--bg-hover); font-weight: 600; white-space: nowrap; }
 
 /* ===== 交互卡（question 多选 / form 表单 / confirm 确认；用户作答回填 agent-loop） ===== */
 .tc-ia {

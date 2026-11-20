@@ -94,11 +94,19 @@ function GroupSummary({ count, anyFail, streaming, onExpand }: {
  * 流结束统一折叠为汇总条，点开回看全程。
  */
 function ProcessGroup({ items, streaming }: { items: GroupItem[]; streaming: boolean }) {
-  const [expanded, setExpanded] = useState(streaming); // 流式=平铺；结束后收拢
+  // 组内含「产物型工具卡」（截图/预览等，卡片 data 带 artifact 引用）时不自动收拢：
+  // 产物是结果而非过程，折叠进汇总条会让用户找不到截图（用户反馈：截图在思考/正文出现后消失）。
+  // 识别口径：html-preview/browser-lite 的工具名，产物卡由 artifact 块独立渲染，但
+  // 工具卡本身承载操作回执——收拢会连回执一起藏掉，故这类组保持平铺。
+  const hasArtifactTool = items.some(
+    (it) => it.kind === 'tool' && /^(render|browser|screenshot)$/i.test(it.block.card.name || ''),
+  );
+  const collapsible = items.length > 1 && !hasArtifactTool;
+  const [expanded, setExpanded] = useState(streaming || !collapsible); // 流式=平铺；结束后收拢（产物组除外）
   useEffect(() => {
     // 流结束那一瞬自动收拢；用户随后仍可点汇总条展开回看
-    if (!streaming) setExpanded(false);
-  }, [streaming]);
+    if (!streaming && collapsible) setExpanded(false);
+  }, [streaming, collapsible]);
 
   const toolCount = items.filter((it) => it.kind === 'tool').length;
   const anyFail = items.some((it) => it.kind === 'tool' && (it.block.card.status === 'error' || it.block.card.status === 'denied'));
@@ -112,7 +120,7 @@ function ProcessGroup({ items, streaming }: { items: GroupItem[]; streaming: boo
               ? <CardShim key={`t-${it.block.card.callId || i}`} card={it.block.card} />
               : <ThinkingBlock key={`th-${i}`} text={it.block.text} live={streaming && i === items.length - 1} />,
           )}
-          {!streaming && items.length > 1 && (
+          {!streaming && collapsible && (
             <button type="button" className="tc-group-collapse" onClick={() => setExpanded(false)}>收起</button>
           )}
         </>

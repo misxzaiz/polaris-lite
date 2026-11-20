@@ -630,9 +630,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
               : `[交互卡失败] ${ia.error ?? 'no answer'}`;
           // 工具卡终态回执：交互卡没有 exec 语义，也必须发 tool.result 收敛卡片，
           // 否则 UI 永远停在「执行中」转圈（2026-11-20 工具卡状态不回显修复）。
+          // stdout 带作答摘要：hasBody 判定需要非空内容，否则成功卡永远无法展开查看。
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: ia.ok ? 'done' : 'error',
+            command: `interactive ${String((safeArgsJson(call.arguments) as { kind?: string }).kind ?? '')}`.trim(),
+            stdout: ia.ok ? feedback : undefined,
             stderr: ia.ok ? undefined : (ia.error ?? '交互卡失败'),
           });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
@@ -659,9 +662,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             ? `[预览已生成] previewId=${pr.previewId} 版本=${pr.versionLabel ?? '?'} 标题=${pr.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
             : `[预览生成失败] ${pr.error ?? 'unknown error'}`;
           // 工具卡终态回执：render 不走 exec 通用路径，同样必须发 tool.result 收敛卡片
+          // stdout 带生成摘要（previewId/版本/标题），成功卡可展开查看
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: pr.ok ? 'done' : 'error',
+            command: `render ${pr.title ?? ''}`.trim(),
+            stdout: pr.ok ? feedback : undefined,
             stderr: pr.ok ? undefined : (pr.error ?? '预览生成失败'),
           });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
@@ -763,9 +769,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const feedback = fr.ok
             ? `[files 完成] ${frSummary || JSON.stringify(fr).slice(0, FEEDBACK_CAP)}`
             : `[files 工具执行失败] ${fr.error ?? 'unknown error'}`;
+          // stdout 带结果摘要，成功卡可展开查看（hasBody 需要非空内容）
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: fr.ok ? 'done' : 'error',
+            command: `files ${String(safeFsArgs(call.arguments).action ?? '')}`.trim(),
+            stdout: fr.ok ? feedback : undefined,
             stderr: fr.ok ? undefined : String(fr.error ?? 'files 工具执行失败'),
           });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
@@ -791,9 +800,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             ? `[记账成功] ${JSON.stringify(lr)}${lr.hint ? `；${lr.hint}` : ''}`
             : `[记账失败] ${lr.error ?? 'unknown error'}`;
           // 工具卡终态回执：ledger 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
+          // stdout 带入账结果摘要，成功卡可展开查看
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: lr.ok ? 'done' : 'error',
+            command: `ledger ${String((safeLedgerArgs(call.arguments) as { action?: string }).action ?? '')}`.trim(),
+            stdout: lr.ok ? feedback : undefined,
             stderr: lr.ok ? undefined : (lr.error ?? '记账失败'),
           });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
@@ -826,9 +838,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             ? `[浏览器操作完成] ${JSON.stringify(br)}`
             : `[浏览器操作失败] ${br.error ?? 'unknown error'}`;
           // 工具卡终态回执：browser 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
+          // stdout 带操作结果摘要（标签/搜索结果/截图引用等），成功卡可展开查看
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: br.ok ? 'done' : 'error',
+            command: `browser ${String((safeBrowserArgs(call.arguments) as { action?: string }).action ?? '')}`.trim(),
+            stdout: br.ok ? feedback : undefined,
             stderr: br.ok ? undefined : String(br.error ?? '浏览器操作失败'),
           });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
