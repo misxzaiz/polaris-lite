@@ -31,26 +31,69 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 const CONFIRM_WAIT_MS = 120_000;       // confirm 模式审批等待（超时=拒绝）
 
-/** 危险命令模式：命中直接拒绝，任何模式（含 yolo）都不可豁免 */
+/** 危险命令模式：命中直接拒绝，任何模式（含 yolo）都不可豁免。
+ *  教训：不要对整串做 \b 词边界匹配——PowerShell 的 -Format 参数、管道后的
+ *  Format-List/Table、URL 的 ?format= 都会被误伤（历史 12 条 denylist 命中里 11 条是误伤）。
+ *  危险词一律锚定「命令首词」位置（行首 / ;&| 之后 / 引号内新命令首词）。 */
 const DENYLIST = [
+  // ── 递归删除（posix + PowerShell + cmd 等价物）────────────────────────
   /rm\s+(-[a-z]*\s+)*-[a-z]*[rf]{2,}/i,                       // rm -rf 类
   /rm\s+-[a-z]*r[a-z]*f/i,
+  // cmd del/erase/rd/rmdir：只有带 /s（递归）才是大破坏；/q（安静）/f（强制）单独出现无害
+  /(^|[;&|]\s*|["']\s*)(del|erase|rd|rmdir)(\.exe)?\s+[^;&|]*\/s/i,
+  // PowerShell Remove-Item -Recurse（含管道前段）
+  /Remove-Item\s+[^;'|&]*-Recurse/i,
+  // PowerShell rm/ri 别名带 -r（rm C:/ -r -fo 等；引号内也算）
+  /(^|[;&|]\s*|["']\s*)(rm|ri)\s+[^;&|]*-r/i,
+  // ── 远程代码执行管道 ─────────────────────────────────────────────────
   /curl[^|;&]*\|\s*(sudo\s+)?(ba)?sh/i,                       // curl | sh 管道
   /wget[^|;&]*\|\s*(sudo\s+)?(ba)?sh/i,
-  // format/mkfs 等：仅当作为一条命令的「首词」（或 ;&| 后的新命令首词）才算全盘破坏。
-  // 不能对整串 \b 匹配——PowerShell 的 -Format 参数与管道后的 Format-List/Table 都会被误伤；
-  // format 后面跟盘符、/开关、空格或结尾才是真的格式化命令。
+  // ── 全盘破坏：仅命令首词命中（见头部注释）────────────────────────────
   /(^|[;&|]\s*)(format(\s+[a-z]:|\/| |$)|mkfs(\.ext[234]|\.vfat|\.ntfs)?\s|diskpart|fdisk)/i,
   /\b(shutdown|reboot|poweroff)\b/i,
   /\breg\s+(add|delete)\b/i,                                  // 注册表
   /\bschtasks\b/i,                                            // 计划任务
   /\battrib\b/i,
-  /\bdel\s+\/[sq]/i,                                          // del /s /q
-  /rmdir\s+\/[sq]/i,
   /[>|]+\s*.*\.polaris-lite[\\/](providers|auth-owner|tool-exec)/i, // 写核心数据文件
   /\b(Add-MpPreference|Set-MpPreference)\b/i,                 // Defender 排除项
   /\b(Invoke-Expression|iex)\b/i,
 ];
+
+/** 命令替换检测（借鉴 Gemini CLI shell-utils 的 detectCommandSubstitution）：
+ *  $()、反引号、<()、>()、PowerShell @() 会把不可信内容拼进命令再执行，
+ *  属于注入面；单引号内不检测（内容是字面量）。双引号内仍检测 $()（bash 会展开）。 */
+export function detectCommandSubstitution(command) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (inSingle) continue;
+    if (ch === '`' && !inDouble) return true;                                  // bash 反引号
+    if (ch === '$' && command[i + 1] === '(') return true;                     // $() 子命令
+    if (!inDouble && (ch === '<' || ch === '>') && command[i + 1] === '(') return true; // 进程替换
+    if (ch === '@' && command[i + 1] === '(') return true;                     // PowerShell @()
+  }
+  return false;
+}
+
+/** 解码子进程输出：win32 上 cmd 默认 GBK、PowerShell 默认跟随控制台代码页，
+ *  直接按 utf8 解码中文会乱码。策略：utf8 解码若出现替换符（U+FFFD）比例高，
+ *  回退用 GBK 解码（TextDecoder('gbk') 在 Node 24 全量 ICU 下可用）。 */
+function decodeOutput(buf) {
+  const utf8 = buf.toString('utf8');
+  const bad = (utf8.match(/\uFFFD/g) ?? []).length;
+  if (bad === 0 || buf.length < 8) return utf8;
+  // 替换符占比超过 2% 才回退，避免个别二进制噪声触发误判
+  if (bad / utf8.length < 0.02) return utf8;
+  try {
+    const gbk = new TextDecoder('gbk').decode(buf);
+    return (gbk.match(/\uFFFD/g) ?? []).length < bad ? gbk : utf8;
+  } catch {
+    return utf8;
+  }
+}
 
 export function createServerPart(options = {}) {
   /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
@@ -146,7 +189,11 @@ export function createServerPart(options = {}) {
       let stderrHead = '';
       let stderrTail = '';
       let truncated = false;
+      let spawnError = '';
+      const stdoutChunks = [];
+      const stderrChunks = [];
       const push = (which, chunk) => {
+        (which === 'out' ? stdoutChunks : stderrChunks).push(chunk);
         const head = which === 'out' ? stdoutHead : stderrHead;
         const tail = which === 'out' ? stdoutTail : stderrTail;
         const text = chunk.toString('utf8');
@@ -176,19 +223,31 @@ export function createServerPart(options = {}) {
         clearTimeout(timer);
         abortSignal?.removeEventListener('abort', onAbort);
         inflight = null;
-        const joined = (which, h, t) => (h.length + t > BODY_LIMIT ? `${h}\n…[输出截断]…\n${t}` : `${h}${t}`);
+        // 输出统一走 decodeOutput（utf8 为主，GBK 回退），避免中文乱码
+        const stdoutFull = decodeOutput(Buffer.concat(stdoutChunks));
+        const stderrFull = decodeOutput(Buffer.concat(stderrChunks));
+        const cap = (s) => (s.length > BODY_LIMIT ? `${s.slice(0, HEAD_KEEP)}\n…[输出截断]…\n${s.slice(-TAIL_KEEP)}` : s);
         resolveExec({
-          stdout: joined('out', stdoutHead, stdoutTail),
-          stderr: joined('err', stderrHead, stderrTail),
+          stdout: cap(stdoutFull),
+          stderr: cap(stderrFull),
           exitCode: exitCode ?? (timedOut ? -1 : null),
           durationMs: Date.now() - started,
           truncated,
           timedOut,
           aborted: abortSignal?.aborted === true,
+          ...(spawnError ? { error: spawnError } : {}),
         });
       };
       child.on('close', (code, signal) => finish(code, signal));
-      child.on('error', (err) => { timedOut = false; finish(-1, null); child.stderr?.destroy(); try { child.stdout?.destroy(); } catch { /* */ } void err; });
+      // spawn 失败（命令不存在等）：error 事件后未必触发 close（win32 cmd 会自己打错误到
+      // stderr 并以 exit 1 关闭；posix 直接 error）。统一兜底，把失败原因带给模型。
+      child.on('error', (err) => {
+        spawnError = `spawn failed: ${err?.code ?? ''} ${err?.message ?? err}`.trim();
+        if (child.exitCode === null && child.signalCode === null && !child.killed) {
+          try { killTree(child); } catch { /* 已退出 */ }
+        }
+        finish(-1, null);
+      });
     });
   }
 
@@ -276,6 +335,17 @@ export function createServerPart(options = {}) {
       audit({ at: Date.now(), sessionId, command, verdict: 'denylist', mode: cfg.mode });
       res.writeHead(403, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'command matched denylist (not overridable)', code: 'EXEC_DENIED', denied: true }));
+    }
+
+    // ④' 命令替换检测：$()、反引号、<()、>()、@() 会把不可信内容拼进命令再执行，
+    //    是注入面（借鉴 Gemini CLI detectCommandSubstitution）。同样不可豁免。
+    if (detectCommandSubstitution(command)) {
+      audit({ at: Date.now(), sessionId, command, verdict: 'substitution', mode: cfg.mode });
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        error: 'command substitution detected ($(), backticks, <(), >(), @()) — blocked as injection risk',
+        code: 'EXEC_SUBSTITUTION', denied: true,
+      }));
     }
 
     // ⑤ 模式裁决：allowlist 前缀放行；yolo 全放；confirm 由编排方先行完成审批
