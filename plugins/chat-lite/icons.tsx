@@ -67,3 +67,8 @@ export function CopyIcon() {
 export function CheckIcon() {
   return <Icon size={14}><path d="m5 12 4 4L19 6" {...stroke} /></Icon>;
 }
+
+/** 行尾「可进入」指示（替代 › 这类平台相关符号字符） */
+export function ChevronRightIcon() {
+  return <Icon size={14}><path d="m9 5 7 7-7 7" {...stroke} /></Icon>;
+}

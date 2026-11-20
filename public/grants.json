@@ -102,7 +102,8 @@
         "cap.tool.fs",
         "cap.interactive",
         "cap.tool.render",
-        "cap.model.admin"
+        "cap.model.admin",
+        "cap.tool.ledger"
       ],
       "provides": [
         "cap.agent.loop"
@@ -155,6 +156,18 @@
       ],
       "events": [
         "artifact.created"
+      ]
+    },
+    "pocket-ledger": {
+      "capabilities": [
+        "cap.config"
+      ],
+      "provides": [
+        "cap.tool.ledger"
+      ],
+      "events": [
+        "tool-registered",
+        "ledger-changed"
       ]
     }
   }

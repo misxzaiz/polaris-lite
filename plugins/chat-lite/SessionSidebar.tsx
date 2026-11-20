@@ -16,6 +16,7 @@ export function SessionSidebar() {
   const createSession = useSessionStore((s) => s.createSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
+  const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   /** 正在设置工作区的会话 id（弹层） */
   const [wsPickerFor, setWsPickerFor] = useState<string | null>(null);
@@ -85,6 +86,11 @@ export function SessionSidebar() {
         <WorkspacePicker
           session={pickedSession}
           onPick={(workspaceId) => { setSessionWorkspace(pickedSession.id, workspaceId); setWsPickerFor(null); }}
+          onToggleLinked={(id) => {
+            const cur = pickedSession.linkedWorkspaceIds ?? [];
+            const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(0, 3);
+            setSessionLinkedWorkspaces(pickedSession.id, next);
+          }}
           onClose={() => setWsPickerFor(null)}
         />
       )}

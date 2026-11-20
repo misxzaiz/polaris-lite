@@ -127,3 +127,33 @@ lite 已有 tool 卡（bash 执行卡）。Polaris 的 question/form/confirm 本
 | 沙箱 | Chart iframe sandbox | 无需 iframe（受控 React） |
 
 结论：**可行，且比 Polaris 更简**（无 postMessage 协议面）。Polaris 的 iframe 仅服务于「AI 生成 HTML 图表」的隔离渲染；lite 的交互卡是结构化数据 + 受控渲染，不需要 iframe。
+
+---
+
+# 附二：输入区工作区选择 / 存储感知复核（2026-11-20，仅分析）
+
+> 实读当前代码后的纠偏：本仓库已有 `WorkspacePicker.tsx` + 会话级 `workspaceId`（commit `6c6bf53`/`afe3441`），但入口只在**会话侧栏文件夹按钮**；输入区「调谐」抽屉里的工作区是 `span` 只读 chip，点不动。所以需求不是从零做，而是**把已有 picker 接到输入区**并补齐「记住/关联/文件浏览器选择」。
+
+## 存储真相（四个键，三种寿命）
+
+| 状态 | 位置 | 寿命 / 丢失条件 |
+|---|---|---|
+| 布局工作区树 | `plite.workspace.v1`（宿主 localStorage） | 单浏览器 + 单 origin；换端口即另一份；脏数据备份 `.bak` 后回默认 |
+| 文件根白名单 | `<dataDir>/workspace-roots.json`（服务端） | 当前文件实为 `{"roots":[]}`（builtin 根合成）；换 `PLITE_DATA_DIR` / 换实例即空 |
+| 全局 activeRoot / linkedRoots | `config-manager.store.v1` → ns=`file-browser`, key=`prefs`（localStorage） | **依赖 config-manager 启用**；插件禁用 / 清 localStorage / 换 origin 即回 builtin，且无提示 |
+| 会话 ↔ workspaceId | `chat-lite.sessions.v1`（localStorage） | 800ms 防抖 + pagehide；1.5MB 超限从最旧会话开始丢；root id 失效时静默回落 |
+
+「老觉得会丢」的根因不是没存储，而是**存储分散 + 默认静默回落 + origin 隔离**：尤其 config-manager 一关，file-browser 偏好读不到，`activeRoot=null`；root 表被换 dataDir 清空后，会话里存的旧 `workspaceId` 解析不到，也不告诉用户。
+
+## 输入区改造建议（不新增按钮）
+
+沿用「调谐」抽屉：把现有只读 `chat-ws-chip` 变成可点击行，点击后**在抽屉内内联展开** `WorkspacePicker`（抽屉限高 + 内部滚动；禁止 fixed 浮层，仍受 shell-input 裁剪约束）。用户刚否掉了「新增控件/高低不齐」，所以不再加独立文件夹按钮或新 pill。
+
+Picker 四段：跟随全局（显式说明优先级）→ 最近使用 → 已登记根（名称+路径+当前✓）→ 从文件浏览器选择 / 输入路径登记。文件浏览器侧补一个「为本对话选工作区」拾取桥（复用现有树与 `/api/fs/roots/from-path`，选中目录自动登记后回传 root id 给会话）；关联根做主根之外的多选只读勾选，语义保持「主根 = bash cwd，关联 = files 只读」。
+
+## 必须一并处理的坑
+
+- `workspace-renamed` 已由 file-browser 发出，但 chat-lite 未监听、grants 也未登记 → 改名后输入区 chip 不更新；接输入区时一起补。
+- `WorkspacePicker.addAndPick` 用 `path.includes(label)` 猜新根，可能误绑同名/子串目录；应直接用服务端返回的新 root id。
+- 「记住选择」分三层：会话绑定（已有）、新会话默认继承、最近使用；后两层不要只放 config-manager，否则插件关掉就丢。
+- 真正多设备要服务端按登录用户存 prefs/绑定；当前会话本身在 localStorage，不同步，仅同步工作区偏好也会出现「选了但对话不在」的割裂。
