@@ -213,7 +213,7 @@ if (desc?.cap === 'cap.tool.browser') {
 
 ## 5. 安全模型
 
-1. **门禁**：`/api/browser/*` 全部走 `getSession`（cookie）或 `verifyTempToken`（本地回环 Bearer，二选一，file-browser 同款）；`PLITE_BROWSER=0` 一键整体禁用（公网穿透形态建议默认关）；
+1. **门禁**：`/api/browser/*` 全部走 `getSession`（cookie）或 `verifyTempToken`（本地回环 Bearer，二选一，file-browser 同款）；`PLITE_BROWSER=0` 一键整体禁用（**已定案：所有形态默认开启**，公网暴露由部署者自担时可手动设 0）；
 2. **导航围栏（lite 新增，browser-desk 没有——因为 Polaris 是本机桌面应用，lite 可能公网部署）**：`navigate/acquire/read(url)` 前解析目标 host：
    - 拒绝纯 IP 私有/环回/链路本地段（10/8、172.16/12、192.168/16、127/8、169.254/16、::1、fe80::/10）与 `.localhost/.local/.internal` 后缀——防 AI 被诱导探测内网/云元数据端点；
    - 拒绝非 http(s) scheme（file:/、data:/、chrome-devtools:/ 等）；
@@ -301,7 +301,7 @@ if (desc?.cap === 'cap.tool.browser') {
 | screencast 带宽 | 250ms 轮询 base64 JPEG 在多标签同开时可观 | 默认收起、仅选中标签开流；面板不可见时停轮询；帧尺寸上限 1280 |
 | prompt 缓存 | tools 集合新增 browser 条目会使既有会话首轮缓存 miss 一次 | 一次性成本；toolDefs 指纹机制已把影响限于一轮 |
 | 模型误用 evaluate | AI 可能倾向 evaluate 绕过交互工具 | descriptor 与 system prompt 明示「优先结构化交互工具」；审计可回溯 |
-| 公网默认值 | 浏览器能力在公网部署的默认开关与围栏档位 | P4 前需用户拍板：建议公网默认 `PLITE_BROWSER=0`，本机开发默认开 |
+| 公网默认值 | 浏览器能力在公网部署的默认开关与围栏档位 | **已拍板（2026-11-20）：所有形态默认开启**（`PLITE_BROWSER` 不设即开）；用户自担公网暴露风险时可再手动设 `0`。导航围栏（私有段/scheme 拒绝）保持默认生效 |
 
 ---
 
