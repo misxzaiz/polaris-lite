@@ -169,13 +169,13 @@ export const chatLitePlugin: LitePlugin = {
     // 工作区根改名/登记/删除：广播到输入区与选择器（原先只发不收，目录名会停在旧值）
     api.listen('workspace-renamed', () => notifyRootsChanged());
     // ---- 上下文透视（spec §5.3）：ctxStore 单写者由事件驱动，UI 只读 ----
-    // ai.usage：real-engine 流末发出（输入/输出 token、耗时、速率分母）
+    // ai.usage：real-engine 流末发出（输入/输出 token、缓存命中、耗时、速率分母）
     api.listen('cap.ai.chat:event', (envelope) => {
       const ev = envelope as { kind?: string; payload?: Record<string, unknown> };
       if (ev.kind !== 'ai.usage' || !ev.payload) return;
-      const p = ev.payload as { sessionId?: string; inputTokens?: number; outputTokens?: number; durationMs?: number; estimated?: boolean; model?: string; contextWindow?: number };
+      const p = ev.payload as { sessionId?: string; inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number };
       if (!p.sessionId) return;
-      useCtxStore.getState().applyUsage(p as { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; estimated?: boolean; model?: string; contextWindow?: number });
+      useCtxStore.getState().applyUsage({ ...p, sessionId: p.sessionId });
     });
     // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
     api.listen('cap.agent.loop:event', (envelope) => {

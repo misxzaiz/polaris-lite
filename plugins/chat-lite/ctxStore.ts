@@ -13,6 +13,10 @@ export interface UsageRecord {
   outputTokens: number;
   durationMs: number;
   tps: number; // outputTokens / durationMs * 1000
+  /** 命中缓存的输入 token（网关未回时缺省） */
+  cachedTokens?: number;
+  /** 写入缓存的输入 token（缓存创建） */
+  cacheCreationTokens?: number;
   estimated?: boolean;
   model?: string;
 }
@@ -87,13 +91,15 @@ export interface CtxState {
   history: UsageRecord[];
   compacts: CompactRecord[];
   compactFailed?: string;
+  /** 会话累计缓存命中/未命中 token（仅累计有缓存数据的轮次，供占比计算） */
+  cacheTotal?: { cached: number; creation: number; inputWithCache: number; rounds: number };
 }
 
 interface CtxStore {
   ctx: Record<string, CtxState>;
   policies: Record<string, CtxPolicy>;
   /** ai.usage（real-engine 流末发出） */
-  applyUsage: (p: { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; estimated?: boolean; model?: string; contextWindow?: number }) => void;
+  applyUsage: (p: { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number }) => void;
   /** context.snapshot（agent-loop 每轮结束） */
   applySnapshot: (p: { sessionId: string; usedTokens?: number; window?: number; percent?: number; messages?: number; compacted?: boolean; exhausted?: boolean }) => void;
   applyCompacting: (sessionId: string) => void;
@@ -114,7 +120,7 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
   ctx: {},
   policies: loadPolicies(),
 
-  applyUsage: (p) => {
+  applyUsage: (p: { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number }) => {
     if (!p.sessionId) return;
     const rec: UsageRecord = {
       at: Date.now(),
@@ -122,11 +128,26 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
       outputTokens: Math.max(0, Number(p.outputTokens ?? 0)),
       durationMs: Math.max(1, Number(p.durationMs ?? 1)),
       tps: p.outputTokens ? (Number(p.outputTokens) / Math.max(1, Number(p.durationMs ?? 1))) * 1000 : 0,
+      ...(p.cachedTokens !== undefined && p.cachedTokens > 0 ? { cachedTokens: Math.floor(p.cachedTokens) } : {}),
+      ...(p.cacheCreationTokens !== undefined && p.cacheCreationTokens > 0 ? { cacheCreationTokens: Math.floor(p.cacheCreationTokens) } : {}),
       ...(p.estimated ? { estimated: true } : {}),
       ...(p.model ? { model: p.model } : {}),
     };
     set((st) => {
       const cur = st.ctx[p.sessionId] ?? emptyCtx();
+      // 缓存累计：仅累计「网关回了缓存数据」的轮次（rec.cachedTokens 存在才计入），
+      // 未回缓存的轮次不稀释占比。命中占比 = cached / (input + cached)——input 口径
+      // 为未命中部分（对齐 main 仓 usage_db 的 cache_hit_rate 成本口径 B）。
+      let cacheTotal = cur.cacheTotal;
+      if (rec.cachedTokens !== undefined) {
+        const prev = cur.cacheTotal ?? { cached: 0, creation: 0, inputWithCache: 0, rounds: 0 };
+        cacheTotal = {
+          cached: prev.cached + rec.cachedTokens,
+          creation: prev.creation + (rec.cacheCreationTokens ?? 0),
+          inputWithCache: prev.inputWithCache + rec.inputTokens,
+          rounds: prev.rounds + 1,
+        };
+      }
       return {
         ctx: {
           ...st.ctx,
@@ -134,6 +155,7 @@ export const useCtxStore = create<CtxStore>((set, get) => ({
             ...cur,
             lastUsage: rec,
             history: [...cur.history, rec].slice(-16),
+            ...(cacheTotal ? { cacheTotal } : {}),
             ...(p.contextWindow && p.contextWindow > 0 ? { window: p.contextWindow } : {}),
             // 真实 usage 优先刷新水位（估算值不覆盖真实值）
             ...(!p.estimated && rec.inputTokens > 0 ? { usedTokens: rec.inputTokens } : {}),

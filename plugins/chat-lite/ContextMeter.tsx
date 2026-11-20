@@ -75,6 +75,22 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
         <MeterRow label="最近输出速率" value={ctx.lastUsage ? `${ctx.lastUsage.tps.toFixed(1)} tok/s` : '—'} />
         {ctx.lastUsage?.model && <MeterRow label="响应模型" value={ctx.lastUsage.model} />}
         {ctx.lastUsage?.estimated && <MeterRow label="口径" value="估算（供应商未回 usage）" />}
+        {ctx.cacheTotal && ctx.cacheTotal.rounds > 0 && (() => {
+          const { cached, creation, inputWithCache } = ctx.cacheTotal;
+          // 命中占比 = 缓存读取 /（未命中输入 + 缓存读取），对齐 main 仓 usage_db 成本口径 B
+          const denom = inputWithCache + cached;
+          const pct = denom > 0 ? cached / denom : 0;
+          return (
+            <>
+              <MeterRow label="缓存命中" value={`${fmtTokens(cached)} tokens（${Math.round(pct * 100)}%）`} />
+              {creation > 0 && <MeterRow label="缓存写入" value={`${fmtTokens(creation)} tokens`} />}
+              <div className="ctx-cache-bar" aria-hidden="true">
+                <span className="ctx-cache-fill" style={{ width: `${Math.min(100, pct * 100)}%` }} />
+              </div>
+              <div className="ctx-detail-note">缓存命中占比：最近 {ctx.cacheTotal.rounds} 轮有缓存数据的请求，{fmtTokens(cached)} / {fmtTokens(denom)} 输入 tokens 命中缓存（更低价计费）</div>
+            </>
+          );
+        })()}
         {ctx.exhausted && <MeterRow label="自动压缩" value="已熔断（压缩无效，本会话不再自动压缩）" />}
       </div>
 
@@ -83,12 +99,13 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
           <div className="ctx-detail-heading">最近轮次</div>
           <table className="ctx-usage-table">
             <thead>
-              <tr><th>输入</th><th>输出</th><th>速率</th></tr>
+              <tr><th>输入</th><th>缓存</th><th>输出</th><th>速率</th></tr>
             </thead>
             <tbody>
               {history.map((h, i) => (
                 <tr key={`${h.at}-${i}`}>
                   <td>{fmtTokens(h.inputTokens)}{h.estimated ? '*' : ''}</td>
+                  <td>{h.cachedTokens ? fmtTokens(h.cachedTokens) : '—'}</td>
                   <td>{fmtTokens(h.outputTokens)}</td>
                   <td>{h.outputTokens > 0 ? `${h.tps.toFixed(1)} tok/s` : '—'}</td>
                 </tr>

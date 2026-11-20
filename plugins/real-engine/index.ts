@@ -22,24 +22,36 @@ interface ModelCaps {
   vision: boolean;
 }
 
-/** ai.usage 事件载荷（spec：docs/context-insight-plan.md §4.1） */
+/** ai.usage 事件载荷（spec：docs/context-insight-plan.md §4.1；v2 增缓存字段） */
 interface AiUsagePayload {
   sessionId: string;
   messageId: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** 命中缓存读取的输入 token（供应商按更低单价计费）；网关未回时缺省 */
+  cachedTokens?: number;
+  /** 写入缓存的输入 token（缓存创建）；部分网关回 prompt_cache_miss_tokens */
+  cacheCreationTokens?: number;
   durationMs: number;
   model?: string;
   contextWindow?: number;
   estimated?: boolean;
 }
 
-/** OpenAI 兼容 usage 块（流末帧；字段名按协议，camelCase 由本层转换） */
+/**
+ * OpenAI 兼容 usage 块（流末帧；字段名按协议，camelCase 由本层转换）。
+ * 缓存字段提取链对齐 simple_ai stream.rs：标准 `prompt_tokens_details.cached_tokens`，
+ * 兼容 DeepSeek/GLM 变体 `prompt_cache_hit_tokens`；缓存写入取
+ * `prompt_tokens_details.cache_creation_tokens` / 变体 `prompt_cache_miss_tokens`。
+ */
 interface WireUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number; cache_creation_tokens?: number };
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
 /** 上下文估算：Σ消息字符 ÷ 4（中英混合保守近似，对齐 simple_ai CHARS_PER_TOKEN） */
@@ -118,11 +130,21 @@ function emitUsage(
     const inputTokens = Math.max(0, Number(wireUsage.prompt_tokens ?? 0));
     const outputTokens = Math.max(0, Number(wireUsage.completion_tokens ?? 0));
     const total = Number(wireUsage.total_tokens ?? inputTokens + outputTokens);
+    // 缓存字段提取链对齐 simple_ai stream.rs：标准 details 优先，DeepSeek/GLM 变体兜底；
+    // 网关未回时缺省（0 视为「无数据」不 emit，避免把缓存占比误置 0%）。
+    const cached = Number(
+      wireUsage.prompt_tokens_details?.cached_tokens ?? wireUsage.prompt_cache_hit_tokens ?? 0,
+    );
+    const cacheCreation = Number(
+      wireUsage.prompt_tokens_details?.cache_creation_tokens ?? wireUsage.prompt_cache_miss_tokens ?? 0,
+    );
     const payload: AiUsagePayload = {
       sessionId, messageId,
       inputTokens,
       outputTokens,
       totalTokens: Math.max(0, Number.isFinite(total) ? total : inputTokens + outputTokens),
+      ...(Number.isFinite(cached) && cached > 0 ? { cachedTokens: Math.floor(cached) } : {}),
+      ...(Number.isFinite(cacheCreation) && cacheCreation > 0 ? { cacheCreationTokens: Math.floor(cacheCreation) } : {}),
       durationMs,
       ...(model ? { model } : {}),
       ...(contextWindow ? { contextWindow } : {}),

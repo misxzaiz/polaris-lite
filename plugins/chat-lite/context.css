@@ -111,6 +111,22 @@
 .ctx-detail-note { font-size: 10px; color: var(--text-faint); margin-top: 4px; }
 .ctx-compact-error { color: var(--plite-warning); font-size: var(--plite-fs-sm); }
 
+/* 缓存命中占比细条 */
+.ctx-cache-bar {
+  height: 4px;
+  margin: 6px 0 2px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.ctx-cache-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--plite-success);
+  transition: width 400ms var(--plite-ease);
+}
+
 .ctx-usage-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .ctx-usage-table th {
   text-align: left;
