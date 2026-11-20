@@ -8,6 +8,8 @@
 
 Polaris 现状（2026-11-18，HEAD `ff386fad`）：前端 ~5.0 万行 TS + 后端 ~10.1 万行 Rust，对话域与业务面板已大量插件化（chat-desk 以 mainSurface 席位接管对话），但核心仍保留 ai_chat_core、storage_exec、AI 引擎、proxy 等业务代码。本项目的目标是把「最后一公里」走完：核心只留平台能力（cap 总线、插件生命周期、会话契约、主题/i18n/窗口壳），AI 对话 UI 与全部业务面板都由插件提供。
 
+**落地形态（2026-11 更新）**：插件是**双入口**——`plugins/<id>/index.ts`（UI 半边）+ 可选 `plugins/<id>/server.mjs`（server 半边，Node 中间件）。宿主 `server/` 只保留平台能力（鉴权/供应商/模型中继/静态服务），领域能力（文件浏览 `/api/fs/*`、工具执行 `/api/tool/*`）均在插件 server 半边，经 `plugins/server-registry.mjs` 装配，宿主零领域 import。约束细节见 [docs/plugin-contract.md](docs/plugin-contract.md) 的「双入口」节；`npm test` 有 `server-boundary.test.mjs` 守卫这条边界。
+
 ## 目录
 
 ```
@@ -19,6 +21,19 @@ polaris-lite/
 │   ├── judging/      # 五份评委独立评分表（judge-1~5）
 │   └── verdict.md    # 汇总排名 + 冠军方案 + 落地路线建议
 └── README.md
+```
+
+实现侧（设计方案集的落地）：
+
+```
+polaris-lite/
+├── src/                    # 宿主前端壳：cap 总线 / 插件生命周期 / 布局树 / 主题
+├── server/                 # 宿主服务端：仅平台能力（auth/provider/relay/静态服务）
+├── plugins/<id>/
+│   ├── index.ts            # UI 半边 + manifest
+│   └── server.mjs          # server 半边（可选，Node 中间件）
+├── plugins/server-registry.mjs  # 服务端插件清单（对称于前端 build-plugins.mjs 清单）
+└── tests/server-boundary.test.mjs  # 「核心零业务」服务端边界守卫
 ```
 
 ## 十个方案速览

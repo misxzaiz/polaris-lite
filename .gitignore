@@ -19,3 +19,8 @@ Thumbs.db
 .idea
 .vscode
 *.log
+
+# 调试/诊断产物（CDP 探针、网络导出、浏览器用户数据）——不属于交付
+tests/_*
+tests/.chrome-net/
+docs/*.png

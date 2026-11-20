@@ -29,11 +29,18 @@ const DOMAIN_ENDPOINTS = ['/api/fs/', '/api/tool/'];
 /** 已迁移到插件的领域模块文件名（防止有人重新在 server/ 下建同名文件） */
 const DOMAIN_MODULES = ['fs-api.mjs', 'tool-exec.mjs'];
 
+/** 剥离 JS 注释：注释里提到领域端点（如说明凭证用途）属正常文档，不算越界实现 */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
+
 test('server/ 宿主目录不含任何领域端点或领域模块', () => {
   const hits = [];
   for (const file of readdirSync(serverDir)) {
     if (!file.endsWith('.mjs')) continue;
-    const text = readFileSync(resolve(serverDir, file), 'utf8');
+    const text = stripComments(readFileSync(resolve(serverDir, file), 'utf8'));
     for (const ep of DOMAIN_ENDPOINTS) {
       if (text.includes(ep)) hits.push(`${file} → 领域端点 ${ep}`);
     }

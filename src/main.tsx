@@ -31,6 +31,12 @@ async function bootstrap(): Promise<void> {
     await import('react')
   ).default ?? (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT__;
 
+  // react-dom 同理：插件经 import map 的 shim 取 createPortal 时必须与宿主同一实例，
+  // 否则 portal 出来的子树与主应用不共享 reconciler（hooks 失效、点击无响应）。
+  const reactDomMod = await import('react-dom');
+  (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT_DOM__ =
+    (reactDomMod as unknown as { default?: unknown }).default ?? reactDomMod;
+
   // 1. 安装核心内建能力（meta 与 layout 都是核心自有 cap，不属于任何业务插件）
   installMetaCapability(host.bus, () => host.policyTable());
   // 布局能力走总线：授权、归属校验、审计都复用既有机制，不开第二写通道

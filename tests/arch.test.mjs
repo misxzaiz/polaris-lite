@@ -24,6 +24,9 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CODE_RE = /\.(ts|tsx|mjs|js)$/;
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);
+/** vite 加载 vite.config.ts 时会短暂生成 vite.config.ts.timestamp-<digits>.mjs，
+ *  构建与测试并发时它可能在 readdir 之后被删掉 → ENOENT 假红。统一排除这类临时文件。 */
+const TEMP_RE = /\.timestamp-\d+\./;
 
 /** 递归收集源码文件（相对 root 的 posix 路径） */
 function collect(relDir) {
@@ -32,6 +35,7 @@ function collect(relDir) {
   return readdirSync(abs, { recursive: true })
     .map((p) => p.replace(/\\/g, '/'))
     .filter((p) => CODE_RE.test(p))
+    .filter((p) => !TEMP_RE.test(p))
     .filter((p) => !p.split('/').some((seg) => SKIP_DIRS.has(seg)))
     .map((p) => posix.join(relDir.replace(/\\/g, '/'), p));
 }
@@ -56,6 +60,7 @@ const coreFiles = collect('src');
 /** 插件 CSS 不受 CODE_RE 覆盖，单独收集（含 dist 之外的源样式） */
 const pluginCssFiles = readdirSync(resolve(root, 'plugins'), { recursive: true })
   .map((p) => p.replace(/\\/g, '/'))
+  .filter((p) => !TEMP_RE.test(p))
   .filter((p) => p.endsWith('.css'))
   .filter((p) => !p.split('/').some((seg) => SKIP_DIRS.has(seg)))
   .map((p) => posix.join('plugins', p));
@@ -97,8 +102,12 @@ test('插件只允许依赖声明过的外部包', () => {
   const ALLOWED = new Set(['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'zustand', '@sdk']);
   const violations = [];
   for (const file of pluginFiles) {
+    // server 半边跑在 Node 而非浏览器：node:* 内置模块是平台能力，不需要进 import map。
+    // 它仍受上面两条约束（不得引用宿主实现 / 其它插件）——这里只放开内置模块。
+    const isServerHalf = /(^|\/)server\.mjs$/.test(file);
     for (const spec of specifiers(readFileSync(resolve(root, file), 'utf8'))) {
       if (spec.startsWith('.') || spec.startsWith('/')) continue; // 自身相对/绝对
+      if (isServerHalf && spec.startsWith('node:')) continue;
       const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
       if (!ALLOWED.has(pkg) && !ALLOWED.has(spec)) violations.push(`${file} → ${spec}`);
     }

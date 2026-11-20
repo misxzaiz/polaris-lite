@@ -35,6 +35,33 @@
 - 插件不是「不能自由」，而是「在自己的容器内无限自由，在共享区域必须协商」。
 - 一份插件 CSS 出问题只应该坏它自己那一块；如果它能改掉宿主的 tab 栏，那就是契约失效。
 
+### 双入口：插件不只有 UI 半边
+
+上面的三层边界约束的是**浏览器里的 UI 半边**。但有些能力浏览器做不到——读本地文件系统、
+spawn 子进程。这类能力的实现放在插件的 **server 半边**：
+
+```
+plugins/<id>/
+├── index.ts        # UI 半边：组件 + manifest，浏览器装配
+└── server.mjs      # server 半边（可选）：Node 中间件，宿主装配
+```
+
+- **声明**：`plugins/server-registry.mjs` 登记 `{ id, entry }`（与前端 `build-plugins.mjs`
+  清单对称）。新增后端能力 = 写 `plugins/<id>/server.mjs` + 注册表加一行，**宿主零改动**。
+- **契约**：server 模块导出 `createServerPart({ dataDir, getSession, store, policy, logger })`
+  → 返回 connect 风格中间件函数。宿主只注入这五项平台能力，插件拿不到其它宿主单例
+  （与前端 `SlotHostApi` 的能力最小化原则一致）。
+- **装载**：`server/host.mjs` 顶层 `await` 解析注册表，按清单顺序装配；加载失败 fail-fast
+  （缺文件 / 未导出 / 抛错直接让宿主启动失败），不静默 404。
+- **边界**：`server/` 目录只放平台能力（auth / provider 配置 / 模型中继 / 静态服务），
+  **不得出现任何领域端点**（`/api/fs/*`、`/api/tool/*` 等）。由 `tests/server-boundary.test.mjs`
+  在测试期强制；`tests/arch.test.mjs` 要求 server 半边只依赖 `node:*` 与自身相对路径。
+- **删除即降级**：删掉某个 server 半边，宿主照常启动，只是该能力端点 404——这是判断
+  「领域是否真的解耦」的试金石。
+
+> 这条契约是补上的历史欠账：早期 `server/fs-api.mjs` / `tool-exec.mjs` 直接住在宿主里，
+> 导致每加一个功能都要改宿主。2026-11 已迁移为插件 server 半边，本节点记录现行约束。
+
 ---
 
 ## 二、槽位贡献
@@ -344,3 +371,6 @@ install 能力 → 注册 host.slot.* → workspaceStore.restore()
 | 恢复与折叠的失败姿态（脏数据回默认 + 备份） | `store.restore` / `store.pruneDeadViews` | `tests/workspace-store.test.mjs` |
 | 归属与二级权限（只能动自己的视图） | `layoutCap.assertCanTouch` | `tests/workspace-cap.test.mjs` |
 | 插件 CSS 不得触碰宿主命名空间 | `lintPluginCss` | `tests/arch.test.mjs` |
+| server 半边导出契约 + fail-fast 装载 | `plugins/server-registry.mjs`（`loadServerParts`） | `tests/server-boundary.test.mjs` |
+| `server/` 不得出现领域端点；host 只经注册表装配 | —（静态结构约束） | `tests/server-boundary.test.mjs` |
+| server 半边只依赖 `node:*` 与自身相对路径 | `tests/arch.test.mjs` 的 server 半边例外分支 | `tests/arch.test.mjs` |
