@@ -37,7 +37,10 @@ const DENYLIST = [
   /rm\s+-[a-z]*r[a-z]*f/i,
   /curl[^|;&]*\|\s*(sudo\s+)?(ba)?sh/i,                       // curl | sh 管道
   /wget[^|;&]*\|\s*(sudo\s+)?(ba)?sh/i,
-  /\b(format|mkfs|diskpart|fdisk)\b/i,                        // 全盘破坏
+  // format/mkfs 等：仅当作为一条命令的「首词」（或 ;&| 后的新命令首词）才算全盘破坏。
+  // 不能对整串 \b 匹配——PowerShell 的 -Format 参数与管道后的 Format-List/Table 都会被误伤；
+  // format 后面跟盘符、/开关、空格或结尾才是真的格式化命令。
+  /(^|[;&|]\s*)(format(\s+[a-z]:|\/| |$)|mkfs(\.ext[234]|\.vfat|\.ntfs)?\s|diskpart|fdisk)/i,
   /\b(shutdown|reboot|poweroff)\b/i,
   /\breg\s+(add|delete)\b/i,                                  // 注册表
   /\bschtasks\b/i,                                            // 计划任务
