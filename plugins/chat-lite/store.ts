@@ -12,6 +12,7 @@
 import { create } from 'zustand';
 import type { ChatMessage, ChatSession } from '@sdk';
 import type { Attachment } from './attachments';
+import { loadWorkspacePrefs } from './workspace-prefs';
 
 const STORAGE_KEY = 'chat-lite.sessions.v1';
 const PERSIST_DEBOUNCE_MS = 800;
@@ -55,6 +56,7 @@ export interface ToolCardMessage {
 /** assistant 消息的内容块（Polaris ContentBlock 收敛版）：按事件到达序追加，保序交错 */
 export type AsstBlock =
   | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
   | { type: 'tool'; card: ToolCardData }
   | { type: 'interactive'; card: InteractiveCardData }
   | { type: 'artifact'; card: ArtifactCardData };
@@ -122,6 +124,8 @@ interface PersistShape {
 type ChatSessionShape = Omit<ChatSession, 'messages'> & {
   /** 会话绑定的文件工作区根 id（file-browser roots.id；缺省=跟随全局默认） */
   workspaceId?: string;
+  /** 关联只读目录 root id：可被 files 工具读取，但 bash 不在此执行、不可写 */
+  linkedWorkspaceIds?: string[];
 };
 
 interface SessionState {
@@ -134,6 +138,8 @@ interface SessionState {
   renameSession: (id: string, title: string) => void;
   /** 设置/清除会话绑定的文件工作区根 id（undefined=跟随全局默认） */
   setSessionWorkspace: (id: string, workspaceId: string | undefined) => void;
+  /** 设置会话的关联只读目录（最多 3 个；主目录自动排除） */
+  setSessionLinkedWorkspaces: (id: string, linked: string[]) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -208,7 +214,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createSession: (title) => {
     const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const session: ChatSession = { id, title: title ?? '新会话', messages: [], createdAt: Date.now() };
+    // 新会话默认绑定：用户显式设过「新对话默认使用」才继承，否则跟随全局（undefined）
+    const defaultWs = loadWorkspacePrefs().defaultWorkspaceId;
+    const session: ChatSessionShape & { messages: StoreMessage[] } = {
+      id, title: title ?? '新会话', messages: [], createdAt: Date.now(),
+      ...(defaultWs ? { workspaceId: defaultWs } : {}),
+    };
     set((st) => ({ sessions: [session, ...st.sessions], activeId: id }));
     schedulePersist(get);
     return id;
@@ -226,7 +237,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setSessionWorkspace: (id, workspaceId) => {
     set((st) => ({
-      sessions: st.sessions.map((s) => (s.id === id ? { ...s, workspaceId } : s)),
+      sessions: st.sessions.map((s) => {
+        if (s.id !== id) return s;
+        // 主目录与关联目录互斥：新主目录从关联列表里剔除，避免同一目录两种语义
+        const linked = (s.linkedWorkspaceIds ?? []).filter((x) => x !== workspaceId);
+        return {
+          ...s,
+          workspaceId,
+          ...(linked.length !== (s.linkedWorkspaceIds ?? []).length ? { linkedWorkspaceIds: linked } : {}),
+        };
+      }),
+    }));
+    schedulePersist(get);
+  },
+
+  setSessionLinkedWorkspaces: (id, linked) => {
+    set((st) => ({
+      sessions: st.sessions.map((s) => (s.id === id ? { ...s, linkedWorkspaceIds: linked } : s)),
     }));
     schedulePersist(get);
   },
@@ -282,6 +309,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               };
             }
             return { ...cur, blocks: [...blocks, block], content: (cur.content ?? '') + block.text };
+          }
+          // thinking 块同构合并（进末尾 thinking 块，无则新建）；不进 content 镜像——
+          // content 只承载可见正文，思考文本不参与历史映射与 ai-events 统计
+          if (block.type === 'thinking') {
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'thinking') {
+              return {
+                ...cur,
+                blocks: [...blocks.slice(0, -1), { type: 'thinking' as const, text: last.text + block.text }],
+              };
+            }
+            return { ...cur, blocks: [...blocks, block] };
           }
           // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive/artifact 卡原样保留
           const next: AsstBlock =

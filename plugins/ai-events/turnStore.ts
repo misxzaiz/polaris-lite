@@ -18,6 +18,7 @@
  * 而引擎原始事件的 messageId 是 `${assistantId}::t${turn}`。含 `::t` 的一律跳过，
  * 否则同一段 delta 会被累加两次。
  */
+import { redactSecrets } from './redact';
 
 const DB_NAME = 'plite-ai-events';
 /** 2：新增 requests 存储（HTTP 请求取证，见 netStore.ts） */
@@ -377,7 +378,8 @@ export function ingest(raw: unknown): void {
       const prompt = pickStr(payload, 'text');
       if (prompt === undefined) return;
       const d = ensureDraft(sessionId, messageId, pickNum(payload, 'at'));
-      d.prompt = prompt;
+      // 用户输入可能含密钥/口令，落库前同样脱敏（与 netTap 共用规则）
+      d.prompt = redactSecrets(prompt) ?? prompt;
       const atts = payload.attachments;
       if (Array.isArray(atts)) {
         d.attachments = atts.filter((a): a is string => typeof a === 'string');
