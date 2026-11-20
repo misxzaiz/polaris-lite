@@ -437,6 +437,18 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     const acc = usageAcc.get(sessionId) ?? new UsageAccumulator();
     usageAcc.set(sessionId, acc);
     const policy = { ...DEFAULT_CTX_POLICY, ...(ctxPolicies.get(sessionId) ?? {}) };
+    // 窗口解析：会话还没有 ai.usage（首轮/供应商不回 usage）时主动经 cap.model.admin
+    // 预解析当前模型的 maxInputTokens——否则压缩阈值与水位分母会一直停在默认 200k，
+    // 用户把供应商输入 token 改成 1m 也不生效。解析失败回退默认值。
+    if (!ctxWindows.has(sessionId)) {
+      try {
+        const res = await hostApi.dispatch<{ config?: { activeModel?: string; models?: { id?: string; capabilities?: { maxInputTokens?: number } }[] } }>({ target: 'cap.model.admin', action: 'resolveActive' });
+        const cfg = res.ok ? res.data?.config : undefined;
+        const model = cfg?.models?.find((m) => m.id && m.id === cfg?.activeModel) ?? cfg?.models?.[0];
+        const win = Number(model?.capabilities?.maxInputTokens ?? 0);
+        if (Number.isFinite(win) && win > 0) ctxWindows.set(sessionId, win);
+      } catch { /* resolveActive 不可用：回退默认窗口 */ }
+    }
     const window = ctxWindows.get(sessionId) ?? DEFAULT_CONTEXT_WINDOW;
 
     /** 非流式补全：复用 /api/model-relay（key 在服务端注入），摘要请求不进 shadow */

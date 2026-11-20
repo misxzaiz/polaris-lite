@@ -457,8 +457,6 @@ export function ChatInput() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-        {/* 上下文水位 + token 速率状态条（spec §5.3；无数据时自身不渲染） */}
-        <ContextMeter />
         {attachErr && <div className="chat-input-warn">{attachErr}</div>}
         <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
         <textarea
@@ -522,6 +520,8 @@ export function ChatInput() {
             </div>
         </div>
         <div className="chat-input-btns">
+          {/* 上下文进度圆圈（spec §5.3 v2）：占位极小；点击经 portal 在输入条上方展开详情 */}
+          <ContextMeter />
           <button
             className="chat-send attach"
             onClick={() => fileRef.current?.click()}

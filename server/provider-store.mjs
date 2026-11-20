@@ -19,6 +19,34 @@ export function maskKey(key) {
   return `${key.slice(0, 3)}***${key.slice(-4)}`;
 }
 
+/**
+ * 宽松解析 token 数量（能力字段的第二道防线）：接受数字 / "1m" / "1M" / "200k" /
+ * "128000" / "1,000,000"；非法返回 null。此前 `Number(x)||0` 会把 "1m" 变 NaN→0、
+ * 把剥掉后缀的 "1" 原样收下——上下文窗口于是永远回落默认 200k。与前端
+ * plugins/model-admin/tokens.ts 的 parseTokenCount 同语义（两半边各自独立实现，
+ * server 半边不 import 插件 TS）。
+ */
+export function parseTokenCount(raw) {
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw < 0) return null;
+    return Math.floor(raw);
+  }
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim().replace(/[,\s_]/g, '');
+  if (s === '') return 0; // 清空 = 未知
+  const m = /^(\d+(?:\.\d+)?)([kKmM]?)$/.exec(s);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const mult = m[2] === 'm' || m[2] === 'M' ? 1e6 : m[2] === 'k' || m[2] === 'K' ? 1e3 : 1;
+  return Math.floor(n * mult);
+}
+
+function tokenCap(m, key) {
+  const parsed = parseTokenCount(m?.capabilities?.[key]);
+  return parsed ?? 0; // 非法字面量归 0（=未知），绝不吞成错误值
+}
+
 /** 校验并规整一条供应商配置；apiKey 为空表示「保持原值」（编辑场景） */
 function normalize(input, prev) {
   const baseURL = String(input.baseURL ?? '').trim().replace(/\/+$/, '');
@@ -27,8 +55,8 @@ function normalize(input, prev) {
         .map((m) => ({
           id: String(m?.id ?? '').trim(),
           capabilities: {
-            maxInputTokens: Number(m?.capabilities?.maxInputTokens ?? 0) || 0,
-            maxOutputTokens: Number(m?.capabilities?.maxOutputTokens ?? 0) || 0,
+            maxInputTokens: tokenCap(m, 'maxInputTokens'),
+            maxOutputTokens: tokenCap(m, 'maxOutputTokens'),
             effort: m?.capabilities?.effort ?? null,
             vision: m?.capabilities?.vision === true,
             ...(m?.capabilities?.detected ? { detected: m.capabilities.detected } : {}),

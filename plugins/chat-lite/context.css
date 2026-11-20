@@ -1,71 +1,72 @@
-/* ContextMeter：上下文水位 + token 速率状态条与详情抽屉。
-   颜色一律走主题 token；容器内 absolute 定位（不使用 fixed，遵守插件 CSS 门禁）。 */
+/* ContextMeter：上下文进度圆圈 + 详情抽屉（v2）。
+   圆圈嵌在输入区按钮行（24px，占位极小）；点击后抽屉 portal 到 body、
+   在输入条上方展开（宿主 .shell-input overflow:hidden 会裁内联面板）。
+   颜色一律走主题 token；不用 fixed（插件 CSS 门禁）。 */
 
-.ctx-meter {
+/* ===== 进度圆圈（按钮行内联） ===== */
+.ctx-orb {
   position: relative;
-  width: min(100%, 840px);
-  margin: 0 auto 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   flex: 0 0 auto;
-}
-.ctx-meter-bar {
-  width: 100%;
-  height: 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--plite-radius-sm);
-  background: var(--bg-translucent);
-  color: var(--text-faint);
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
   cursor: pointer;
-  font-size: var(--plite-fs-xs);
-  transition: border-color var(--plite-dur), color var(--plite-dur);
+  transition: transform var(--plite-dur), background var(--plite-dur);
 }
-.ctx-meter-bar:hover { border-color: var(--border-strong); color: var(--text-dim); }
-.ctx-meter-label { letter-spacing: 0.06em; }
-.ctx-meter-track {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--bg-hover);
-  overflow: hidden;
-}
-.ctx-meter-fill {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  transition: width 400ms var(--plite-ease), background var(--plite-dur);
-}
-.ctx-meter-value { font-family: var(--plite-font-mono); font-size: 10.5px; }
-.ctx-meter-rate { color: var(--text-faint); font-family: var(--plite-font-mono); font-size: 10.5px; }
-.ctx-meter-status.compacting { color: var(--plite-warning); }
-.ctx-meter-flag {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 10px;
-  color: var(--text-dim);
-}
-.ctx-meter-flag.danger { color: var(--plite-danger); border-color: var(--plite-danger); }
-
-/* 详情抽屉：容器内 absolute 上浮 */
-.ctx-detail {
+.ctx-orb:hover { background: var(--accent-soft); transform: scale(1.08); }
+.ctx-orb:active { transform: scale(0.96); }
+.ctx-orb:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); }
+.ctx-orb svg { display: block; }
+/* 环内百分比数字：8.5px 刚好落在 r=10 环内 */
+.ctx-orb-text {
   position: absolute;
-  bottom: 28px;
-  left: 0;
-  right: 0;
-  max-height: min(60dvh, 420px);
-  overflow-y: auto;
-  padding: 14px;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8.5px;
+  font-weight: 600;
+  font-family: var(--plite-font-mono);
+  letter-spacing: -0.02em;
+  pointer-events: none;
+}
+/* 压缩中：外圈旋转段 */
+.ctx-orb-spin { animation: ctx-orb-rotate 900ms linear infinite; transform-origin: 12px 12px; }
+@keyframes ctx-orb-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ===== 详情抽屉（portal 到 body，absolute 贴在圆圈上方） ===== */
+.ctx-detail-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 79;
+  background: transparent;
+  cursor: default;
+}
+.ctx-detail-float {
+  position: absolute;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--plite-shadow-2);
-  z-index: 30;
+  box-shadow: var(--plite-shadow-2), 0 18px 48px rgba(0, 0, 0, 0.18);
   animation: ctx-detail-enter 160ms var(--plite-ease) both;
 }
 @keyframes ctx-detail-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ctx-detail {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+/* ===== 抽屉内部（沿用 v1 分节样式） ===== */
 .ctx-detail-head {
   display: flex;
   align-items: center;

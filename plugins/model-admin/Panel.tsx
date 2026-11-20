@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import type { SlotHostApi } from '@sdk';
 import type { ProviderConfig, ModelInfo, PublicProvider } from './index';
+import { parseTokenCount, formatTokenCount } from './tokens';
 
 let api: SlotHostApi | null = null;
 export function setPanelApi(a: SlotHostApi | null): void { api = a; }
@@ -41,6 +42,9 @@ export function ModelAdminPanel() {
   const [modelsText, setModelsText] = useState('');
   const [armDelete, setArmDelete] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState<string | null>(null);
+  /** token 输入框的原始文本（模型 id → 正在编辑的字面量）：允许「1m」「200k」等写法，
+   *  解析合法即写回能力值；显示时未编辑的模型回退为格式化数值。 */
+  const [tokenText, setTokenText] = useState<Record<string, string>>({});
 
   const refresh = async () => {
     if (!api) return;
@@ -187,7 +191,7 @@ export function ModelAdminPanel() {
     else if (m.capabilities.detected === 'builtin') out.push({ label: '内置表', cls: 't-builtin' });
     if (m.capabilities.vision) out.push({ label: '图', cls: 't-vision' });
     if (m.capabilities.effort) out.push({ label: `思${EFFORT_LABEL[m.capabilities.effort] ?? m.capabilities.effort}`, cls: 't-effort' });
-    if (m.capabilities.maxInputTokens > 0) out.push({ label: `${Math.round(m.capabilities.maxInputTokens / 1000)}k`, cls: 't-ctx' });
+    if (m.capabilities.maxInputTokens > 0) out.push({ label: formatTokenCount(m.capabilities.maxInputTokens), cls: 't-ctx' });
     return out;
   };
 
@@ -230,17 +234,28 @@ export function ModelAdminPanel() {
                   <div className="ma-cap-grid">
                     <span>输入 tokens</span>
                     <input
-                      inputMode="numeric"
-                      value={m.capabilities.maxInputTokens || ''}
-                      onChange={(e) => updateModelCap(m.id, { maxInputTokens: Math.max(0, Number(e.target.value.replace(/\D/g, '')) || 0) })}
-                      placeholder="0=未知"
+                      value={tokenText[`in:${m.id}`] ?? formatTokenCount(m.capabilities.maxInputTokens)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const parsed = parseTokenCount(raw);
+                        setTokenText((t) => ({ ...t, [`in:${m.id}`]: raw }));
+                        // 合法才写回（null=非法字面量，保留旧值待用户改对）；0=未知语义保持
+                        if (parsed !== null) updateModelCap(m.id, { maxInputTokens: parsed });
+                      }}
+                      onBlur={() => setTokenText((t) => { const { [`in:${m.id}`]: _drop, ...rest } = t; return rest; })}
+                      placeholder="0=未知，可写 1m / 200k"
                     />
                     <span>输出 tokens</span>
                     <input
-                      inputMode="numeric"
-                      value={m.capabilities.maxOutputTokens || ''}
-                      onChange={(e) => updateModelCap(m.id, { maxOutputTokens: Math.max(0, Number(e.target.value.replace(/\D/g, '')) || 0) })}
-                      placeholder="0=默认"
+                      value={tokenText[`out:${m.id}`] ?? formatTokenCount(m.capabilities.maxOutputTokens)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const parsed = parseTokenCount(raw);
+                        setTokenText((t) => ({ ...t, [`out:${m.id}`]: raw }));
+                        if (parsed !== null) updateModelCap(m.id, { maxOutputTokens: parsed });
+                      }}
+                      onBlur={() => setTokenText((t) => { const { [`out:${m.id}`]: _drop, ...rest } = t; return rest; })}
+                      placeholder="0=默认，可写 64k"
                     />
                     <span>图片输入</span>
                     <label className="ma-check ma-cap-inline">
@@ -322,7 +337,7 @@ export function ModelAdminPanel() {
               {c.models.length > 0 && (
                 <div className="ma-models">
                   {c.models.map((m) => (
-                    <span key={m.id} className="ma-model-chip" title={`输入 ${m.capabilities.maxInputTokens || '?'} / 输出 ${m.capabilities.maxOutputTokens || '?'}`}>
+                    <span key={m.id} className="ma-model-chip" title={`输入 ${formatTokenCount(m.capabilities.maxInputTokens)} / 输出 ${formatTokenCount(m.capabilities.maxOutputTokens)}`}>
                       <code>{m.id}</code>
                       {capBadges(m).map((b) => <em key={b.cls + b.label} className={b.cls}>{b.label}</em>)}
                     </span>

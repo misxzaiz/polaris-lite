@@ -1,17 +1,31 @@
 /**
- * ContextMeter：上下文水位 + token 速率状态条（spec §5.3）。
+ * ContextMeter：上下文进度圆圈 + 详情抽屉（spec §5.3 v2，2026-11-20 按用户反馈改造）。
  *
- * 位置：输入区上方（ChatInput 顶部）。一条细横条展示水位/速率，点击展开详情抽屉
- * （会话策略设置、最近用量、压缩记录）。数据全部来自 ctxStore（事件驱动，UI 只读）。
+ * v1 的全宽状态条占掉输入区一整行（用户反馈「占用空间过多」）；v2 收敛为一个
+ * 24px 进度圆圈（SVG 环 + 内部百分比），嵌入输入区按钮行（放在下面），点击后
+ * 详情抽屉在**上方**展开。
+ *
+ * 抽屉必须 portal 到 body：宿主 .shell-input 有 overflow:hidden + 42dvh 上限，
+ * 内联抽屉会被裁掉（与工作目录浮层同一条教训）。用 absolute 而非 fixed——
+ * 插件 CSS 门禁禁止 fixed；宿主满屏布局下 body 定位等价贴底。
+ *
+ * 数据全部来自 ctxStore（事件驱动，UI 只读）；窗口分母优先真实 usage 携带的
+ * contextWindow（供应商「输入 tokens」字段），agent-loop 首轮还会主动
+ * resolveActive 预解析——改 1m 即全局生效，不再停在默认 200k。
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { useCtxStore, type CtxState, type CtxPolicy } from './ctxStore';
 import { useSessionStore } from './store';
 
 function fmtTokens(n: number | undefined): string {
   if (n === undefined || n === null) return '—';
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  if (n >= 1_000_000) return `${(Math.round(n / 100_000) / 10).toString().replace(/\.0$/, '')}M`;
+  if (n >= 1_000) {
+    const v = Math.round(n / 100) / 10;
+    return `${v.toString().replace(/\.0$/, '')}k`;
+  }
   return String(Math.round(n));
 }
 
@@ -56,6 +70,7 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
 
       <div className="ctx-detail-section">
         <MeterRow label="上下文窗口" value={`${fmtTokens(ctx.usedTokens)} / ${fmtTokens(ctx.window)}（${fmtPct(ctx.percent)}）`} />
+        <MeterRow label="窗口来源" value={ctx.window ? '供应商输入 tokens' : '默认 200k（未配置）'} />
         <MeterRow label="消息数（含工具）" value={ctx.messages !== undefined ? String(ctx.messages) : '—'} />
         <MeterRow label="最近输出速率" value={ctx.lastUsage ? `${ctx.lastUsage.tps.toFixed(1)} tok/s` : '—'} />
         {ctx.lastUsage?.model && <MeterRow label="响应模型" value={ctx.lastUsage.model} />}
@@ -137,49 +152,144 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
   );
 }
 
+/** 环半径与周长（SVG viewBox 24：r=10，C=2πr≈62.8） */
+const RING_R = 10;
+const RING_C = 2 * Math.PI * RING_R;
+
+function Orb({ ctx, policy, compacting, onOpen, orbRef }: {
+  ctx: CtxState;
+  policy: CtxPolicy;
+  compacting: boolean;
+  onOpen: () => void;
+  /** ContextMeter 持有的 ref：打开抽屉时要用圆圈的实际位置做 portal 定位 */
+  orbRef: RefObject<HTMLButtonElement>;
+}) {
+  const percent = ctx.percent ?? 0;
+  const color = barColor(ctx.percent, policy.threshold);
+  const shown = Math.min(100, Math.max(0, Math.round(percent * 100)));
+  const tps = ctx.lastUsage?.tps;
+  const title = [
+    ctx.compacting
+      ? '正在压缩上下文…'
+      : `上下文 ${fmtPct(ctx.percent)} · ${fmtTokens(ctx.usedTokens)}/${fmtTokens(ctx.window)}`,
+    ...(tps !== undefined && tps > 0 ? [`${tps.toFixed(1)} tok/s`] : []),
+    ...(ctx.exhausted ? ['自动压缩已熔断'] : []),
+    '点击查看详情',
+  ].join('\n');
+  return (
+    <button
+      ref={orbRef}
+      type="button"
+      className={`ctx-orb ${compacting ? 'compacting' : ''}`}
+      onClick={onOpen}
+      title={title}
+      aria-label={`上下文 ${fmtPct(ctx.percent)}，点击查看详情`}
+      data-testid="context-meter"
+    >
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+        {/* 底环 */}
+        <circle cx="12" cy="12" r={RING_R} fill="none" stroke="var(--bg-hover)" strokeWidth="2.5" />
+        {/* 进度环：dashoffset 随 percent 收放 */}
+        <circle
+          cx="12" cy="12" r={RING_R} fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={RING_C}
+          strokeDashoffset={RING_C * (1 - percent)}
+          transform="rotate(-90 12 12)"
+        />
+        {/* 压缩中：外圈旋转点 */}
+        {compacting && (
+          <circle
+            cx="12" cy="12" r={RING_R} fill="none"
+            stroke="var(--plite-warning)" strokeWidth="1.5"
+            strokeDasharray={`${RING_C * 0.18} ${RING_C * 0.82}`}
+            strokeLinecap="round"
+            className="ctx-orb-spin"
+            transform="rotate(-90 12 12)"
+          />
+        )}
+      </svg>
+      <span className="ctx-orb-text" style={{ color }}>{shown}</span>
+    </button>
+  );
+}
+
 export function ContextMeter() {
   const activeId = useSessionStore((s) => s.activeId);
   const ctxMap = useCtxStore((s) => s.ctx);
   const policies = useCtxStore((s) => s.policies);
-  const [open, setOpen] = useState(false);
+  const orbRef = useRef<HTMLButtonElement>(null);
+  /** 抽屉定位（portal 到 body）：bottom 贴住圆圈上方，高度由内容决定 */
+  const [drawerPos, setDrawerPos] = useState<{ left: number; bottom: number; width: number; maxHeight: number } | null>(null);
 
-  if (!activeId) return null;
-  const ctx = ctxMap[activeId];
-  const policy = policies[activeId] ?? { autoCompact: true, threshold: 0.75, keepRecent: 6 };
-  // 无任何数据（首轮流未结束）不渲染，避免空条噪音
-  if (!ctx || (ctx.usedTokens === undefined && !ctx.lastUsage && !ctx.compacting)) return null;
+  const ctx = activeId ? ctxMap[activeId] : undefined;
+  const policy = (activeId ? policies[activeId] : undefined) ?? { autoCompact: true, threshold: 0.75, keepRecent: 6 };
+  const hasData = !!(ctx && (ctx.usedTokens !== undefined || ctx.lastUsage || ctx.compacting));
 
-  const percent = ctx.percent;
-  const color = barColor(percent, policy.threshold);
-  const tps = ctx.lastUsage?.tps;
+  // 注意 hooks 顺序：全部挂在早退 return 之前（Rules of Hooks——数据从无到有不能改变 hook 数量）
+  const computePos = useCallback(() => {
+    const el = orbRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const gap = 8;
+    const width = Math.min(600, Math.max(320, window.innerWidth - 24));
+    return {
+      // 抽屉底边贴在圆圈顶上方 8px；左对齐圆圈但不越出视口
+      left: Math.max(12, Math.min(r.left - 4, window.innerWidth - width - 12)),
+      bottom: Math.max(gap, window.innerHeight - r.top + gap),
+      width,
+      maxHeight: Math.max(200, Math.min(460, r.top - gap * 2)),
+    };
+  }, []);
+
+  const openDrawer = useCallback(() => setDrawerPos(computePos()), [computePos]);
+  const closeDrawer = useCallback(() => setDrawerPos(null), []);
+
+  // 抽屉开着时：视口变化/滚动重新定位，ESC 关闭
+  useEffect(() => {
+    if (!drawerPos) return;
+    const update = () => {
+      const next = computePos();
+      if (next) setDrawerPos(next);
+    };
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') closeDrawer();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [drawerPos, computePos, closeDrawer]);
+
+  // 无任何数据（首轮流未结束）不渲染圆圈，避免噪音
+  if (!activeId || !ctx || !hasData) return null;
+
+  const compacting = ctx.compacting === true;
 
   return (
-    <div className="ctx-meter" data-testid="context-meter">
-      <button
-        type="button"
-        className="ctx-meter-bar"
-        aria-expanded={open}
-        aria-label="上下文详情"
-        onClick={() => setOpen((v) => !v)}
-      >
-        {ctx.compacting ? (
-          <span className="ctx-meter-status compacting">正在压缩上下文…</span>
-        ) : (
-          <>
-            <span className="ctx-meter-label">上下文</span>
-            <span className="ctx-meter-track" aria-hidden="true">
-              <span className="ctx-meter-fill" style={{ width: `${Math.min(100, (percent ?? 0) * 100)}%`, background: color }} />
-            </span>
-            <span className="ctx-meter-value" style={{ color }}>
-              {fmtPct(percent)} · {fmtTokens(ctx.usedTokens)}/{fmtTokens(ctx.window)}
-            </span>
-            {ctx.exhausted && <span className="ctx-meter-flag danger">压缩熔断</span>}
-            {!ctx.exhausted && ctx.compacted && <span className="ctx-meter-flag">已压缩</span>}
-            {tps !== undefined && tps > 0 && <span className="ctx-meter-rate">{tps.toFixed(1)} tok/s</span>}
-          </>
-        )}
-      </button>
-      {open && <DetailDrawer sid={activeId} ctx={ctx} policy={policy} onClose={() => setOpen(false)} />}
-    </div>
+    <>
+      <Orb ctx={ctx} policy={policy} compacting={compacting} onOpen={openDrawer} orbRef={orbRef} />
+      {drawerPos && createPortal(
+        <>
+          {/* 透明点击幕：点抽屉外任意处关闭（absolute inset 0 在 body 下覆盖首屏） */}
+          <div className="ctx-detail-mask" onClick={closeDrawer} aria-hidden="true" />
+          <div
+            className="ctx-detail-float"
+            role="dialog"
+            aria-label="上下文详情"
+            style={{ left: drawerPos.left, bottom: drawerPos.bottom, width: drawerPos.width, maxHeight: drawerPos.maxHeight }}
+          >
+            <DetailDrawer sid={activeId} ctx={ctx} policy={policy} onClose={closeDrawer} />
+          </div>
+        </>,
+        document.body,
+      )}
+    </>
   );
 }

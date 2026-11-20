@@ -134,7 +134,10 @@ interface ContextPolicy {
    ```
    —— chat-lite 的 ContextMeter 直接消费（无 usage 供应商也有估算值可显示）。
 
-### 5.3 chat-lite（`plugins/chat-lite/`）
+### 5.3 chat-lite（`plugins/chat-lite/`）——v2 改造（2026-11-20 用户反馈）
+
+> v1 的全宽状态条占掉输入区一整行（用户反馈「占用空间过多」）；窗口分母也不跟随
+> 供应商「输入 tokens」配置（用户改 1m 不生效）。两项均已在 v2 修复。
 
 1. **store**：新增非持久化字段 `ctx: Record<sessionId, CtxState>`：
    ```ts
@@ -149,12 +152,29 @@ interface ContextPolicy {
    ```
    action：`applyUsage(payload)`、`applySnapshot(payload)`、`applyCompacting/Compacted/Failed`。写路径单一（都由事件驱动），UI 只读。
 2. **订阅**（`setup`）：`cap.ai.chat:event` 与 `cap.agent.loop:event` 里按 kind 分发到上述 action（会话 id 过滤同现有纪律）。
-3. **ContextMeter 组件**（新文件 `ContextMeter.tsx` + `context.css`）：
-   - 位置：输入区上方（chat-lite 的 input 槽组件 `ChatInput` 顶部插一行，不改宿主布局）；
-   - 形态：一条 24px 细条——左侧「上下文 38% · 76k/200k」、中部细进度条（>75% 变 warning 色，熔断变 danger）、右侧「42 tok/s」；点击展开详情抽屉（同插件内 portal，参照 WorkspacePicker 的弹层做法）；
-   - 详情抽屉：窗口/阈值、最近 8 轮用量与速率小表、压缩记录（时间、压掉条数、前后 token、摘要全文可折叠）、策略开关（自动压缩 on/off + 阈值滑条，写回 store 的 `ctxPolicy`）；
-   - 压缩中：进度条位置显示「正在压缩上下文…」文案 + spinner。
+3. **ContextMeter v2 组件**（`ContextMeter.tsx` + `context.css`）：
+   - 形态：**24px 进度圆圈**（SVG 环 + 环内百分比数字），嵌在输入区按钮行最左（放在下面，占位极小）；
+     水位色阶同 v1（>阈值 warning、≥90% danger、正常 accent）；压缩中外圈旋转段提示；
+     hover title 显示 `上下文 x% · used/window · tok/s`；
+   - **点击圆圈 → 详情抽屉在上方展开**：portal 到 body（宿主 `.shell-input` overflow:hidden 会裁内联面板——
+     与工作目录浮层同一条教训），absolute 定位贴住圆圈顶上方，透明点击幕 + ESC 关闭；
+   - 详情抽屉：窗口/阈值、**窗口来源**（供应商输入 tokens / 默认 200k）、最近 8 轮用量与速率小表、
+     压缩记录（时间、压掉条数、前后 token、摘要全文可折叠）、策略开关（自动压缩 on/off + 阈值滑条，写回 store 的 `ctxPolicy`）；
 4. **发送链路**：`sendUserMessage` 的 dispatch payload 带上会话 `ctxPolicy`（agent-loop 读）。
+
+### 5.3.1 上下文窗口适配（v2 新增）
+
+分母（window）解析链，三级优先：
+1. **真实 usage 携带**：real-engine `emitUsage` 从模型能力表 `capabilities.maxInputTokens` 取（>0 才携带）；
+2. **agent-loop 首轮预解析**：会话无 ai.usage 时主动 `cap.model.admin/resolveActive` 读当前模型
+   `maxInputTokens`（不再等流结束，供应商改 1m 立即生效）；每条 ai.usage 到达后以真实值覆盖；
+3. **默认 200k**（与 simple_ai DEFAULT_CONTEXT_WINDOW 对齐）。
+
+「输入 tokens」字段的解析（`plugins/model-admin/tokens.ts` + `server/provider-store.mjs` 双实现）：
+- 宽松接受 `1m / 1M / 200k / 128000 / 1,000,000`；非法字面量归 0（=未知），**绝不剥后缀吞成错误值**；
+- 根因修复：面板旧实现 `replace(/\D/g,'')` 把「1m」剥成「1」存成 1 个 token——服务端 normalize 同样只认
+  `Number()`，等于第二道闸也放行；现两端统一走 `parseTokenCount`；
+- 显示统一走 `formatTokenCount`（1M / 200k / 65.5k），能力徽标与悬浮提示同源。
 
 ### 5.4 grants / 构建
 
