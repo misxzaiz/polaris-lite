@@ -26,7 +26,8 @@
         "interactive.created",
         "interactive.answered",
         "artifact.created",
-        "workspace-renamed"
+        "workspace-renamed",
+        "mode-changed"
       ]
     },
     "model-admin": {
@@ -50,7 +51,8 @@
       ],
       "events": [
         "model-config-changed",
-        "auth-changed"
+        "auth-changed",
+        "mode-changed"
       ]
     },
     "cap-panel": {
@@ -207,6 +209,50 @@
       "events": [
         "tool-registered"
       ]
+    },
+    "chat-store": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "mobile-companion": {
+      "capabilities": [],
+      "provides": [
+        "cap.mobile.companion"
+      ],
+      "events": []
+    },
+    "phone-agent": {
+      "capabilities": [
+        "cap.auth",
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.tool.phone"
+      ],
+      "events": [
+        "tool-registered",
+        "auth-changed"
+      ]
+    },
+    "standalone-mode": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.mode"
+      ],
+      "events": [
+        "mode-changed"
+      ]
+    },
+    "codebuddy-engine": {
+      "capabilities": [],
+      "provides": [
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt"
+      ],
+      "events": []
     }
   }
 }

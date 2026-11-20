@@ -84,6 +84,12 @@ const plugins = [
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 17 },
   { id: 'chat-store', config: 'chat-store/vite.config.ts', dist: 'chat-store/dist', order: 19 },
   { id: 'plugin-manager', config: 'plugin-manager/vite.config.ts', dist: 'plugin-manager/dist', order: 18 },
+  { id: 'mobile-companion', config: 'mobile-companion/vite.config.ts', dist: 'mobile-companion/dist', order: 20 },
+  { id: 'phone-agent', config: 'phone-agent/vite.config.ts', dist: 'phone-agent/dist', order: 21 },
+  { id: 'standalone-mode', config: 'standalone-mode/vite.config.ts', dist: 'standalone-mode/dist', order: 22 },
+  // CodeBuddy CLI 引擎（服务端半边 spawn adapter.js → codebuddy CLI）。
+  // 与 real-engine 互斥：cap.ai.chat 是单注册位，registry 里两者只能 enabled 一个。
+  { id: 'codebuddy-engine', config: 'codebuddy-engine/vite.config.ts', dist: 'codebuddy-engine/dist', order: 23 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

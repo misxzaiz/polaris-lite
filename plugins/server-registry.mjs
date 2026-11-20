@@ -25,6 +25,9 @@ export const SERVER_PLUGINS = [
   { id: 'browser-lite', entry: './browser-lite/server.mjs' },
   { id: 'kv-store', entry: './kv-store/server.mjs' },
   { id: 'plugin-manager', entry: './plugin-manager/server.mjs' },
+  { id: 'chat-store', entry: './chat-store/server.mjs' },
+  { id: 'phone-agent', entry: './phone-agent/server.mjs' },
+  { id: 'codebuddy-engine', entry: './codebuddy-engine/server.mjs' },
 ];
 
 /**
