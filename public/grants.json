@@ -1,5 +1,5 @@
 {
-  "version": "5",
+  "version": "6",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -110,7 +110,8 @@
         "cap.tool.files-write",
         "cap.tool.skill",
         "cap.skill.appendix",
-        "cap.hook.bridge"
+        "cap.hook.bridge",
+        "cap.tool.mcp"
       ],
       "provides": [
         "cap.agent.loop"
@@ -276,6 +277,18 @@
       ],
       "events": [
         "user.prompt"
+      ]
+    },
+    "mcp-bridge": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.tool.mcp",
+        "cap.mcp.admin"
+      ],
+      "events": [
+        "tool-registered"
       ]
     }
   }

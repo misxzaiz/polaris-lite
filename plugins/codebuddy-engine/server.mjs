@@ -274,6 +274,21 @@ export function createServerPart(options = {}) {
         model: String(payload.model ?? 'hy4free'),
         permission_mode: 'bypassPermissions',
       };
+      // MCP 透传（plans/extension-capability-pure-plugin-plan.md §2.1）：
+      // mcp-bridge 的原生配置 <dataDir>/mcp-servers.json 是单一数据源；这里把启用的
+      // stdio server 转成 engine-v1 的 mcp_servers 形态，adapter.cjs 会写成临时 JSON
+      // 并以 --strict-mcp-config --mcp-config 传给 codebuddy CLI（通道本就存在）。
+      try {
+        const mcpCfgPath = resolve(run.dataDir, 'mcp-servers.json');
+        if (existsSync(mcpCfgPath)) {
+          const mcpCfg = JSON.parse(readFileSync(mcpCfgPath, 'utf8'));
+          const servers = mcpCfg?.servers ?? {};
+          const mcpServers = Object.entries(servers)
+            .filter(([, s]) => s && s.enabled !== false && typeof s.command === 'string' && s.command.trim())
+            .map(([name, s]) => ({ server_name: name, command: s.command, args: Array.isArray(s.args) ? s.args : [] }));
+          if (mcpServers.length > 0) startParams.mcp_servers = mcpServers;
+        }
+      } catch { /* MCP 配置不可读：不透传，引擎照常启动 */ }
       // adapter stdin：一条 start_session，prompt 摊平走 stdin。
       // 必须显式 'utf-8'：Node 对 pipe 默认按 latin1/系统码页写，中文会 mojibake
       adapter.stdin.write(JSON.stringify({ id: 1, method: 'start_session', params: startParams }) + '\n', 'utf-8');

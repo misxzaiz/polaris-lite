@@ -95,6 +95,8 @@ const plugins = [
   // hook-bridge  = 生命周期钩子（CC/ZC hooks 兼容，进程执行器在 server 半边）。
   { id: 'skill-loader', config: 'skill-loader/vite.config.ts', dist: 'skill-loader/dist', order: 24 },
   { id: 'hook-bridge', config: 'hook-bridge/vite.config.ts', dist: 'hook-bridge/dist', order: 25 },
+  // mcp-bridge = MCP server 接入（stdio JSON-RPC client 池 + cap.tool.mcp 聚合工具 + 管理面）
+  { id: 'mcp-bridge', config: 'mcp-bridge/vite.config.ts', dist: 'mcp-bridge/dist', order: 26 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

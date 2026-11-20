@@ -31,6 +31,7 @@ export const SERVER_PLUGINS = [
   // 扩展能力插件（plans/extension-capability-pure-plugin-plan.md）
   { id: 'skill-loader', entry: './skill-loader/server.mjs' },
   { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
+  { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
 ];
 
 /**
