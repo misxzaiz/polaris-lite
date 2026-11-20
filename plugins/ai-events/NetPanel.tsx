@@ -186,12 +186,14 @@ export function NetPanel() {
         </div>
       </div>
 
+      <div className="aie-privacy">仅存本机 · 密钥/口令类字段与 sk-/Bearer/JWT 形态已脱敏 · 登录请求不留存正文</div>
+
       {shown.length === 0 ? (
         <div className="aie-empty">
           <strong>还没有请求记录</strong>
           <p>
             从下一次请求开始记录：模型收到的 messages / tools / 参数、上游返回的 SSE 帧与
-            usage、工具执行、文件访问都会逐条落到这里，可以一键复制 curl 原样重放。
+            usage、工具执行、文件访问都会逐条落到这里，可复制 curl 复现（敏感值已脱敏，需自行补回）。
           </p>
         </div>
       ) : (

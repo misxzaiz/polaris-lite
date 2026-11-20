@@ -14,6 +14,7 @@
  */
 import { begin, finish, patch } from './netStore';
 import type { HttpKind, HttpRecord, SseSummary } from './netStore';
+import { redactJson, redactSecrets } from './redact';
 
 /** 请求体留存量（附件/大 payload 只留开头） */
 const REQ_LIMIT = 64 * 1024;
@@ -308,7 +309,10 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
   } catch {
     clone = null;
   }
-  const bodyPromise = clone ? readLimited(clone, REQ_LIMIT) : Promise.resolve({ text: null, bytes: 0, truncated: false });
+  // 登录/鉴权请求的 body 含明文口令，永远不读取、不留存（只在面板显示方法/路径/状态码）
+  const bodyPromise = kind === 'auth'
+    ? Promise.resolve({ text: null, bytes: 0, truncated: false })
+    : clone ? readLimited(clone, REQ_LIMIT) : Promise.resolve({ text: null, bytes: 0, truncated: false });
 
   // 先占位：请求一发出，面板里就能看到「进行中」
   begin({
@@ -338,6 +342,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
     res = await native(req);
   } catch (e) {
     const rb = await bodyPromise;
+    const safeBody = redactSecrets(rb.text);
     await finish({
       v: 1,
       id,
@@ -347,7 +352,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
       method: req.method,
       path,
       reqHeaders,
-      reqBody: rb.text,
+      reqBody: safeBody,
       reqBytes: rb.bytes,
       status: 0,
       resHeaders: [],
@@ -356,7 +361,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
       stream: false,
       truncated: rb.truncated,
       error: e instanceof Error ? e.message : String(e),
-      curl: toCurl(req.method, url.href, reqHeaders, rb.text, true),
+      curl: toCurl(req.method, url.href, reqHeaders, safeBody, true),
     });
     throw e;
   }
@@ -365,19 +370,20 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
   const isStream = ct.includes('text/event-stream') && !!res.body;
   const resHeaders = sanitize([...res.headers.entries()]);
   const rb = await bodyPromise;
-  const curl = toCurl(req.method, url.href, reqHeaders, rb.text, true);
+  const safeBody = redactSecrets(rb.text);
+  const curl = toCurl(req.method, url.href, reqHeaders, safeBody, true);
 
   patch(id, {
     status: res.status,
     resHeaders,
-    reqBody: rb.text,
+    reqBody: safeBody,
     reqBytes: rb.bytes,
     truncated: rb.truncated,
     stream: isStream,
     curl,
   });
 
-  // 模型请求：请求体就是 `{providerId, body}`，body 即上游 payload
+  // 模型请求：请求体就是 `{providerId, body}`，body 即上游 payload（导出前同样脱敏）
   let providerId: string | undefined;
   let upstream: { url: string; curl: string } | undefined;
   if (kind === 'model' && rb.text) {
@@ -386,7 +392,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
       if (typeof j.providerId === 'string') {
         providerId = j.providerId;
         await ensureBaseUrls();
-        upstream = buildUpstream(baseUrls.get(providerId), j.body);
+        upstream = buildUpstream(baseUrls.get(providerId), redactJson(j.body));
       }
     } catch {
       /* 非 JSON（理论上不会发生）：跳过上游推导 */
@@ -402,7 +408,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
     method: req.method,
     path,
     reqHeaders,
-    reqBody: rb.text,
+    reqBody: safeBody,
     reqBytes: rb.bytes,
     status: res.status,
     resHeaders,
@@ -419,10 +425,16 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
       await finish({
         ...base,
         durMs: Math.round(performance.now() - t0),
-        resBody: agg.raw,
+        resBody: redactSecrets(agg.raw),
         resBytes: agg.bytes,
         truncated: rb.truncated || agg.truncated,
-        sse: agg.summary,
+        sse: {
+          ...agg.summary,
+          toolCalls: agg.summary.toolCalls.map((t) => ({ name: t.name, args: redactSecrets(t.args) ?? '' })),
+          first: agg.summary.first.map((f) => redactSecrets(f) ?? ''),
+          last: agg.summary.last.map((l) => redactSecrets(l) ?? ''),
+          usage: agg.summary.usage ? redactJson(agg.summary.usage) : undefined,
+        },
       });
     })();
     // 主分支立即交还调用方，不等待旁路
@@ -442,7 +454,7 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
     await finish({
       ...base,
       durMs: Math.round(performance.now() - t0),
-      resBody: body.text,
+      resBody: redactSecrets(body.text),
       resBytes: body.bytes,
       truncated: rb.truncated || body.truncated,
     });
