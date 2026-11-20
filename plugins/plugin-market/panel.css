@@ -1,0 +1,31 @@
+/* plugin-market 商城面板样式——mk- 前缀，只消费宿主令牌变量 */
+.mk-panel { padding: 10px 12px; font-size: 12px; color: var(--text); overflow-y: auto; height: 100%; box-sizing: border-box; }
+.mk-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.mk-tab { flex: 1; padding: 5px 0; border: 1px solid var(--border); background: transparent; color: var(--text-dim, var(--text)); border-radius: 6px; cursor: pointer; font-size: 12px; }
+.mk-tab.active { background: var(--bg-hover, var(--border)); color: var(--text); font-weight: 600; }
+.mk-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
+.mk-flash { border: 1px solid #4caf7d; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #4caf7d; }
+.mk-empty { color: var(--text-dim, var(--text)); padding: 10px 4px; line-height: 1.7; }
+.mk-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.mk-item-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mk-name { font-weight: 600; }
+.mk-badge { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-dim, var(--text)); }
+.mk-badge.ok { color: #4caf7d; border-color: #4caf7d; }
+.mk-badge.warn { color: #d9a441; border-color: #d9a441; }
+.mk-desc { color: var(--text-dim, var(--text)); margin-top: 4px; line-height: 1.5; word-break: break-word; }
+.mk-hash { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-dim, var(--text)); margin-top: 4px; word-break: break-all; }
+.mk-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; align-items: center; }
+.mk-arm { color: #d64545; font-size: 11px; }
+.mk-btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
+.mk-btn.primary { background: var(--accent, var(--text)); color: var(--accent-contrast, var(--bg, #fff)); border-color: transparent; }
+.mk-btn.danger { background: #d64545; color: #fff; border-color: transparent; }
+.mk-btn.danger-soft { color: #d64545; }
+.mk-btn:disabled { opacity: 0.5; cursor: default; }
+.mk-form { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.mk-input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; font-family: var(--font-mono, monospace); }
+.mk-form-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.mk-warns { border: 1px solid #d9a441; border-radius: 6px; padding: 6px 8px; margin-top: 8px; color: #d9a441; font-size: 11px; line-height: 1.6; word-break: break-word; }
+.mk-hint { margin-top: 8px; color: var(--text-dim, var(--text)); line-height: 1.6; font-size: 11px; }
+.mk-about p { line-height: 1.7; margin: 0 0 8px; }
+.mk-about code { font-family: var(--font-mono, monospace); font-size: 11px; word-break: break-all; background: var(--bg-hover, var(--border)); border-radius: 4px; padding: 0 4px; }
+.mk-warn { color: #d64545; }
