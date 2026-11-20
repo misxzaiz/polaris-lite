@@ -12,6 +12,7 @@
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import { AgentFilesPanel } from './Panel';
+import './panel.css';
 
 /** 工具描述（agent-loop 组装 OpenAI tools 用） */
 const DESCRIPTOR = {
@@ -40,10 +41,11 @@ const DESCRIPTOR = {
   danger: 'write' as const,
 };
 
-/** 执行（loop 调用；已通过 loop 层审批） */
+/** 执行（loop 调用；已通过 loop 层审批）。返回对齐 agent-bash 的 exec 形态（exitCode 供 loop 判定卡片状态）。 */
 async function execFilesWrite(payload: Record<string, unknown>): Promise<{
-  ok: boolean; [k: string]: unknown;
+  ok: boolean; exitCode?: number; durationMs?: number; [k: string]: unknown;
 }> {
+  const startedAt = Date.now();
   const resp = await fetch('/api/files-write/exec', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,10 +63,21 @@ async function execFilesWrite(payload: Record<string, unknown>): Promise<{
     }),
   });
   const json = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!resp.ok || !json) {
-    return { ok: false, error: (json?.error as string) ?? `HTTP ${resp.status}`, code: json?.code as string };
+  if (!resp.ok || !json || json.ok !== true) {
+    return {
+      ok: false,
+      exitCode: 1,
+      durationMs: Date.now() - startedAt,
+      error: (json?.error as string) ?? `HTTP ${resp.status}`,
+      code: json?.code as string,
+      stdout: json?.error ? String(json.error) : undefined,
+    };
   }
-  return { ok: true, ...json };
+  // 结果摘要进 stdout（loop 的 feedback 直接展示给模型）：write/edit 报路径与字节数，patch 报 per-file summary
+  const stdout = json.action === 'patch'
+    ? ((json.summary as string[] | undefined) ?? []).join('\n') || 'patch applied'
+    : `${String(json.action)} ok: ${String(json.path ?? '')}${json.bytes != null ? ` (${String(json.bytes)} bytes)` : ''}${json.replacements != null ? ` (${String(json.replacements)} replacement(s))` : ''}`;
+  return { ok: true, exitCode: 0, durationMs: Date.now() - startedAt, stdout, ...json };
 }
 
 function createFilesWriteHandler(): CapabilityHandler {

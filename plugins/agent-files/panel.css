@@ -1,0 +1,92 @@
+/* ===== agent-files 面板 ===== */
+.agent-files { font-size: 13px; }
+.agent-files h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.af-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; margin: 6px 0; overflow-wrap: anywhere; }
+.af-hint.af-warn { color: var(--warn); background: var(--warn-soft); border-radius: var(--radius); padding: 6px 9px; }
+.af-hint.af-foot { margin-top: 12px; opacity: 0.85; }
+.af-hint code, .af-rule code {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 10.5px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.af-rules { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.af-rule {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  background: var(--bg-panel);
+}
+.af-k { font-weight: 600; color: var(--text-dim); }
+
+.af-audit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 6px;
+}
+.af-audit-title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.af-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.af-btn:hover:not(:disabled) { border-color: var(--accent); }
+.af-btn:disabled { opacity: 0.4; cursor: default; }
+
+.af-audit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  background: var(--bg-panel);
+}
+.af-line {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 10.5px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+.af-line:hover { background: var(--bg); }
+.af-line .af-time { color: var(--text-dim); }
+.af-line .af-act { font-weight: 600; }
+.af-line .af-path {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-line .af-st { font-weight: 600; }
+.af-line.ok .af-st { color: var(--ok, #3fb950); }
+.af-line.fail { color: var(--danger, #f85149); }
+.af-line.fail .af-st { color: var(--danger, #f85149); }
