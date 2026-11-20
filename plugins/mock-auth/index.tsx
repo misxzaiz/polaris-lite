@@ -346,6 +346,8 @@ export const mockAuthPlugin: LitePlugin = {
         // title 面向用户：点开是「账号安全」改密/改号表单，故按内容命名为「账号」，
         // 不与插件名「演示登录」绑定（换成真实 SSO 插件时本面板语义不变）。
         { slot: 'panel', component: 'ChangeCredentialsPanel', order: 4, title: '账号' },
+        // 临时访问凭证：给 AI/本机脚本签发短时效 Bearer token（账号 Tab 内）
+        { slot: 'panel', component: 'TempCredentialPanel', order: 9, title: '临时凭证' },
       ],
     },
   },
@@ -393,5 +395,83 @@ function ChangeCredentialsPanel() {
   );
 }
 
-export const components = { LoginForm, ChangeCredentialsPanel };
+/**
+ * 临时访问凭证面板（账号 Tab）：
+ * 给 AI / 外部脚本签发短时效 Bearer token，用于无 cookie 环境访问 127.0.0.1 的本地 API
+ * （/api/fs/*、/api/tool/exec 等）。服务端签发（/api/auth/temp-credential，30 分钟、
+ * 仅回环 IP、重启即失效），本面板只做「一键签发 + 展示 + 复制现成调用示例」。
+ */
+function TempCredentialPanel() {
+  const [token, setToken] = useState('');
+  const [expiresAt, setExpiresAt] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [copied, setCopied] = useState('');
+
+  const issue = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/auth/temp-credential', { method: 'POST' });
+      const data = (await res.json()) as { ok?: boolean; token?: string; expiresAt?: number; error?: { message?: string } };
+      if (!res.ok || data.ok === false || !data.token) {
+        setErr(data.error?.message ?? '签发失败');
+      } else {
+        setToken(data.token);
+        setExpiresAt(data.expiresAt ?? Date.now() + 30 * 60 * 1000);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '签发失败');
+    }
+    setBusy(false);
+  };
+
+  const copy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
+      setTimeout(() => setCopied(''), 1400);
+    } catch {
+      setCopied('');
+    }
+  };
+
+  const remainMin = expiresAt ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 60000)) : 0;
+  const curlExample = token
+    ? `curl -H "Authorization: Bearer ${token}" http://127.0.0.1:9825/api/fs/roots`
+    : '';
+
+  return (
+    <div className="cap-panel model-admin">
+      <h3>临时访问凭证</h3>
+      <div className="auth-chg">
+        <div className="auth-temp-desc">
+          给 AI 或本机脚本发一把「临时钥匙」：30 分钟有效、仅限 127.0.0.1 本机访问、重启即失效；
+          泄露也不会波及你的登录账号。携带方式：<code>Authorization: Bearer &lt;token&gt;</code>。
+        </div>
+        <button className="auth-submit" onClick={issue} disabled={busy}>
+          {busy ? '签发中…' : token ? '重新签发' : '签发临时凭证（30 分钟）'}
+        </button>
+        {err && <div className="auth-error">{err}</div>}
+        {token && (
+          <>
+            <div className="auth-temp-token" data-testid="temp-token">{token}</div>
+            <div className="auth-temp-meta">剩余约 {remainMin} 分钟 · 重启服务后失效</div>
+            <button className="auth-submit auth-temp-copy" onClick={() => void copy(token, 'token')}>
+              {copied === 'token' ? '已复制' : '复制 Token'}
+            </button>
+            <div className="auth-temp-desc">调用示例（列工作区）：</div>
+            <pre className="auth-temp-curl">{curlExample}</pre>
+            <button className="auth-submit auth-temp-copy" onClick={() => void copy(curlExample, 'curl')}>
+              {copied === 'curl' ? '已复制' : '复制 curl 示例'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const components = { LoginForm, ChangeCredentialsPanel, TempCredentialPanel };
 export default mockAuthPlugin;

@@ -57,6 +57,36 @@
 .auth-chg .auth-submit:not(:last-child):hover { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
 .auth-chg .auth-input { height: 38px; font-size: 12px; }
 
+/* 临时访问凭证面板 */
+.auth-temp-desc { color: var(--text-soft); font-size: 11px; line-height: 1.7; }
+.auth-temp-desc code { font-family: var(--plite-font-mono); font-size: 10.5px; color: var(--accent-bright); }
+.auth-temp-token {
+  padding: 9px 11px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 7px;
+  background: var(--bg-hover);
+  color: var(--text);
+  font-family: var(--plite-font-mono);
+  font-size: 11px;
+  word-break: break-all;
+  line-height: 1.6;
+}
+.auth-temp-meta { color: var(--text-faint); font-size: 10.5px; }
+.auth-temp-copy { min-height: 34px; }
+.auth-temp-curl {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-family: var(--plite-font-mono);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+}
+
 @media (max-width: 768px) {
   .auth-input { font-size: 16px; }
 }

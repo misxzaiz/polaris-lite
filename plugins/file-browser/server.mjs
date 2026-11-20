@@ -52,6 +52,8 @@ function pathDepth(p) {
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const rootsFile = resolve(dataDir, 'workspace-roots.json');
   const auditFile = resolve(dataDir, 'fs-audit.log');
@@ -151,8 +153,12 @@ export function createServerPart(options = {}) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'fs api disabled (PLITE_FS=0)', code: 'FS_DISABLED' }));
     }
+    // 登录门禁：会话 cookie 或临时 Bearer 凭证（auth-session 签发，仅本地回环 IP）二选一
+    const authHeader = String(req.headers.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const bearerValid = !!(bearerToken && verifyTempToken(bearerToken));
     const session = getSession?.(req);
-    if (!session) {
+    if (!session && !bearerValid) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }

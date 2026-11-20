@@ -193,9 +193,14 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (pathname !== '/api/tool/exec' && pathname !== '/api/tool/config') return next?.();
 
-    // ① 会话 cookie 硬门禁
+    // ① 登录门禁：会话 cookie 或临时 Bearer 凭证二选一。
+    //    临时凭证（auth-session 签发，仅本地回环 IP 有效）让 AI/本机脚本无 cookie 也能调用；
+    //    exec 的「视为已审批」语义在 ⑤' 处理（confirm 模式下 Bearer 直接放行执行）。
+    const authHeader0 = String(req.headers.authorization ?? '');
+    const bearerToken0 = authHeader0.startsWith('Bearer ') ? authHeader0.slice(7) : '';
+    const bearerValid0 = !!(bearerToken0 && verifyTempToken(bearerToken0));
     const session = getSession?.(req);
-    if (!session) {
+    if (!session && !bearerValid0) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }
