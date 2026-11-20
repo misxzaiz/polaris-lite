@@ -24,3 +24,6 @@ Thumbs.db
 tests/_*
 tests/.chrome-net/
 docs/*.png
+
+# 开发环境独立数据目录（dev:standalone）
+.polaris-lite-dev/

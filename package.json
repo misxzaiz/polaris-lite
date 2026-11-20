@@ -11,7 +11,8 @@
     "build:plugins": "node plugins/build-plugins.mjs",
     "check:plugins": "node plugins/build-plugins.mjs --check",
     "preview": "vite preview --port 9825 --strictPort --host 127.0.0.1",
-    "start": "node server/prod-server.mjs"
+    "start": "node server/prod-server.mjs",
+    "dev:standalone": "node scripts/dev-server.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
