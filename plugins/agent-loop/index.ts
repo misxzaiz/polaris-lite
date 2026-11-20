@@ -891,9 +891,13 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         try {
           // files_write（cap.tool.files-write）：动作语义工具，参数透传走 safeArgsFilesWrite
           // （通用 safeArgs 只放行 command/timeoutMs，会把 action/path/content 全剥掉）。
+          // cap.tool.skill（read_skill）：参数是 {name}，同样会被 safeArgs 剥掉 → 走完整透传
+          // （hookArgsOf，与 A3 钩子入参同一透传器；工具 describe 的 parameters 已约束形状）。
           const payload = desc.cap === 'cap.tool.files-write'
             ? { ...safeArgsFilesWrite(call.arguments), sessionId, approved: true }
-            : { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
+            : desc.cap === 'cap.tool.skill'
+              ? { ...hookArgsOf(call.arguments), sessionId, approved: true }
+              : { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
           const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
             target: desc.cap,
             action: 'exec',
