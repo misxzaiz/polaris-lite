@@ -123,7 +123,9 @@
 .chat-send.new-session:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--border-strong); color: var(--accent-bright); }
 
 /* ===== 隐形滑切：输入条横向滑动切会话（零常驻 UI） ===== */
-/* 跟随位移由 JS 写 inline transform；这里只负责手势态的触感与边界提示 */
+/* 跟随位移由 JS 写 inline transform；这里只负责手势态的触感与边界提示。
+   touch-action 禁掉浏览器对手势的横向处理（pan-x），否则真机滑动会先被浏览器吃掉 */
+.chat-input-bar { touch-action: pan-y; }
 .chat-input-bar[data-swiping='true'] { cursor: grabbing; }
 .chat-input-bar[data-swiping='true'] .chat-textarea { pointer-events: none; }
 /* 到头仍在划：轻微抖动提示「没有更多」，比静默阻尼更可读 */
@@ -136,39 +138,57 @@
   .chat-input-bar[data-swipe-edge='true'] { animation: none; }
 }
 
-/* ===== 左右边缘小悬浮箭头：会话切换的可发现性入口（零高度占位） ===== */
-/* 位置：输入框上方两角（贴上边缘），不悬在条外 */
-.chat-edge-arrow {
+/* ===== 会话滑动指示器：仅滑动中浮现（输入条上方居中悬浮） ===== */
+/* 告诉用户：正在切（方向）、切到第几个/共几个、目标会话是谁。松手即隐。 */
+.chat-swipe-indicator {
   position: absolute;
-  top: 4px;
-  width: 22px;
-  height: 22px;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
+  gap: 10px;
+  max-width: 90%;
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  box-shadow: var(--plite-shadow-2);
+  color: var(--text-soft);
+  font-size: var(--plite-fs-sm);
+  white-space: nowrap;
+  z-index: 6;
+  pointer-events: none;
+  animation: swipe-indicator-in 140ms var(--plite-ease, ease-out);
+}
+@keyframes swipe-indicator-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.chat-swipe-indicator-count {
+  font-family: var(--plite-font-mono);
+  font-size: var(--plite-fs-xs);
+  letter-spacing: 0.06em;
   color: var(--text-faint);
-  cursor: pointer;
-  opacity: 0.55;
-  z-index: 3;
-  transition: opacity var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease), background var(--plite-dur) var(--plite-ease);
 }
-.chat-edge-arrow-left { left: 8px; }
-.chat-edge-arrow-right { right: 8px; }
-.chat-edge-arrow:hover:not(:disabled) { opacity: 1; color: var(--accent-bright); background: var(--accent-soft); }
-.chat-edge-arrow:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); opacity: 1; }
-/* 到头一侧：更淡 + 不可点 */
-.chat-edge-arrow:disabled { opacity: 0.18; cursor: default; }
-/* 手势联动：滑动中对应方向箭头点亮（手势可视化） */
-.chat-edge-arrow.hot { opacity: 1; color: var(--accent-bright); background: var(--accent-soft); }
-/* 窄屏：输入条贴边，箭头贴上角内侧 */
-@media (max-width: 768px) {
-  .chat-edge-arrow-left { left: 4px; }
-  .chat-edge-arrow-right { right: 4px; }
-  .chat-edge-arrow { opacity: 0.7; }
+.chat-swipe-indicator-title {
+  min-width: 0;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
 }
+/* 进度点：越接近阈值点亮越多；armed（可切）时主色 */
+.chat-swipe-indicator-dots { display: inline-flex; gap: 3px; }
+.chat-swipe-indicator-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  transition: background var(--plite-dur) var(--plite-ease);
+}
+.chat-swipe-indicator-dots i.lit { background: var(--accent); }
+.chat-swipe-indicator-dots.armed i { background: var(--accent-bright); }
 
 .chat-send.stop { background: transparent; border-color: rgba(209, 123, 114, 0.4); color: var(--plite-danger); }
 .chat-send.stop:hover:not(:disabled) { background: var(--plite-danger-soft); border-color: var(--plite-danger); }
