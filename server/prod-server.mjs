@@ -101,8 +101,11 @@ export function createProdServer({ dist = resolve(process.cwd(), 'dist'), dataDi
   return server;
 }
 
-// 直接运行时才监听（被 import 时不副作用启动）
-const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+// 直接运行时才监听（被 import 时不副作用启动）。
+// 兼容 PM2 fork 容器：ProcessContainerFork.js 动态 import 本文件且不设 argv[1]，
+// 故以 process.env.PM2_HOME 判定「由 PM2 托管」时也视为需要监听（测试 import 不带该 env，不受影响）。
+const isMain = (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)))
+  || !!process.env.PM2_HOME;
 if (isMain) {
   const port = Number(process.env.PORT ?? 9825);
   createProdServer({ secureCookies: process.env.PLITE_COOKIE_SECURE === '1' })
