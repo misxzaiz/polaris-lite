@@ -66,7 +66,7 @@
   align-self: stretch;
   align-items: center;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 5px;
   min-height: 36px;
   padding-top: 2px;
   /* 按钮行永远不参与收缩：空间不够时宁可压缩文本域，也不能让「发送」被挤掉 */
@@ -84,10 +84,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  height: 36px;
-  min-width: 78px;
-  padding: 0 14px;
+  gap: 5px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: var(--accent);
@@ -215,7 +215,22 @@
 .chat-send.stop:hover:not(:disabled) { background: var(--plite-danger-soft); border-color: var(--plite-danger); }
 .chat-send.stop:disabled { animation: stop-wait 1.2s ease-in-out infinite; }
 @keyframes stop-wait { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.85; } }
-.chat-send.queue { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chat-send.queue { background: var(--accent); border-color: var(--accent); color: var(--on-accent); position: relative; }
+.chat-queue-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--plite-danger, #d14);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
 .chat-send.queue:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
 /* 禁用态降级为幽灵按钮：空输入时"排队"仍是一块实心主色，视觉上像可点，语义矛盾 */
 .chat-send.queue:disabled,
@@ -405,7 +420,7 @@
   .chat-textarea::-webkit-resizer { display: none; }
   .chat-input-hint { display: none; }
   .chat-input-btns { min-height: 42px; }
-  .chat-send { height: 40px; min-height: 40px; }
+  .chat-send { height: 34px; min-height: 34px; }
   .chat-send.attach, .chat-send.tune, .chat-send.new-session { min-width: 40px; width: 40px; }
   .chat-attach-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .chat-attach-thumb img { width: 48px; height: 48px; }

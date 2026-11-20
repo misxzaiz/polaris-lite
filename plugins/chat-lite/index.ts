@@ -668,7 +668,8 @@ export function removePendingItem(itemId: string): void {
   if (st.activeId) st.removePending(st.activeId, itemId);
 }
 
-/** 立即发送指定队列项（从队列摘除后直发；其余仍按 settle 串行） */
+/** 立即发送指定队列项：先中断当前在途流（停止生成），再从队列摘除该项直发。
+ *  其余队列项仍按新流的 settle 串行派发。 */
 export function sendPendingNow(itemId: string): void {
   const st = useSessionStore.getState();
   const sid = st.activeId;
@@ -676,6 +677,7 @@ export function sendPendingNow(itemId: string): void {
   const item = (st.pending[sid] ?? []).find((it) => it.id === itemId);
   if (!item) return;
   st.removePending(sid, itemId);
+  interruptChat();
   void sendUserMessage(item.text, item.attachments);
 }
 
