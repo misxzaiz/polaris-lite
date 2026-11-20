@@ -14,6 +14,21 @@
  * - SSE 逐块透传 + 背压 + X-Accel-Buffering:no；客户端断开即 abort 上游。
  */
 import { readJson, sendJson, BODY_LIMIT_LARGE } from './http-util.mjs';
+import { Agent, fetch as undiciFetch } from 'undici';
+
+/**
+ * 上游 fetch 的专用 dispatcher：拉长 undici 默认超时。
+ * 默认 headersTimeout/bodyTimeout 均为 300s——推理模型（nex-n2.6 effort=high 实测）
+ * 长思考期间上游不发任何字节，超过 5 分钟中继就会 UND_ERR_HEADERS_TIMEOUT 断流，
+ * 表现为「webgl 一类复杂问题 AI 说到一半就中断」。这里放宽到 30 分钟：
+ * 连接建立/响应头/两批数据之间的静默都远超人类可感知的思考上限；客户端断开
+ * 仍由 AbortController 即时传播，不等 timeout。
+ */
+const UPSTREAM_TIMEOUT_MS = 30 * 60 * 1000;
+const upstreamAgent = new Agent({
+  headersTimeout: UPSTREAM_TIMEOUT_MS,
+  bodyTimeout: UPSTREAM_TIMEOUT_MS,
+});
 
 export function createRelayMiddleware({ store, policy, getSession }) {
   return async function relay(req, res, next) {
@@ -57,12 +72,15 @@ export function createRelayMiddleware({ store, policy, getSession }) {
     res.on('close', () => abort.abort()); // 客户端断开（中断对话）即中止上游
 
     try {
-      const up = await fetch(upstreamUrl, {
+      // undici.fetch + 自有 Agent（node 内置 fetch 与 undici 8.x Agent 协议不兼容，
+      // 实测 UND_ERR_INVALID_ARG；undici 自带 fetch 与其 Agent 配套正常）
+      const up = await undiciFetch(upstreamUrl, {
         method,
         headers,
         body: method === 'GET' ? undefined : JSON.stringify(parsed.body ?? {}),
         redirect: 'manual',
         signal: abort.signal,
+        dispatcher: upstreamAgent, // 拉长思考期超时（默认 300s 会掐断长思考，见顶部说明）
       });
 
       res.writeHead(up.status, {
