@@ -164,7 +164,8 @@ function ListTab({ month, setMonth, bills, settings, refresh }: {
       if (!m.has(d)) m.set(d, []);
       m.get(d)!.push(b);
     }
-    return [...m.entries()];
+    // 时间倒序：日组最新在前（filtered 已倒序，组间天然倒序；显式排序兜底）
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [filtered]);
 
   const del = async (id: string) => { await deleteBillById(id); await refresh(); };
