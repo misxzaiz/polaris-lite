@@ -17,6 +17,8 @@
  * - PLITE_SKILLS=0 一键禁用（server 半边 404，浏览器半边 describe 报不可用）。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { SkillPanel } from './Panel';
+import './panel.css';
 
 interface SkillDescriptor {
   name: string;
@@ -76,11 +78,13 @@ export const skillLoaderPlugin: LitePlugin = {
   manifest: {
     id: 'skill-loader',
     name: '技能加载器',
-    version: '0.1.0',
+    version: '0.2.0',
     capabilities: ['cap.meta'],
     provides: ['cap.tool.skill', 'cap.skill.appendix'],
-    events: [],
-    contributes: { slots: [] },
+    events: ['tool-registered'],
+    contributes: {
+      slots: [{ slot: 'panel', component: 'SkillPanel', order: 22, title: '技能' }],
+    },
   },
   setup(api: SlotHostApi) {
     api.registerCapability.register('cap.tool.skill', createSkillToolHandler());
@@ -89,4 +93,5 @@ export const skillLoaderPlugin: LitePlugin = {
   },
 };
 
+export { SkillPanel };
 export default skillLoaderPlugin;

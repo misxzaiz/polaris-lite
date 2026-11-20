@@ -1,0 +1,39 @@
+/* mcp-bridge 管理台样式——mcp- 前缀，只消费宿主令牌变量 */
+.mcp-panel { padding: 10px 12px; font-size: 12px; color: var(--text); overflow-y: auto; height: 100%; box-sizing: border-box; }
+.mcp-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.mcp-tab { flex: 1; padding: 5px 0; border: 1px solid var(--border); background: transparent; color: var(--text-dim, var(--text)); border-radius: 6px; cursor: pointer; font-size: 12px; }
+.mcp-tab.active { background: var(--bg-hover, var(--border)); color: var(--text); font-weight: 600; }
+.mcp-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
+.mcp-empty { color: var(--text-dim, var(--text)); padding: 12px 4px; line-height: 1.6; }
+.mcp-server { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.mcp-server-head { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.mcp-dot { font-size: 10px; }
+.mcp-dot.connected { color: #4caf7d; }
+.mcp-dot.error { color: #d64545; }
+.mcp-dot.disabled, .mcp-dot.stopped { color: var(--text-dim, var(--text)); }
+.mcp-server-name { font-weight: 600; }
+.mcp-badge { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-dim, var(--text)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+.mcp-count { margin-left: auto; color: var(--text-dim, var(--text)); font-size: 11px; white-space: nowrap; }
+.mcp-server-cmd { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-dim, var(--text)); margin-top: 4px; word-break: break-all; }
+.mcp-server-err { color: #d64545; font-size: 11px; margin-top: 4px; word-break: break-all; }
+.mcp-tools { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.mcp-tool { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+.mcp-tool-name { font-size: 11px; color: var(--text); word-break: break-all; }
+.mcp-tool-desc { flex: 1; color: var(--text-dim, var(--text)); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-none { color: var(--text-dim, var(--text)); font-size: 11px; }
+.mcp-gate { border: 1px solid var(--border); background: transparent; border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; color: var(--text); }
+.mcp-gate.off { opacity: 0.55; }
+.mcp-server-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; align-items: center; }
+.mcp-arm-text { color: #d64545; font-size: 11px; }
+.mcp-btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
+.mcp-btn.primary { background: var(--accent, var(--text)); color: var(--accent-contrast, var(--bg, #fff)); border-color: transparent; }
+.mcp-btn.danger { background: #d64545; color: #fff; border-color: transparent; }
+.mcp-btn.danger-soft { color: #d64545; }
+.mcp-btn.wide { width: 100%; padding: 6px 0; }
+.mcp-btn:disabled { opacity: 0.5; cursor: default; }
+.mcp-form { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.mcp-input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; font-family: var(--font-mono, monospace); resize: vertical; }
+.mcp-form-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.mcp-about p { line-height: 1.7; margin: 0 0 8px; }
+.mcp-about code { font-family: var(--font-mono, monospace); font-size: 11px; word-break: break-all; }
+.mcp-warn { color: #d64545; }

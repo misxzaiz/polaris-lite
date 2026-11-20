@@ -1,0 +1,21 @@
+/* hook-bridge 钩子台样式——hk- 前缀，只消费宿主令牌变量 */
+.hk-panel { padding: 10px 12px; font-size: 12px; color: var(--text); overflow-y: auto; height: 100%; box-sizing: border-box; }
+.hk-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.hk-count { color: var(--text-dim, var(--text)); font-size: 11px; }
+.hk-btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
+.hk-btn:disabled { opacity: 0.5; cursor: default; }
+.hk-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
+.hk-scan { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; white-space: pre-wrap; color: var(--text-dim, var(--text)); font-size: 11px; }
+.hk-import { border: 1px solid #4caf7d; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #4caf7d; font-size: 11px; }
+.hk-warns { border: 1px solid #d9a441; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d9a441; font-size: 11px; line-height: 1.6; word-break: break-word; }
+.hk-empty { color: var(--text-dim, var(--text)); padding: 10px 4px; line-height: 1.8; }
+.hk-empty code, .hk-matcher code, .hk-hint code { font-family: var(--font-mono, monospace); font-size: 11px; background: var(--bg-hover, var(--border)); border-radius: 4px; padding: 0 4px; word-break: break-all; }
+.hk-rule { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.hk-rule-head { display: flex; align-items: center; gap: 6px; }
+.hk-event { font-weight: 600; }
+.hk-badge { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-dim, var(--text)); }
+.hk-timeout { margin-left: auto; color: var(--text-dim, var(--text)); font-size: 11px; }
+.hk-matcher { margin-top: 4px; font-size: 11px; color: var(--text-dim, var(--text)); }
+.hk-cmd { margin-top: 4px; font-family: var(--font-mono, monospace); font-size: 11px; word-break: break-all; color: var(--text); }
+.hk-src { margin-top: 4px; font-size: 10px; color: var(--text-dim, var(--text)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-hint { margin-top: 10px; color: var(--text-dim, var(--text)); line-height: 1.7; font-size: 11px; }

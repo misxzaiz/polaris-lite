@@ -19,6 +19,8 @@
  * 每次执行写 <dataDir>/hooks-audit.log；进程 timeout 默认 60s。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { HookPanel } from './Panel';
+import './panel.css';
 
 function createHookBridgeHandler(): CapabilityHandler {
   return async (req) => {
@@ -83,15 +85,18 @@ export const hookBridgePlugin: LitePlugin = {
   manifest: {
     id: 'hook-bridge',
     name: '生命周期钩子桥',
-    version: '0.1.0',
+    version: '0.2.0',
     capabilities: ['cap.meta'],
     provides: ['cap.hook.bridge'],
     events: ['user.prompt'],
-    contributes: { slots: [] },
+    contributes: {
+      slots: [{ slot: 'panel', component: 'HookPanel', order: 23, title: '钩子' }],
+    },
   },
   setup(api: SlotHostApi) {
     api.registerCapability.register('cap.hook.bridge', createHookBridgeHandler());
   },
 };
 
+export { HookPanel };
 export default hookBridgePlugin;

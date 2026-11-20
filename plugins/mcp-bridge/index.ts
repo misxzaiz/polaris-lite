@@ -16,6 +16,8 @@
  * per-tool 门控存 cap.kv（namespace 'mcp-bridge'）。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { McpPanel, setMcpPanelApi } from './Panel';
+import './panel.css';
 
 interface McpToolDescriptor {
   cap: string;
@@ -65,6 +67,30 @@ function createMcpAdminHandler(): CapabilityHandler {
         const resp = await fetch('/api/mcp/servers', { credentials: 'include' });
         return { ok: true, ...(await resp.json()) };
       }
+      if (req.action === 'add') {
+        const payload = (req.payload ?? {}) as { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean };
+        const resp = await fetch('/api/mcp/servers', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+        return { ok: true };
+      }
+      if (req.action === 'remove') {
+        const payload = (req.payload ?? {}) as { name?: string };
+        const resp = await fetch('/api/mcp/servers/remove', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: payload.name }),
+        });
+        const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+        return { ok: true };
+      }
       if (req.action === 'gate') {
         const payload = (req.payload ?? {}) as { tool?: string; enabled?: boolean };
         const resp = await fetch('/api/mcp/gate', {
@@ -86,17 +112,21 @@ export const mcpBridgePlugin: LitePlugin = {
   manifest: {
     id: 'mcp-bridge',
     name: 'MCP 桥',
-    version: '0.1.0',
+    version: '0.2.0',
     capabilities: ['cap.meta'],
     provides: ['cap.tool.mcp', 'cap.mcp.admin'],
     events: ['tool-registered'],
-    contributes: { slots: [] },
+    contributes: {
+      slots: [{ slot: 'panel', component: 'McpPanel', order: 21, title: 'MCP' }],
+    },
   },
   setup(api: SlotHostApi) {
+    setMcpPanelApi(api);
     api.registerCapability.register('cap.tool.mcp', createMcpToolHandler());
     api.registerCapability.register('cap.mcp.admin', createMcpAdminHandler());
     api.emit('tool-registered', { cap: 'cap.tool.mcp', name: 'mcp' });
   },
 };
 
+export { McpPanel };
 export default mcpBridgePlugin;

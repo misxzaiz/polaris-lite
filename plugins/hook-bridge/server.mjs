@@ -138,6 +138,8 @@ export function createServerPart(options = {}) {
       ['workspace:.claude/settings.local.json', ws ? join(ws, '.claude', 'settings.local.json') : '', 'workspace'],
       ['user:~/.zcode/cli/config.json', join(home, '.zcode', 'cli', 'config.json'), 'user'],
       ['workspace:.zcode/config.json', ws ? join(ws, '.zcode', 'config.json') : '', 'workspace'],
+      // zcode-compat 导入产物（{events:{...}} 同构形态）：CC/ZC hooks 经固化导入后在此生效
+      ['import:hooks-import.json', join(dataDir, 'hooks-import.json'), 'workspace'],
     ];
     const key = JSON.stringify(sources.map(([p]) => p)) + '|' + sources.map(([p]) => { try { return existsSync(p) ? statMtime(p) : ''; } catch { return ''; } }).join(',');
     if (cache.key === key && cache.rules) return cache;
@@ -148,7 +150,9 @@ export function createServerPart(options = {}) {
       if (!path || !existsSync(path)) continue;
       const j = readJsonSafe(path);
       if (!j) { warns.push(`${source}: 解析失败跳过`); continue; }
-      normalizeHooksObject(j.hooks ?? (source.includes('zcode') ? j : null), source, scope, warns, rules);
+      // hooks-import.json（zcode-compat 导入产物）本身就是 {events:{...}} 归一形态，无 hooks 包裹层
+      const hooksObj = source.startsWith('import:') ? j : (j.hooks ?? (source.includes('zcode') ? j : null));
+      normalizeHooksObject(hooksObj, source, scope, warns, rules);
     }
     cache = { key, rules, warns };
     return cache;

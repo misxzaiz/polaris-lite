@@ -1,0 +1,17 @@
+/* skill-loader 技能库面板样式——sk- 前缀，只消费宿主令牌变量 */
+.sk-panel { padding: 10px 12px; font-size: 12px; color: var(--text); overflow-y: auto; height: 100%; box-sizing: border-box; }
+.sk-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sk-count { color: var(--text-dim, var(--text)); font-size: 11px; }
+.sk-btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
+.sk-btn:disabled { opacity: 0.5; cursor: default; }
+.sk-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
+.sk-empty { color: var(--text-dim, var(--text)); padding: 10px 4px; line-height: 1.8; }
+.sk-empty code, .sk-hint code { font-family: var(--font-mono, monospace); font-size: 11px; background: var(--bg-hover, var(--border)); border-radius: 4px; padding: 0 4px; word-break: break-all; }
+.sk-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.sk-item-head { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.sk-name { font-weight: 600; }
+.sk-badge { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-dim, var(--text)); }
+.sk-desc { color: var(--text-dim, var(--text)); margin-top: 4px; line-height: 1.5; word-break: break-word; }
+.sk-when { color: var(--text-dim, var(--text)); margin-top: 2px; font-size: 11px; word-break: break-word; }
+.sk-body { margin: 6px 0 0; border-top: 1px dashed var(--border); padding-top: 6px; font-family: var(--font-mono, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; color: var(--text); }
+.sk-hint { margin-top: 10px; color: var(--text-dim, var(--text)); line-height: 1.6; font-size: 11px; }
