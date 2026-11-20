@@ -520,8 +520,6 @@ export function ChatInput() {
             </div>
         </div>
         <div className="chat-input-btns">
-          {/* 上下文进度圆圈（spec §5.3 v2）：占位极小；点击经 portal 在输入条上方展开详情 */}
-          <ContextMeter />
           <button
             className="chat-send attach"
             onClick={() => fileRef.current?.click()}
@@ -561,6 +559,8 @@ export function ChatInput() {
             {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
           </button>
           <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
+          {/* 上下文进度圆圈（spec §5.3 v2）：紧贴发送/停止按钮左侧；点击经 portal 在输入条上方展开详情 */}
+          <ContextMeter />
           {showBoth && (
             <button className="chat-send stop" onClick={doInterrupt} disabled={interrupting}><StopIcon />停止</button>
           )}

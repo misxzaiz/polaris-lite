@@ -113,7 +113,9 @@ export async function loadExternalPlugins(
   // 返回一个 failed 项即可——调用方会显示告警条，并跳过孤儿视图折叠。
   let registry: PluginRegistryFile;
   try {
-    const res = await fetch(registryUrl);
+    // no-store：registry/module URL 携带产物 hash 版本号，缓存语义必须「每次校验源」——
+    // 否则浏览器磁盘缓存启发式会吃掉旧 registry（module URL 不更新），改版后表现为「改了没生效」
+    const res = await fetch(registryUrl, { cache: 'no-store' });
     if (!res.ok) throw new Error(`plugin registry fetch failed: ${res.status}`);
     registry = (await res.json()) as PluginRegistryFile;
   } catch (err) {

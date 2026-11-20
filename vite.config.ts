@@ -9,6 +9,15 @@ import { createHost } from './server/host.mjs';
 const embeddedHost = {
   name: 'polaris-lite-embedded-host',
   configureServer(server) {
+    // 插件产物禁缓存：build:plugins 改版后 reload 必须拉新 bundle，否则浏览器磁盘
+    // 缓存启发式命中旧版（transferSize=0），表现为「改了没生效」的假象。
+    // 仅 dev 服务端行为；prod 静态服务不受影响。
+    server.middlewares.use((req, res, next) => {
+      if (req.url?.startsWith('/plugins/')) {
+        res.setHeader('Cache-Control', 'no-store');
+      }
+      next();
+    });
     const { middlewares } = createHost({ dataDir: process.env.PLITE_DATA_DIR });
     for (const mw of middlewares) server.middlewares.use(mw);
   },

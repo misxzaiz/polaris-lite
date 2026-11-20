@@ -33,6 +33,7 @@
  *   node plugins/build-plugins.mjs --check      # 只跑静态一致性校验（CI 快速门禁）
  */
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   cpSync,
@@ -512,8 +513,11 @@ function publishOne(p) {
     if (errors.length) fail(errors.join('\n      '));
     warnings.forEach((w) => console.warn(`  warn ${w}`));
   }
-  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js`, enabled: p.enabled ?? true };
-  if (hasStyle) manifest.style = `/plugins/${p.id}/style.css`;
+  // 产物内容 hash 作为缓存破坏版本号：bundle 变了 URL 就变，浏览器不再吃旧缓存
+  // （dev 曾因磁盘缓存启发式命中旧 bundle，表现为「改了没生效」的假象；prod 静态服务同受益）
+  const bundleVersion = createHash('sha256').update(readFileSync(resolve(distDir, 'plugin.js'))).digest('hex').slice(0, 8);
+  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js?v=${bundleVersion}`, enabled: p.enabled ?? true };
+  if (hasStyle) manifest.style = `/plugins/${p.id}/style.css?v=${bundleVersion}`;
   const manifestFile = resolve(dest, 'plugin.json');
   writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -561,7 +565,8 @@ function writeRegistry(entries) {
   const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
   if (dup.length) fail(`registry.json id 重复：${dup.join('、')}`);
   for (const entry of readBack.plugins) {
-    const target = resolve(hostPublic, entry.module.replace(/^\/plugins\//, ''));
+    // module 带缓存破坏版本号（?v=hash）：校验文件存在性时剥离 query
+    const target = resolve(hostPublic, entry.module.replace(/^\/plugins\//, '').split('?')[0]);
     if (!existsSync(target)) fail(`registry 指向的文件不存在：${entry.module}`);
   }
   ok(`registry.json（${readBack.plugins.length} 个插件）回读校验通过`);

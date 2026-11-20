@@ -40,7 +40,8 @@ test('registry 条目自洽：id 唯一、module/style 指向真实文件', { sk
       const url = entry[field];
       if (!url) continue;
       assert.ok(url.startsWith(`/plugins/${entry.id}/`), `${entry.id}.${field} 未指向自身目录：${url}`);
-      const file = resolve(hostPublic, url.replace(/^\/plugins\//, ''));
+      // module/style URL 带缓存破坏版本号（?v=内容hash），校验文件存在性时剥离 query
+      const file = resolve(hostPublic, url.replace(/^\/plugins\//, '').split('?')[0]);
       assert.ok(existsSync(file), `${entry.id}.${field} 指向的文件不存在：${url}`);
       assert.ok(statSync(file).size > 0, `${entry.id}.${field} 是空文件：${url}`);
     }
