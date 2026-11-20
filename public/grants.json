@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": "4",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -104,7 +104,8 @@
         "cap.tool.render",
         "cap.model.admin",
         "cap.tool.ledger",
-        "cap.tool.browser"
+        "cap.tool.browser",
+        "cap.tool.files-write"
       ],
       "provides": [
         "cap.agent.loop"
@@ -197,6 +198,15 @@
         "cap.plugin.admin"
       ],
       "events": []
+    },
+    "agent-files": {
+      "capabilities": [],
+      "provides": [
+        "cap.tool.files-write"
+      ],
+      "events": [
+        "tool-registered"
+      ]
     }
   }
 }

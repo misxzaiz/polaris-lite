@@ -20,6 +20,7 @@
 export const SERVER_PLUGINS = [
   { id: 'file-browser', entry: './file-browser/server.mjs' },
   { id: 'agent-bash', entry: './agent-bash/server.mjs' },
+  { id: 'agent-files', entry: './agent-files/server.mjs' },
   { id: 'html-preview', entry: './html-preview/server.mjs' },
   { id: 'browser-lite', entry: './browser-lite/server.mjs' },
   { id: 'kv-store', entry: './kv-store/server.mjs' },
