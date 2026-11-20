@@ -110,7 +110,9 @@ export async function callBrowserApi(action: string, params: Record<string, unkn
   if (!resp.ok || !json) {
     return { ok: false, error: json?.error ?? `HTTP ${resp.status}` };
   }
-  return json.result ?? { ok: false, error: json.error ?? 'empty response' };
+  // 服务端成功响应是 {ok:true, result:{...引擎载荷}}；引擎载荷本身无 ok 字段
+  // （如 search 返回 {tabId,url,results}）——这里补 ok，让 agent-loop 的 br.ok 判定成立。
+  return { ok: true, ...(json.result ?? {}) };
 }
 
 function createBrowserHandler(): CapabilityHandler {

@@ -101,9 +101,20 @@ function createFsHandler(): CapabilityHandler {
             name: 'files',
             description:
               '浏览与读取工作区文件（只读）。动作：roots=列出工作区根与当前工作区；' +
-              'list=列目录（rootId+相对路径）；read=读文本文件（可带 head/tail 行数取片段）。' +
+              'list=列目录（rootId+相对路径；rootId 缺省=内置 workspace）；' +
+              'read=读文本文件（rootId+path，可带 head/tail 行数取片段；rootId 缺省=内置 workspace）。' +
               '路径一律相对工作区根；写入请用 bash 工具。',
-            parameters: { type: 'object', properties: {} },
+            parameters: {
+              type: 'object',
+              properties: {
+                action: { type: 'string', enum: ['roots', 'list', 'read'], description: '要执行的动作' },
+                rootId: { type: 'string', description: '工作区根 id（roots 返回；list/read 必填，缺省=内置 workspace）' },
+                path: { type: 'string', description: '相对工作区根的路径（list/read）' },
+                head: { type: 'number', description: 'read：只取前 N 行' },
+                tail: { type: 'number', description: 'read：只取后 N 行' },
+              },
+              required: ['action'],
+            },
             danger: 'read',
           },
         };

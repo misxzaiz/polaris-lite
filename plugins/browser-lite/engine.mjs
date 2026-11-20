@@ -151,6 +151,43 @@ export function createEngine({ loadPuppeteer, chromePath, guardUrl, log, launchA
   }
 
   // ── Chrome 启动与自愈 ──────────────────────────────────────────────────
+  /**
+   * launch 带 profile 锁自愈：userDataDir 被上一个 Chrome 实例占用时
+   * （进程退出后句柄释放有秒级延迟，Windows 实测），先按计划 profile 重试，
+   * 仍失败则降级到一次性临时 profile（隔离性略降但可用性优先，并告警）。
+   */
+  async function launchWithProfileHealing(puppeteer) {
+    const baseOpts = {
+      executablePath: chromePath,
+      headless: false,
+      defaultViewport: null, // 网页开独立 Chrome 窗口（plan §2 裁定）
+      protocolTimeout: 0,
+      args: [
+        '--disable-renderer-backgrounding',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--restore-last-session=false',
+        ...(launchArgs?.args ?? []),
+      ],
+    };
+    const attempts = launchArgs?.userDataDir
+      ? [{ userDataDir: launchArgs.userDataDir }, { userDataDir: launchArgs.userDataDir }, {}]
+      : [{}];
+    let lastErr = null;
+    for (let i = 0; i < attempts.length; i += 1) {
+      try {
+        return await puppeteer.launch({ ...baseOpts, ...attempts[i] });
+      } catch (e) {
+        lastErr = e;
+        const locked = /already running|userDataDir|ProcessSingleton/i.test(String(e.message));
+        if (!locked || i === attempts.length - 1) throw e;
+        logger.warn(`Chrome 启动失败(profile 锁，重试 ${i + 1}/${attempts.length - 1}): ${e.message}`);
+        await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   async function ensureBrowser() {
     if (browser && browser.connected) return browser;
     if (startingPromise) return startingPromise;
@@ -160,20 +197,7 @@ export function createEngine({ loadPuppeteer, chromePath, guardUrl, log, launchA
         throw new Error('未找到 Chrome/Edge：请设置 BROWSER_LITE_CHROME 环境变量指向 chrome.exe');
       }
       logger.info(`launch Chrome: ${chromePath}`);
-      browser = await puppeteer.launch({
-        executablePath: chromePath,
-        headless: false,
-        defaultViewport: null, // 网页开独立 Chrome 窗口（plan §2 裁定）
-        protocolTimeout: 0,
-        args: [
-          '--disable-renderer-backgrounding',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--restore-last-session=false',
-          ...(launchArgs?.args ?? []),
-        ],
-        ...(launchArgs?.userDataDir ? { userDataDir: launchArgs.userDataDir } : {}),
-      });
+      browser = await launchWithProfileHealing(puppeteer);
       browser.on('disconnected', () => {
         logger.warn('Chrome 断连');
         browser = null;

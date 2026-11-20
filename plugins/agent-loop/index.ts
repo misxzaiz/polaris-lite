@@ -628,6 +628,13 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             : ia.ok && ia.answer
               ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
               : `[交互卡失败] ${ia.error ?? 'no answer'}`;
+          // 工具卡终态回执：交互卡没有 exec 语义，也必须发 tool.result 收敛卡片，
+          // 否则 UI 永远停在「执行中」转圈（2026-11-20 工具卡状态不回显修复）。
+          emitTo(emit, 'tool.result', {
+            sessionId, messageId: assistantId, callId,
+            status: ia.ok ? 'done' : 'error',
+            stderr: ia.ok ? undefined : (ia.error ?? '交互卡失败'),
+          });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -651,6 +658,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const feedback = pr.ok
             ? `[预览已生成] previewId=${pr.previewId} 版本=${pr.versionLabel ?? '?'} 标题=${pr.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
             : `[预览生成失败] ${pr.error ?? 'unknown error'}`;
+          // 工具卡终态回执：render 不走 exec 通用路径，同样必须发 tool.result 收敛卡片
+          emitTo(emit, 'tool.result', {
+            sessionId, messageId: assistantId, callId,
+            status: pr.ok ? 'done' : 'error',
+            stderr: pr.ok ? undefined : (pr.error ?? '预览生成失败'),
+          });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -674,6 +687,91 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           continue;
         }
 
+        // files（cap.tool.fs）：动作语义只读工具（roots/list/read），不走 exec——
+        // 服务端只有 GET /api/fs/*；模型给 {action,...}，按动作分发并回结构化结果。
+        // 修复（2026-11-20）：此前掉进通用 exec 分支，fs 无 exec 动作恒报
+        // unknown action，且 tool.result 事件缺失 → 工具卡永远「执行中」转圈。
+        if (desc?.cap === 'cap.tool.fs') {
+          let fr: { ok?: boolean; error?: string; [k: string]: unknown } = { ok: false, error: 'fs tool did not run' };
+          let frSummary = '';
+          try {
+            const fa = safeFsArgs(call.arguments);
+            const action = String(fa.action ?? '');
+            if (action === 'roots') {
+              const r = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[]; note?: string }>({ target: 'cap.tool.fs', action: 'roots' });
+              if (!r.ok) {
+                fr = { ok: false, error: r.error?.message ?? 'roots dispatch failed' };
+              } else {
+                const roots = r.data?.roots ?? [];
+                fr = { ok: true, roots: roots };
+                frSummary = roots.length
+                  ? `roots=${roots.length}: ${roots.map((x) => `${x.label}（id=${x.id}, path=${x.path}${x.builtin ? ', builtin' : ''}）`).join('; ')}`
+                  : '（无登记根）';
+              }
+            } else if (action === 'list') {
+              if (!fa.rootId) {
+                // 无 rootId 时先拉 roots 取默认（builtin 优先），避免模型必须先查再列两轮
+                const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+                const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
+                if (!builtin) {
+                  fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                } else {
+                  fa.rootId = builtin.id;
+                }
+              }
+              if (fa.rootId) {
+                const q = new URLSearchParams({ rootId: fa.rootId, path: fa.path ?? '' });
+                const resp = await fetch(`/api/fs/list?${q}`, { credentials: 'include' });
+                const json = (await resp.json().catch(() => null)) as { entries?: unknown[]; truncated?: boolean; error?: string } | null;
+                fr = !resp.ok || !json ? { ok: false, error: json?.error ?? `HTTP ${resp.status}` } : { ok: true, entries: json.entries, truncated: json.truncated };
+                frSummary = fr.ok ? `list ok（${(json?.entries ?? []).length} 项，rootId=${fa.rootId}，path=${fa.path ?? ''}）` : `list 失败：${fr.error}`;
+              }
+            } else if (action === 'read') {
+              if (!fa.rootId) {
+                const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+                const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
+                if (!builtin) {
+                  fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                } else {
+                  fa.rootId = builtin.id;
+                }
+              }
+              if (fa.rootId) {
+                const q = new URLSearchParams({ rootId: fa.rootId, path: fa.path ?? '' });
+                if (fa.head) q.set('head', String(fa.head));
+                if (fa.tail) q.set('tail', String(fa.tail));
+                const resp = await fetch(`/api/fs/read?${q}`, { credentials: 'include' });
+                const json = (await resp.json().catch(() => null)) as { text?: string; size?: number; truncated?: boolean; tooLarge?: boolean; isText?: boolean; hint?: string; error?: string } | null;
+                if (!resp.ok || !json) {
+                  fr = { ok: false, error: json?.error ?? `HTTP ${resp.status}` };
+                } else if (json.tooLarge) {
+                  fr = { ok: false, error: json.hint ?? '文件过大' };
+                } else if (!json.isText) {
+                  fr = { ok: false, error: '二进制文件不支持文本读取' };
+                } else {
+                  fr = { ok: true, text: json.text, size: json.size, truncated: json.truncated };
+                }
+                frSummary = fr.ok ? `read ok（${json?.size ?? '?'}B，path=${fa.path ?? ''}）：\n${capText(String(json?.text ?? ''), 2000)}` : `read 失败：${fr.error}`;
+              }
+            } else {
+              fr = { ok: false, error: `unknown fs action: ${action || '(empty)'}（可用：roots/list/read）` };
+            }
+          } catch (err) {
+            fr = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          // 喂回 shadow：结构化结果转摘要（read 全文按上限截断），AI 下一轮据此继续
+          const feedback = fr.ok
+            ? `[files 完成] ${frSummary || JSON.stringify(fr).slice(0, FEEDBACK_CAP)}`
+            : `[files 工具执行失败] ${fr.error ?? 'unknown error'}`;
+          emitTo(emit, 'tool.result', {
+            sessionId, messageId: assistantId, callId,
+            status: fr.ok ? 'done' : 'error',
+            stderr: fr.ok ? undefined : String(fr.error ?? 'files 工具执行失败'),
+          });
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+          continue;
+        }
+
         // 日常记账（cap.tool.ledger）：动作语义工具（add/query/...），不走 exec——
         // 模型在 arguments 里给 {action,...}，解析后透传给 ledger 处理器；入账响应自带预算提醒。
         if (desc?.cap === 'cap.tool.ledger') {
@@ -692,6 +790,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const feedback = lr.ok
             ? `[记账成功] ${JSON.stringify(lr)}${lr.hint ? `；${lr.hint}` : ''}`
             : `[记账失败] ${lr.error ?? 'unknown error'}`;
+          // 工具卡终态回执：ledger 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
+          emitTo(emit, 'tool.result', {
+            sessionId, messageId: assistantId, callId,
+            status: lr.ok ? 'done' : 'error',
+            stderr: lr.ok ? undefined : (lr.error ?? '记账失败'),
+          });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -709,6 +813,11 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
               payload: { ...args, sessionId, messageId: assistantId },
             });
             br = res.data ?? { ok: false, error: 'empty response' };
+            // dispatch 失败（权限/未知动作）时 res.data 为空但 res.error 有值
+            if (!res.ok && !br.ok) br = { ok: false, error: res.error?.message ?? 'browser dispatch failed' };
+            // 成功路径：结构化结果（tabs 的 {tabs}、search 的数组等）不一定带 ok 字段——
+            // dispatch 已 ok 且无 error 即视为成功（2026-11-20 冒烟修正）
+            if (res.ok && br.ok === undefined && !br.error) br = { ...br, ok: true };
           } catch (err) {
             br = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
@@ -716,6 +825,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const feedback = br.ok
             ? `[浏览器操作完成] ${JSON.stringify(br)}`
             : `[浏览器操作失败] ${br.error ?? 'unknown error'}`;
+          // 工具卡终态回执：browser 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
+          emitTo(emit, 'tool.result', {
+            sessionId, messageId: assistantId, callId,
+            status: br.ok ? 'done' : 'error',
+            stderr: br.ok ? undefined : String(br.error ?? '浏览器操作失败'),
+          });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -856,6 +971,22 @@ function safeBrowserArgs(raw: string): Record<string, unknown> {
       if (p[k] !== undefined && p[k] !== null) out[k] = p[k];
     }
     return out;
+  } catch {
+    return {};
+  }
+}
+
+/** files 工具参数解析（fs：action/rootId/path/head/tail 白名单透传，与 file-browser createFsHandler 对齐） */
+function safeFsArgs(raw: string): { action?: string; rootId?: string; path?: string; head?: number; tail?: number } {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return {
+      ...(p.action !== undefined ? { action: String(p.action) } : {}),
+      ...(p.rootId !== undefined ? { rootId: String(p.rootId) } : {}),
+      ...(p.path !== undefined ? { path: String(p.path) } : {}),
+      ...(p.head !== undefined ? { head: Number(p.head) } : {}),
+      ...(p.tail !== undefined ? { tail: Number(p.tail) } : {}),
+    };
   } catch {
     return {};
   }
