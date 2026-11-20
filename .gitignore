@@ -32,3 +32,9 @@ docs/*.png
 android/
 android-signing/
 plite-*.apk
+
+# 运行时数据目录（含明文密钥/会话/对话，禁止入库）
+.polaris-lite-pm2/
+.polaris-lite/
+.polaris-lite-dev/
+nonexistent-dir-for-test/
