@@ -18,7 +18,7 @@ import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
 } from './attachments';
 import { AttachmentStrip } from './AttachmentStrip';
-import { SessionNav } from './SessionNav';
+import { useSessionSwipe } from './useSessionSwipe';
 import { PaperclipIcon, SendIcon, StopIcon, FolderIcon, ChevronRightIcon, PlusIcon } from './icons';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
@@ -135,6 +135,9 @@ export function ChatInput() {
   const [wsRev, setWsRev] = useState(0);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;
+
+  // 隐形滑切：输入条内非 textarea 区域横向滑动切上一个/下一个会话（零常驻 UI）
+  const { swipeProps } = useSessionSwipe(taRef);
 
   /** 浮层定位：用 bottom 贴住输入条上方（高度由内容决定，避免内容少时留一大片空白）；
       空间不足时用 max-height 收紧，列表在内部滚动，绝不越过视口顶部 */
@@ -503,9 +506,9 @@ export function ChatInput() {
       onPaste={handlePaste}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
+      {...swipeProps}
     >
         {attachErr && <div className="chat-input-warn">{attachErr}</div>}
-        <SessionNav onFocusInput={() => taRef.current?.focus()} />
         <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
         <textarea
           ref={taRef}
