@@ -127,12 +127,15 @@ function createBrowserHandler(): CapabilityHandler {
           ...payload,
           ...(typeof payload.sessionId === 'string' && payload.sessionId ? { sessionId: payload.sessionId } : {}),
         });
-        // 截图动作：emit artifact.created（chat-lite 通用 artifact 块渲染 ShotCard）
+        // 截图动作：emit artifact.created（chat-lite 通用 artifact 块渲染 ShotCard）。
+        // callId 用工具调用的 callId（agent-loop 透传）：chat-lite 据此把截图块
+        // 归位到对应工具卡之后原位渲染（此前用 shotId，截图会沉到消息尾部）。
         if (req.action === 'screenshot' && r.ok && r.shotId) {
           const sid = typeof payload.sessionId === 'string' ? payload.sessionId : undefined;
           const mid = typeof payload.messageId === 'string' ? payload.messageId : undefined;
+          const cid = typeof payload.callId === 'string' ? payload.callId : undefined;
           hostApi?.emit('artifact.created', {
-            callId: String(r.shotId),
+            callId: cid ?? String(r.shotId),
             rendererType: 'browser-lite-shot',
             title: '浏览器截图',
             data: { shotId: r.shotId, url: r.url, tabId: r.tabId },

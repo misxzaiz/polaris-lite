@@ -822,7 +822,9 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             const res = await hostApi.dispatch<{ ok?: boolean; error?: string; [k: string]: unknown }>({
               target: 'cap.tool.browser',
               action: String(args.action ?? ''),
-              payload: { ...args, sessionId, messageId: assistantId },
+              // callId 透传：截图动作 emit artifact.created 时以此为 callId，
+              // chat-lite 据此把截图 artifact 归位到本工具卡之后（而不是沉到消息尾）。
+              payload: { ...args, sessionId, messageId: assistantId, callId },
             });
             br = res.data ?? { ok: false, error: 'empty response' };
             // dispatch 失败（权限/未知动作）时 res.data 为空但 res.error 有值
@@ -1012,7 +1014,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

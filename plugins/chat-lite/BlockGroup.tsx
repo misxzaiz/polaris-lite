@@ -7,7 +7,7 @@
  * - **流结束统一折叠**：整组收拢为一条汇总条（全部完成/有失败 · N 项），点开回看全程；
  * - 非空 text 块打断分组（正文永远平铺，流式末尾带光标）。
  */
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Markdown } from './markdown';
 import type { AsstBlock, ArtifactCardData, ToolCardData, ToolCardMessage } from './store';
 import { ToolCard } from './ToolCard';
@@ -93,12 +93,12 @@ function GroupSummary({ count, anyFail, streaming, onExpand }: {
  * 过程块组：流式期间平铺（每张工具卡/思考块实时可见）；
  * 流结束统一折叠为汇总条，点开回看全程。
  */
-function ProcessGroup({ items, streaming }: { items: GroupItem[]; streaming: boolean }) {
+function ProcessGroup({ items, streaming, artifacts = [] }: { items: GroupItem[]; streaming: boolean; artifacts?: ArtifactCardData[] }) {
   // 组内含「产物型工具卡」（截图/预览等，卡片 data 带 artifact 引用）时不自动收拢：
   // 产物是结果而非过程，折叠进汇总条会让用户找不到截图（用户反馈：截图在思考/正文出现后消失）。
-  // 识别口径：html-preview/browser-lite 的工具名，产物卡由 artifact 块独立渲染，但
-  // 工具卡本身承载操作回执——收拢会连回执一起藏掉，故这类组保持平铺。
-  const hasArtifactTool = items.some(
+  // 识别口径：html-preview/browser-lite 的工具名 + 本组挂着 artifact 产物——
+  // 有产物随组渲染时折叠会连产物一起藏掉，故这类组保持平铺。
+  const hasArtifactTool = artifacts.length > 0 || items.some(
     (it) => it.kind === 'tool' && /^(render|browser|screenshot)$/i.test(it.block.card.name || ''),
   );
   const collapsible = items.length > 1 && !hasArtifactTool;
@@ -111,13 +111,26 @@ function ProcessGroup({ items, streaming }: { items: GroupItem[]; streaming: boo
   const toolCount = items.filter((it) => it.kind === 'tool').length;
   const anyFail = items.some((it) => it.kind === 'tool' && (it.block.card.status === 'error' || it.block.card.status === 'denied'));
 
+  // 产物按 callId 跟随对应工具卡：渲染完一张工具卡，紧跟渲染它的截图/预览产物
+  const artifactByCall = new Map<string, ArtifactCardData>();
+  artifacts.forEach((a) => artifactByCall.set(a.callId, a));
+  const renderArtifactsAfter = (callId: string): React.ReactNode[] => {
+    const a = artifactByCall.get(callId);
+    return a ? [<ArtifactSlot key={`af-${a.callId}`} card={a} />] : [];
+  };
+
   return (
     <div className="tc-group">
       {expanded ? (
         <>
           {items.map((it, i) =>
             it.kind === 'tool'
-              ? <CardShim key={`t-${it.block.card.callId || i}`} card={it.block.card} />
+              ? (
+                <Fragment key={`t-${it.block.card.callId || i}`}>
+                  <CardShim card={it.block.card} />
+                  {renderArtifactsAfter(it.block.card.callId)}
+                </Fragment>
+              )
               : <ThinkingBlock key={`th-${i}`} text={it.block.text} live={streaming && i === items.length - 1} />,
           )}
           {!streaming && collapsible && (
@@ -156,6 +169,33 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
     }
   });
 
+  // artifact 归位：callId 与某工具卡的 callId 相同 → 该产物属于那次工具调用，
+  // 渲染在**该工具卡之后**（组内原位），而不是按事件到达顺序沉到消息尾部。
+  // （用户反馈：截图堆在消息最后很奇怪；工具卡才是用户定位「这次调用」的锚点。）
+  const artifactOwner = new Map<string, number>(); // artifact callId → 组序号
+  blocks.forEach((b, i) => {
+    if (b.type === 'artifact' && b.card.callId) {
+      for (let k = i - 1; k >= 0; k -= 1) {
+        const prev = blocks[k];
+        if (prev.type === 'tool' && prev.card.callId === b.card.callId) {
+          const g = owner.get(k);
+          if (g !== undefined) artifactOwner.set(b.card.callId, g);
+          break;
+        }
+        if (prev.type === 'text' && prev.text.trim().length > 0) break; // 跨正文不算
+      }
+    }
+  });
+  // 组序号 → 挂到该组的 artifact 块（保持出现顺序）
+  const groupArtifacts = new Map<number, AsstBlock[]>();
+  blocks.forEach((b) => {
+    if (b.type === 'artifact' && b.card.callId && artifactOwner.has(b.card.callId)) {
+      const g = artifactOwner.get(b.card.callId)!;
+      if (!groupArtifacts.has(g)) groupArtifacts.set(g, []);
+      groupArtifacts.get(g)!.push(b);
+    }
+  });
+
   const result: React.ReactNode[] = [];
   // 已渲染块标记（按块对象引用，不用索引区间——组内块之间可能夹着 artifact 等
   // 独立渲染块，按索引区间标记会把夹着的块误标为已处理而跳过渲染，
@@ -166,9 +206,18 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
     const g = owner.get(i);
     if (g !== undefined) {
       const group = groups[g];
-      result.push(<ProcessGroup key={`g-${group.start}`} items={group.items} streaming={streaming} />);
+      const arts = (groupArtifacts.get(g) ?? []).filter((a): a is Extract<AsstBlock, { type: 'artifact' }> => a.type === 'artifact').map((a) => a.card);
+      result.push(
+        <ProcessGroup
+          key={`g-${group.start}`}
+          items={group.items}
+          streaming={streaming}
+          artifacts={arts}
+        />,
+      );
       // 只标记组内实际包含的块（按引用）；夹在组内块之间的其它块（artifact 等）不受影响
       group.items.forEach((it) => processed.add(it.block));
+      arts.forEach((a) => processed.add({ type: 'artifact', card: a })); // 归组的 artifact 随组渲染（标记回块引用）
     } else if (b.type === 'interactive') {
       result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
     } else if (b.type === 'artifact') {
