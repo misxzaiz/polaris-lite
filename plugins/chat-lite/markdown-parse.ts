@@ -28,6 +28,7 @@ export type Block =
   | { type: 'hr' }
   | { type: 'quote'; children: Inline[] }
   | { type: 'list'; ordered: boolean; items: Inline[][] }
+  | { type: 'table'; head: string[]; rows: string[][] }
   | { type: 'p'; children: Inline[] };
 
 /** 只放行安全协议（避免 javascript: / data: 一类链接） */
@@ -40,6 +41,7 @@ const RE_FENCE = /^\s{0,3}```(.*)$/;
 const RE_FENCE_END = /^\s{0,3}```\s*$/;
 const RE_HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const RE_HR = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const RE_TABLE_SEP = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 const RE_QUOTE = /^\s{0,3}>\s?(.*)$/;
 const RE_UL = /^\s*[-*+]\s+(.*)$/;
 const RE_OL = /^\s*\d+[.)]\s+(.*)$/;
@@ -118,6 +120,20 @@ export function parseBlocks(src: string): Block[] {
       continue;
     }
 
+    // 表格（管道表）：表头行 + 分隔行（|---|---|）+ 数据行；流式中未闭合也能渐进渲染
+    if (line.includes('|') && i + 1 < lines.length && RE_TABLE_SEP.test(lines[i + 1])) {
+      const splitRow = (row: string) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+      const head = splitRow(line);
+      i += 2; // 跳过表头与分隔行
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(splitRow(lines[i]));
+        i += 1;
+      }
+      blocks.push({ type: 'table', head, rows });
+      continue;
+    }
+
     if (RE_QUOTE.test(line)) {
       const quote: string[] = [];
       while (i < lines.length && RE_QUOTE.test(lines[i])) {
@@ -153,7 +169,8 @@ export function parseBlocks(src: string): Block[] {
         RE_HR.test(l) ||
         RE_QUOTE.test(l) ||
         RE_UL.test(l) ||
-        RE_OL.test(l)
+        RE_OL.test(l) ||
+        (l.includes('|') && i + 1 < lines.length && RE_TABLE_SEP.test(lines[i + 1]))
       ) break;
       para.push(l);
       i += 1;

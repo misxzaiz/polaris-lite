@@ -9,7 +9,7 @@
  * 3. 解析与渲染分离：正则边界由 markdown-parse.ts 承担并可被单元测试覆盖。
  */
 import { useState, type ReactNode } from 'react';
-import { parseBlocks, type Block, type Inline } from './markdown-parse';
+import { parseBlocks, parseInline, type Block, type Inline } from './markdown-parse';
 import { CheckIcon, CopyIcon } from './icons';
 
 /** 超过该长度不再做 Markdown 解析：长文档逐帧重排会明显掉帧，退回纯文本更诚实 */
@@ -98,6 +98,23 @@ function renderBlock(b: Block, key: string): ReactNode {
         <ul key={key}>
           {b.items.map((it, i) => <li key={i}>{renderInline(it, `${key}-${i}`)}</li>)}
         </ul>
+      );
+    case 'table':
+      return (
+        <div key={key} className="md-table-wrap">
+          <table className="md-table">
+            <thead>
+              <tr>{b.head.map((h, i) => <th key={i}>{renderInline(parseInline(h), `${key}-h${i}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {b.rows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => <td key={ci}>{renderInline(parseInline(cell), `${key}-${ri}-${ci}`)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       );
     case 'p':
       return <p key={key}>{renderInline(b.children, key)}</p>;
