@@ -857,10 +857,15 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         inFlightExec.set(sessionId, callId);
         let exec: { ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean };
         try {
+          // files_write（cap.tool.files-write）：动作语义工具，参数透传走 safeArgsFilesWrite
+          // （通用 safeArgs 只放行 command/timeoutMs，会把 action/path/content 全剥掉）。
+          const payload = desc.cap === 'cap.tool.files-write'
+            ? { ...safeArgsFilesWrite(call.arguments), sessionId, approved: true }
+            : { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
           const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
             target: desc.cap,
             action: 'exec',
-            payload: { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) },
+            payload,
           });
           exec = res.data ?? { ok: false, error: 'empty response' };
         } catch (err) {
@@ -923,6 +928,29 @@ function safeArgs(raw: string): { command?: string; timeoutMs?: number } {
     return {
       ...(p.command !== undefined ? { command: String(p.command) } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: Number(p.timeoutMs) } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** files_write 参数解析（agent-files：透传动作语义字段，其余丢弃） */
+function safeArgsFilesWrite(raw: string): {
+  action?: string; path?: string; content?: string;
+  old_string?: string; new_string?: string; expected_replacements?: number;
+  patch?: string; rootId?: string;
+} {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return {
+      ...(p.action !== undefined ? { action: String(p.action) } : {}),
+      ...(p.path !== undefined ? { path: String(p.path) } : {}),
+      ...(p.content !== undefined ? { content: String(p.content) } : {}),
+      ...(p.old_string !== undefined ? { old_string: String(p.old_string) } : {}),
+      ...(p.new_string !== undefined ? { new_string: String(p.new_string) } : {}),
+      ...(p.expected_replacements !== undefined ? { expected_replacements: Number(p.expected_replacements) } : {}),
+      ...(p.patch !== undefined ? { patch: String(p.patch) } : {}),
+      ...(p.rootId !== undefined ? { rootId: String(p.rootId) } : {}),
     };
   } catch {
     return {};
