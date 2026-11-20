@@ -52,8 +52,16 @@ export function createServerPart(options = {}) {
         if (j.activeRootPath) return j.activeRootPath;
       }
     } catch { /* 忽略 */ }
-    const roots = workspaceRoots();
-    return roots.find((r) => r.builtin)?.path ?? roots[0]?.path ?? '';
+    try {
+      const roots = JSON.parse(readFileSync(join(dataDir, 'workspace-roots.json'), 'utf8'));
+      const list = Array.isArray(roots.roots) ? roots.roots : [];
+      const hit = list.find((r) => r.path && !r.builtin) ?? list.find((r) => r.path);
+      if (hit?.path && existsSync(hit.path)) return hit.path;
+    } catch { /* 忽略 */ }
+    // 兜底：宿主内建工作区（agent-bash 启动即 mkdir，始终存在）——
+    // 修复：全新实例没有 workspace-state/roots 文件，此前返回 '' 导致只扫原生目录、
+    // 工作区内的 .claude/skills 永远不被发现。
+    return join(dataDir, 'workspace');
   }
 
   /** 解析 SKILL.md frontmatter（扁平 key: value；无 frontmatter 返回空对象） */

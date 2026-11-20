@@ -81,6 +81,86 @@ interface EngineEvent {
 const shadows = new Map<string, ShadowMsg[]>();
 const running = new Map<string, () => void>();
 const tools = new Map<string, ToolDescriptorProto>();
+
+// ---- loop 运行态上报 + live 事件镜像（多设备「执行中」可见 + 跨设备实时查看） ----
+// 服务端 chat-store：POST /api/chat/sessions/:id/loop-state 登记 start/heartbeat/done；
+// POST /api/chat/sessions/:id/live-event 批量镜像编排事件。fire-and-forget（离线静默）；
+// standalone 独立档服务端本就不可达，失败无副作用。服务端 20s 无心跳自动回收，
+// 所以 heartbeat 只需 8s 一次；镜像批 250ms 聚合避免逐 token 打爆服务端。
+const LOOP_REPORT_URL = (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/loop-state`;
+const LIVE_EVENT_URL = (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/live-event`;
+const LOOP_HEARTBEAT_MS = 8_000;
+const LIVE_FLUSH_MS = 250;
+const LIVE_BATCH_MAX = 64;
+
+function deviceLabel(): string {
+  if (typeof navigator === 'undefined') return '未知设备';
+  return /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent) ? '手机' : '电脑';
+}
+
+function reportLoop(sessionId: string, event: 'start' | 'heartbeat' | 'done'): void {
+  void fetch(LOOP_REPORT_URL(sessionId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ event, device: deviceLabel() }),
+  }).catch(() => undefined);
+}
+
+/** 事件镜像缓冲：sessionId → 待发事件（250ms 或满 64 条刷出） */
+const liveBuffers = new Map<string, { kind: string; payload: unknown }[]>();
+const liveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function flushLive(sessionId: string): void {
+  const buf = liveBuffers.get(sessionId);
+  liveBuffers.delete(sessionId);
+  const t = liveTimers.get(sessionId);
+  if (t) { clearTimeout(t); liveTimers.delete(sessionId); }
+  if (!buf || buf.length === 0) return;
+  void fetch(LIVE_EVENT_URL(sessionId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ events: buf.slice(0, LIVE_BATCH_MAX) }),
+  }).catch(() => undefined);
+}
+
+/** 编排事件镜像：只镜像查看端关心的流式语义事件；done 类事件即时刷出 */
+function mirrorLive(sessionId: string, kind: string, payload: unknown): void {
+  if (!kind.startsWith('message.') && !kind.startsWith('tool.') && kind !== 'loop.done' && kind !== 'stream.error') return;
+  const buf = liveBuffers.get(sessionId) ?? [];
+  buf.push({ kind, payload });
+  liveBuffers.set(sessionId, buf);
+  if (kind === 'loop.done' || kind === 'stream.error' || kind === 'message.done' || buf.length >= LIVE_BATCH_MAX) {
+    flushLive(sessionId);
+  } else if (!liveTimers.has(sessionId)) {
+    liveTimers.set(sessionId, setTimeout(() => flushLive(sessionId), LIVE_FLUSH_MS));
+  }
+}
+
+/** 会话执行期句柄：心跳定时器 + 结束时统一收口（done 上报 + 残余镜像刷出） */
+const loopLifetimes = new Map<string, { hb: ReturnType<typeof setInterval>; stop: () => void }>();
+
+function beginLoopRuntime(sessionId: string): void {
+  endLoopRuntime(sessionId); // 防御：同会话残留句柄先收口
+  reportLoop(sessionId, 'start');
+  const hb = setInterval(() => reportLoop(sessionId, 'heartbeat'), LOOP_HEARTBEAT_MS);
+  loopLifetimes.set(sessionId, {
+    hb,
+    stop: () => {
+      clearInterval(hb);
+      flushLive(sessionId);
+      reportLoop(sessionId, 'done');
+    },
+  });
+}
+
+function endLoopRuntime(sessionId: string): void {
+  const lt = loopLifetimes.get(sessionId);
+  if (!lt) return;
+  loopLifetimes.delete(sessionId);
+  lt.stop();
+}
 /** callId → resolve(decision)；confirm 模式挂起点 */
 const pendingApprovals = new Map<string, (d: 'once' | 'always' | 'trust' | 'deny') => void>();
 /** 会话在途 exec 的 callId（中断时用于立即回执工具卡） */
@@ -122,7 +202,13 @@ interface AiUsageEvent {
 
 function emitTo(emit: (ev: { kind: string; payload: unknown }) => void, kind: string, payload: Record<string, unknown>): void {
   emit({ kind, payload });
+  // live 镜像（查看端实时渲染的数据源；session 已在上层解出）
+  const sid = (payload as { sessionId?: string }).sessionId;
+  if (sid) mirrorLive(sid, kind, payload);
 }
+
+/** length 截断自动续写的 burst 上限（每次续写都会再花一轮输出预算；耗尽走「继续」按钮兜底） */
+const MAX_AUTO_CONTINUE = 3;
 
 /** 截断喂回模型的工具结果（保头尾） */
 function capText(text: string, cap = FEEDBACK_CAP): string {
@@ -137,6 +223,7 @@ async function discoverTools(): Promise<void> {
   try {
     const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
     const caps = (res.data?.capabilities ?? []).filter((c) => c.startsWith('cap.tool.') || c === 'cap.interactive');
+    try { localStorage.setItem('mcp-debug-discover-caps', JSON.stringify({ at: new Date().toISOString(), caps })); } catch { /* 忽略 */ }
     for (const cap of caps) {
       const r = await hostApi.dispatch<{ descriptor?: ToolDescriptorProto; descriptors?: ToolDescriptorProto[] }>({ target: cap, action: 'describe' });
       // A1 兼容两种 describe 形态：单 descriptor（存量插件）与聚合 descriptors 数组
@@ -146,7 +233,10 @@ async function discoverTools(): Promise<void> {
         if (d?.name) tools.set(d.name, d);
       }
     }
-  } catch { /* cap.meta 不可用：靠 tool-registered 事件兜底 */ }
+    console.log('[agent-loop][discover] tools=', [...tools.keys()].join(','));
+  } catch (e) {
+    try { localStorage.setItem('mcp-debug-discover', 'discoverTools 错误: ' + (e instanceof Error ? e.message : String(e))); } catch { /* 忽略 */ }
+  }
 }
 
 /**
@@ -251,12 +341,13 @@ function engineTurn(
   onDelta?: (delta: string) => void,
   onReasoning?: (delta: string) => void,
   onRetry?: (attempt: number, maxAttempts: number) => void,
-): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>; cancel: () => void } {
+): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number }>; cancel: () => void } {
   let off: (() => void) | undefined;
-  const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>((resolve, reject) => {
+  const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number }>((resolve, reject) => {
     if (!hostApi) return reject(new Error('host api missing'));
     let text = '';
     let toolCalls: ToolCallProto[] = [];
+    let partialToolCalls: number | undefined;
     let finishReason = '';
     let done = false;
     off = hostApi.listen('cap.ai.chat:event', (payload) => {
@@ -282,7 +373,10 @@ function engineTurn(
           return;
         }
         if (inner.finishReason) finishReason = inner.finishReason;
-        if (!done) { done = true; off?.(); resolve({ text, toolCalls, finishReason }); }
+        if (typeof (inner as { partialToolCalls?: unknown }).partialToolCalls === 'number') {
+          partialToolCalls = (inner as { partialToolCalls: number }).partialToolCalls;
+        }
+        if (!done) { done = true; off?.(); resolve({ text, toolCalls, finishReason, partialToolCalls }); }
       } else if (ev.kind === 'stream.error') {
         if (!done) { done = true; off?.(); reject(new Error(inner.message ?? 'stream error')); }
       } else if (ev.kind === 'stream.retry') {
@@ -352,7 +446,13 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     }
     return;
   }
-  if (action && action !== 'start') return; // 未知动作不进主循环
+  if (action === 'resume') {
+    // 截断续写兜底（自动续写 burst 耗尽后用户点「继续」）：要求会话已有 shadow
+    // （尾条是 assistant 半截 prefill）且当前空闲；不满足则静默忽略。
+    if (!payload.messageId || !shadows.has(sessionId)) return;
+    if (running.has(sessionId) || running.has(`${sessionId}::turn`)) return;
+  }
+  if (action && action !== 'start' && action !== 'resume') return; // 未知动作不进主循环
 
   const assistantId = payload.messageId ?? 'unknown';
   const prompt = payload.prompt ?? '';
@@ -373,10 +473,13 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     await discoverTools();
     // 稳定快照：按 name 排序 + 集合指纹复用（缓存命中率关键，见 buildToolDefs 注释）
     const toolDefs = buildToolDefs();
+    // 有编排（工具 loop）才登记运行态与镜像——直通模式无 loop 语义，保持原样
+    if (toolDefs.length > 0) beginLoopRuntime(sessionId);
 
     // 无工具：直通模式（start 原样透传 cap.ai.chat；引擎事件直达 chat-lite）。
     // interrupt 语义：注册取消柄，中断时向引擎转发 interrupt——否则直通流无法被「停止」打断。
     if (toolDefs.length === 0) {
+      if (action === 'resume') return; // 直通模式无 shadow 续写语义（截断块只在编排路径出现）
       const api = hostApi!; // 上方 272 行已有运行时守卫，闭包内 TS 无法保持窄化
       running.set(sessionId, () => {
         void api.dispatch({
@@ -481,7 +584,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         if (app.data?.text) shadow[0].content += '\n\n' + app.data.text;
       } catch { /* 附录不可用：无附录继续 */ }
     }
-    shadow.push({ role: 'user', content: prompt });
+    // resume 动作不带 prompt（shadow 尾已是 assistant 半截 prefill，直接续写）
+    if (prompt) shadow.push({ role: 'user', content: prompt });
 
     // ---- 上下文压缩（spec §5.2；对齐 simple_ai chat_loop：先压缩再请求） ----
     const acc = usageAcc.get(sessionId) ?? new UsageAccumulator();
@@ -571,6 +675,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
     let turn = 0;
     let totalToolCalls = 0;
+    // length 截断自动续写预算（per assistant 消息；耗尽后落截断块走「继续」按钮兜底）
+    let autoContinueLeft = MAX_AUTO_CONTINUE;
     for (; !abortedFlag; turn += 1) {
       const turnMessageId = `${assistantId}::t${turn}`;
       // onDelta：引擎可见增量实时转发（messageId=assistantId，chat-lite 流式渲染）
@@ -584,7 +690,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         emitTo(emit, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts });
       });
       running.set(`${sessionId}::turn`, t.cancel);
-      let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string };
+      let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number };
       try {
         result = await t.promise;
       } catch (err) {
@@ -601,9 +707,37 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
         shadow.push({ role: 'assistant', content: result.text });
         // finish_reason=length：达到 max_tokens 被上游硬掐（不是错误但也不是说完了）。
-        // 静默 break 会让用户以为「AI 说到一半突然停了」——落一个可见提示块，
-        // 引导用户「继续」；下一轮 shadow 已含半截回复，模型能接着写。
+        // 自动续写（burst 限次）：prefill 形态（shadow 尾=assistant 半截文）模型自然接续，
+        // MOSI 实测支持；思考模型先烧 reasoning 预算，空正文走 nudge 路径。耗尽后才落
+        // 可见截断块 + 「继续」按钮（chat-lite），不再要求用户手打「继续」。
         if (result.finishReason === 'length') {
+          const reason = result.partialToolCalls && result.partialToolCalls > 0
+            ? 'tool-truncated'
+            : result.text.trim()
+              ? 'text-truncated'
+              : 'reasoning-exhausted';
+          if (autoContinueLeft > 0) {
+            autoContinueLeft -= 1;
+            emitTo(emit, 'message.continued', {
+              sessionId, messageId: assistantId,
+              attempt: MAX_AUTO_CONTINUE - autoContinueLeft, max: MAX_AUTO_CONTINUE, reason,
+            });
+            if (reason === 'tool-truncated') {
+              // 半截工具参数不能执行也不能回填（协议要求 assistant.tool_calls 与 tool 结果
+              // 成对）：告知模型重新调用。半截调用数已由引擎在 partialToolCalls 上报。
+              shadow.push({
+                role: 'user',
+                content: `（系统：上一条响应在生成 ${result.partialToolCalls} 个工具调用时被单次输出上限截断，未执行。请重新调用所需工具；参数过长时请精简内容或分多次调用。）`,
+              });
+            } else if (reason === 'reasoning-exhausted') {
+              shadow.push({
+                role: 'user',
+                content: '（系统：上一条响应把单次输出预算耗在思考上，没有产出正文。请直接给出结论，减少铺垫与重复论证。）',
+              });
+            }
+            // text-truncated：shadow 尾已是 assistant prefill，直接进下一轮续写
+            continue;
+          }
           emitTo(emit, 'message.truncated', {
             sessionId, messageId: assistantId,
             reason: 'length',
@@ -921,6 +1055,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             ? { ...safeArgsFilesWrite(call.arguments), sessionId, approved: true }
             : desc.cap === 'cap.tool.skill'
               ? { ...hookArgsOf(call.arguments), sessionId, approved: true }
+              : desc.cap === 'cap.tool.mcp'
+                ? { name: call.name, arguments: hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
               : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
           const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
             target: desc.cap,
@@ -978,6 +1114,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
   } finally {
     running.delete(sessionId);
     running.delete(`${sessionId}::turn`);
+    endLoopRuntime(sessionId); // done 上报 + 残余镜像刷出（异常/中断/正常完成统一收口）
   }
 };
 
@@ -1113,7 +1250,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge', 'cap.tool.mcp-ops'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge', 'cap.tool.mcp-ops', 'cap.tool.mcp'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

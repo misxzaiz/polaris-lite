@@ -226,7 +226,7 @@ async function streamDirect(
         model: cfg.activeModel || cfg.models[0]?.id || '',
         stream: true,
         messages,
-        ...(caps?.maxOutputTokens && caps.maxOutputTokens > 0 ? { max_tokens: caps.maxOutputTokens } : {}),
+        max_tokens: caps?.maxOutputTokens && caps.maxOutputTokens > 0 ? caps.maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS,
         ...(caps?.effort ? { reasoning_effort: caps.effort } : {}),
       },
       abort.signal,
@@ -241,10 +241,13 @@ async function streamDirect(
       emit({ kind: 'stream.error', payload: { sessionId, messageId, message: `独立模式直连失败：${String(msg)}` } });
       return;
     }
-    // SSE 解析（与中继路径同构：reasoning_content 思考流 + content 正文 + usage）
+    // SSE 解析（与中继路径同构：reasoning_content 思考流 + content 正文 + usage；
+    // 断尾守卫同中继路径——没有 [DONE] 也没有 finish_reason 就是断流，不装正常）
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let sawDoneMarker = false;
+    let streamedChars = 0;
     for (;;) {
       if (cancelled) {
         emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
@@ -259,7 +262,7 @@ async function streamDirect(
         const trimmed = line.trim();
         if (!trimmed.startsWith('data:')) continue;
         const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
+        if (data === '[DONE]') { sawDoneMarker = true; continue; }
         try {
           const json = JSON.parse(data);
           const choice = json.choices?.[0];
@@ -268,9 +271,20 @@ async function streamDirect(
           const reasoning: string | undefined = choice?.delta?.reasoning_content;
           if (reasoning) emit({ kind: 'message.reasoning', payload: { sessionId, messageId, delta: reasoning } });
           const delta: string | undefined = choice?.delta?.content;
-          if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
+          if (delta) {
+            streamedChars += delta.length;
+            emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
+          }
+          if (choice?.finish_reason) sawDoneMarker = true;
         } catch { /* 跳过不完整行 */ }
       }
+    }
+    if (!sawDoneMarker) {
+      emit({
+        kind: 'stream.error',
+        payload: { sessionId, messageId, message: `独立模式直连流中断（已生成 ${streamedChars} 字，未收到完整结束标记）。` },
+      });
+      return;
     }
     emitUsage(streamKey, sessionId, messageId, messages, wireUsage, responseModel, caps?.maxInputTokens, startedAt, emit);
     emit({ kind: 'message.done', payload: { sessionId, messageId } });
@@ -297,13 +311,66 @@ function activeCaps(provider: ActiveProvider): ModelCaps | undefined {
     ?? provider.models[0]?.capabilities;
 }
 
+/** 能力表缺失时的输出上限兜底（思考模型的上游小默认值会高频触发 length 截断；
+ *  严格网关若拒绝 8192 会走 400 自愈回填真实上限——见 relayPath classifyLimit） */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
+/** 拒绝 stream_options 的供应商方言（400 实测后拉黑，本会话不再发送） */
+const streamOptionsBlocked = new Set<string>();
+
+/** 从限值报错文案里解析数字上限（与 server/providers-api.mjs parseLimitFromError 同语义） */
+function parseLimitFromError(text: string): number | null {
+  const patterns = [
+    /between\s+\d+\s+and\s+(\d+)/i,
+    /at\s+most\s+(\d+)/i,
+    /(?:maximum|limit|max)[^\d]{0,24}(\d{3,})/i,
+  ];
+  for (const re of patterns) {
+    const m = String(text ?? '').match(re);
+    const v = m ? Number(m[1]) : NaN;
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+/** 限值报错分类：输出上限 vs 输入上下文（写回能力表的字段不同） */
+function classifyLimitError(msg: string): { kind: 'output' | 'input' | null; limit: number | null } {
+  const limit = parseLimitFromError(msg);
+  if (!limit) return { kind: null, limit: null };
+  if (/output|completion|max[_ ]?tokens/i.test(msg)) return { kind: 'output', limit };
+  if (/context|prompt|input|too long/i.test(msg)) return { kind: 'input', limit };
+  return { kind: null, limit };
+}
+
+/** 运行时自愈回填（服务端 note-probe；失败静默——自愈是增益不是门槛） */
+async function noteProbeLimits(providerId: string, modelId: string, patch: { maxOutputTokens?: number; maxInputTokens?: number }): Promise<void> {
+  try {
+    await fetch('/api/providers/note-probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id: providerId, modelId, patch }),
+    });
+  } catch { /* 回填失败不影响本次请求 */ }
+}
+
+/** 自愈后同步内存供应商视图，让本次重试立刻用上修正值 */
+function applyHealedCap(provider: ActiveProvider, patch: { maxOutputTokens?: number; maxInputTokens?: number }): void {
+  const model = provider.models.find((m) => m.id === provider.activeModel) ?? provider.models[0];
+  if (!model) return;
+  const caps = { maxInputTokens: 0, maxOutputTokens: 0, effort: null as 'minimal' | 'low' | 'medium' | 'high' | null, vision: false, ...model.capabilities };
+  if (patch.maxOutputTokens) caps.maxOutputTokens = patch.maxOutputTokens;
+  if (patch.maxInputTokens) caps.maxInputTokens = patch.maxInputTokens;
+  model.capabilities = caps;
+}
+
 /** 按供应商方言把能力字段拼进请求体（宁缺毋错传：未知字段不发送） */
 function buildCapabilityParams(provider: ActiveProvider): Record<string, unknown> {
   const caps = activeCaps(provider);
-  if (!caps) return {};
   const out: Record<string, unknown> = {};
-  if (caps.maxOutputTokens > 0) out.max_tokens = caps.maxOutputTokens;
-  if (caps.effort) out.reasoning_effort = caps.effort;
+  // 输出上限：能力表权威（识别自动回填）；未知时给保守下限，不再让上游小默认值掐断回复
+  out.max_tokens = caps && caps.maxOutputTokens > 0 ? caps.maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS;
+  if (caps?.effort) out.reasoning_effort = caps.effort;
   return out;
 }
 
@@ -498,95 +565,194 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
       }
     }
 
-    const resp = await relayFetch(
-      {
+    // 断流自动重试（2026-11-20「对话突然中断」修复）：上游/中继中途断流不再报错
+    // 收敛——先在页面提示「正在重试 N/10」，把已生成正文作为尾随 assistant 消息
+    // 喂回上游续写（OpenAI 兼容协议的标准续写形态，避免重生成造成正文重复），
+    // 最多 10 次；全部失败才报错。此前中继吞错 + 引擎装正常结束，用户只看到
+    // 「说到一半突然停、零报错」。
+    const MAX_STREAM_RETRIES = 10;
+    let attempt = 0;
+    let carriedText = ''; // 跨尝试累积的正文（重试时喂回续写；UI 侧 delta 连续追加）
+    let healRetried = false; // 400 自愈重试只做一次（方言守卫/限值回填）
+
+    while (true) {
+      attempt += 1;
+      wireUsage = null;
+      responseModel = undefined;
+      // 续写形态：已生成半截回复时作为最后一条 assistant 消息喂回，模型自然接续；
+      // 首试或断流时尚无正文时按原消息直发（模型从头生成，UI 无重复风险）。
+      const attemptMessages = carriedText
+        ? [...messages, { role: 'assistant' as const, content: carriedText }]
+        : messages;
+
+      const relayBody: Record<string, unknown> = {
         model: provider.activeModel || (provider.models[0]?.id ?? ''),
         stream: true,
-        messages,
+        messages: attemptMessages,
         // 工具定义透传（agent-loop 编排；引擎不理解语义，仅管道）
         ...(payload.tools?.length ? { tools: payload.tools, tool_choice: payload.toolChoice ?? 'auto' } : {}),
         ...buildCapabilityParams(provider),
-      },
-      provider.id,
-      abort.signal,
-    );
+      };
+      // usage 帧主动索取（被动校准与用量归因依赖真实 usage；方言拒绝时拉黑本会话不再发）
+      if (!streamOptionsBlocked.has(provider.id)) relayBody.stream_options = { include_usage: true };
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      let msg = `HTTP ${resp.status}`;
-      try {
-        const j = JSON.parse(text);
-        msg = j.error?.message ?? j.message ?? j.error ?? msg;
-      } catch { /* 保留 HTTP 状态描述 */ }
-      if (resp.status === 401) msg = '登录已过期，请重新登录';
-      emit({ kind: 'stream.error', payload: { sessionId, messageId, message: String(msg) } });
-      return;
-    }
+      const resp = await relayFetch(relayBody, provider.id, abort.signal);
 
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    // 工具调用聚合：按 OpenAI 规范 delta.tool_calls 可能分片（index 维度拼接
-    // id / function.name / function.arguments），也可能整块一次到齐（MOSI 实测）。
-    let toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
-    let finishReason = '';
-    for (;;) {
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        let msg = `HTTP ${resp.status}`;
+        try {
+          const j = JSON.parse(text);
+          msg = j.error?.message ?? j.message ?? j.error ?? msg;
+        } catch { /* 保留 HTTP 状态描述 */ }
+        if (resp.status === 401) msg = '登录已过期，请重新登录';
+        // ---- 400 自愈（每请求一次）：方言守卫 + 限值回填 + 修正值重试 ----
+        if (resp.status === 400 && !healRetried) {
+          healRetried = true;
+          if (/stream_options|include_usage/i.test(String(msg))) {
+            streamOptionsBlocked.add(provider.id); // 老网关不认该字段：拉黑后重试
+            continue;
+          }
+          const cls = classifyLimitError(String(msg));
+          if (cls.kind === 'output' && cls.limit) {
+            // 输出上限真实值揭示：回填能力表（服务端）+ 内存视图，修正值立即重试
+            applyHealedCap(provider, { maxOutputTokens: cls.limit });
+            void noteProbeLimits(provider.id, provider.activeModel, { maxOutputTokens: cls.limit });
+            continue;
+          }
+          if (cls.kind === 'input' && cls.limit) {
+            // 输入超限：本请求重试无意义（消息不会变小），但真实窗口回填后，
+            // agent-loop 的压缩水位从此按正确分母工作
+            applyHealedCap(provider, { maxInputTokens: cls.limit });
+            void noteProbeLimits(provider.id, provider.activeModel, { maxInputTokens: cls.limit });
+            msg = `上下文超限（输入超过该模型上限 ${cls.limit} tokens）：请开新会话或精简历史。`;
+          }
+        }
+        emit({ kind: 'stream.error', payload: { sessionId, messageId, message: String(msg) } });
+        return;
+      }
+
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      // 工具调用聚合：按 OpenAI 规范 delta.tool_calls 可能分片（index 维度拼接
+      // id / function.name / function.arguments），也可能整块一次到齐（MOSI 实测）。
+      // 每次尝试独立聚合——断流尝试的半截 tool_calls 不跨尝试拼接（协议不成对）。
+      const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
+      let finishReason = '';
+      // 正常结束标记：data:[DONE] 或末帧 finish_reason（部分中转只发其一）。
+      // 两者都没有、body 却结束 = 中途断流，进入重试。
+      let sawDoneMarker = false;
+      let broke = false;
+      let attemptText = '';
+      pump: for (;;) {
+        if (cancelled) {
+          emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
+          return;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === '[DONE]') { sawDoneMarker = true; continue; }
+          try {
+            const json = JSON.parse(data);
+            // 中继注入的上游断流错误帧（relay-core 对 text/event-stream 追加）：
+            // 进入重试流程，不装正常结束
+            if (json.error && typeof json.error === 'object' && json.error.code === 'UPSTREAM_DISCONNECTED') {
+              broke = true;
+              break pump;
+            }
+            const choice = json.choices?.[0];
+            // usage：流式协议下通常在最后一个 data 帧（stream_options.include_usage）。
+            // 逐帧覆盖，最后一条非空 usage 为准（兼容逐帧都带的供应商）。
+            if (json.usage && typeof json.usage === 'object') wireUsage = json.usage as WireUsage;
+            if (typeof json.model === 'string' && json.model) responseModel = json.model;
+            // 推理模型的「思考流」：reasoning_content 是独立于 content 的增量。
+            // 必须以 message.reasoning 转发（chat-lite 渲染为思考块），否则长思考期间
+            // UI 全程静默，用户会误以为「不回复」（实测 nex-n2.6 思考 30s+ 无任何 content）。
+            const reasoning: string | undefined = choice?.delta?.reasoning_content;
+            if (reasoning) emit({ kind: 'message.reasoning', payload: { sessionId, messageId, delta: reasoning } });
+            // 常规正文增量
+            const delta: string | undefined = choice?.delta?.content;
+            if (delta) {
+              attemptText += delta;
+              emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
+            }
+            // 工具调用增量聚合（index 维度）
+            const tcs = choice?.delta?.tool_calls;
+            if (Array.isArray(tcs)) {
+              for (const tc of tcs) {
+                const idx = Number(tc?.index ?? 0);
+                const slot = toolAcc.get(idx) ?? { id: '', name: '', arguments: '' };
+                if (tc.id) slot.id = slot.id || String(tc.id);
+                if (tc.function?.name) slot.name += String(tc.function.name);
+                if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
+                toolAcc.set(idx, slot);
+              }
+            }
+            if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDoneMarker = true; }
+          } catch { /* 跳过不完整行 */ }
+        }
+      }
       if (cancelled) {
         emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
         return;
       }
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const json = JSON.parse(data);
-          const choice = json.choices?.[0];
-          // usage：流式协议下通常在最后一个 data 帧（stream_options.include_usage）。
-          // 逐帧覆盖，最后一条非空 usage 为准（兼容逐帧都带的供应商）。
-          if (json.usage && typeof json.usage === 'object') wireUsage = json.usage as WireUsage;
-          if (typeof json.model === 'string' && json.model) responseModel = json.model;
-          // 推理模型的「思考流」：reasoning_content 是独立于 content 的增量。
-          // 必须以 message.reasoning 转发（chat-lite 渲染为思考块），否则长思考期间
-          // UI 全程静默，用户会误以为「不回复」（实测 nex-n2.6 思考 30s+ 无任何 content）。
-          const reasoning: string | undefined = choice?.delta?.reasoning_content;
-          if (reasoning) emit({ kind: 'message.reasoning', payload: { sessionId, messageId, delta: reasoning } });
-          // 常规正文增量
-          const delta: string | undefined = choice?.delta?.content;
-          if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
-          // 工具调用增量聚合（index 维度）
-          const tcs = choice?.delta?.tool_calls;
-          if (Array.isArray(tcs)) {
-            for (const tc of tcs) {
-              const idx = Number(tc?.index ?? 0);
-              const slot = toolAcc.get(idx) ?? { id: '', name: '', arguments: '' };
-              if (tc.id) slot.id = slot.id || String(tc.id);
-              if (tc.function?.name) slot.name += String(tc.function.name);
-              if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
-              toolAcc.set(idx, slot);
-            }
-          }
-          if (choice?.finish_reason) finishReason = String(choice.finish_reason);
-        } catch { /* 跳过不完整行 */ }
+      if (!sawDoneMarker) broke = true; // 干净 EOF 但无结束标记：同样是中途断流
+
+      if (!broke) {
+        // 上游要求调用工具：聚合结果整体发出，由编排方（agent-loop）决策执行
+        if (finishReason === 'tool_calls' && toolAcc.size > 0) {
+          const toolCalls = [...toolAcc.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }));
+          emit({ kind: 'tool.calls', payload: { sessionId, messageId, toolCalls } });
+        }
+        // ai.usage：优先真实 usage；供应商不回时按本次 messages 估算兜底（estimated 标记）
+        emitUsage(streamKey, sessionId, messageId, attemptMessages, wireUsage, responseModel, activeCaps(provider)?.maxInputTokens, startedAt, emit);
+        // length 截断时聚合中的半截 tool_calls 上报编排层（不再静默丢弃）：
+        // 模型想调工具的意图是重要信号，编排层据此自动 nudge 重试
+        const partialToolCalls = finishReason && finishReason !== 'tool_calls' ? toolAcc.size : 0;
+        emit({
+          kind: 'message.done',
+          payload: {
+            sessionId, messageId,
+            ...(finishReason ? { finishReason } : {}),
+            ...(partialToolCalls > 0 ? { partialToolCalls } : {}),
+          },
+        });
+        return;
+      }
+
+      // 断流：累积正文 → 未达上限则页面提示后自动续写；达上限如实报错
+      carriedText += attemptText;
+      if (attempt >= MAX_STREAM_RETRIES) {
+        emit({
+          kind: 'stream.error',
+          payload: {
+            sessionId, messageId,
+            message: `上游连接反复中断（已自动重试 ${MAX_STREAM_RETRIES} 次，共生成 ${carriedText.length} 字）。请检查网络后重试，或换个模型。`,
+          },
+        });
+        return;
+      }
+      emit({
+        kind: 'stream.retry',
+        payload: { sessionId, messageId, attempt, maxAttempts: MAX_STREAM_RETRIES, chars: carriedText.length },
+      });
+      // 小退避：避免对上游连环重击（500ms × 已试次数，封顶 4.5s）
+      await new Promise((r) => setTimeout(r, Math.min(500 * attempt, 4500)));
+      if (cancelled) {
+        emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
+        return;
       }
     }
-    // 上游要求调用工具：聚合结果整体发出，由编排方（agent-loop）决策执行
-    if (finishReason === 'tool_calls' && toolAcc.size > 0) {
-      const toolCalls = [...toolAcc.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }));
-      emit({ kind: 'tool.calls', payload: { sessionId, messageId, toolCalls } });
-    }
-
-    // ai.usage：优先真实 usage；供应商不回时按本次 messages 估算兜底（estimated 标记）
-    emitUsage(streamKey, sessionId, messageId, messages, wireUsage, responseModel, activeCaps(provider)?.maxInputTokens, startedAt, emit);
-    emit({ kind: 'message.done', payload: { sessionId, messageId, ...(finishReason ? { finishReason } : {}) } });
   } catch (err) {
     if (cancelled) {
       // 中断：必须补发 done，否则 chat-lite 的按钮永远停在「停止」态

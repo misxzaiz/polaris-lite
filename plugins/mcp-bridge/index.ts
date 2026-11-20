@@ -74,6 +74,7 @@ function createMcpOpsHandler(): CapabilityHandler {
     const payload = (req.payload ?? {}) as Record<string, unknown>;
     try {
       if (req.action === 'describe') {
+        try { localStorage.setItem('mcp-debug-ops-describe', new Date().toISOString()); } catch { /* 忽略 */ }
         return { descriptors: MCP_OPS_DESCRIPTORS };
       }
       if (req.action === 'exec') {
@@ -128,8 +129,11 @@ function createMcpToolHandler(): CapabilityHandler {
       try {
         const resp = await fetch('/api/mcp/tools', { credentials: 'include' });
         const j = (await resp.json().catch(() => null)) as { tools?: McpToolDescriptor[] } | null;
+        // 临时诊断：定位 mcp__ 工具未进模型工具表的问题（验证后移除）
+        try { localStorage.setItem('mcp-debug-describe', JSON.stringify({ at: new Date().toISOString(), status: resp.status, names: (j?.tools ?? []).map(t => t.name) })); } catch { /* 忽略 */ }
         return { descriptors: j?.tools ?? [] };
-      } catch {
+      } catch (e) {
+        try { localStorage.setItem('mcp-debug-describe', JSON.stringify({ at: new Date().toISOString(), failed: e instanceof Error ? e.message : String(e) })); } catch { /* 忽略 */ }
         return { descriptors: [] };
       }
     }

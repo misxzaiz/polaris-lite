@@ -67,10 +67,11 @@ export function createServerPart(options = {}) {
     try {
       const roots = JSON.parse(readFileSync(join(dataDir, 'workspace-roots.json'), 'utf8'));
       const list = Array.isArray(roots.roots) ? roots.roots : [];
-      return (list.find((r) => r.builtin) ?? list[0])?.path ?? '';
-    } catch {
-      return '';
-    }
+      const hit = list.find((r) => r.path && !r.builtin) ?? list.find((r) => r.path);
+      if (hit?.path && existsSync(hit.path)) return hit.path;
+    } catch { /* 忽略 */ }
+    // 兜底：宿主内建工作区（与 skill-loader 同步修复——全新实例两个 state 文件都不存在）
+    return join(dataDir, 'workspace');
   }
 
   /** 把 CC/ZC 的一种 handler 归一；非法/不支持返回 null（warn 收集） */
