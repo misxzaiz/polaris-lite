@@ -23,6 +23,7 @@ export const SERVER_PLUGINS = [
   { id: 'html-preview', entry: './html-preview/server.mjs' },
   { id: 'browser-lite', entry: './browser-lite/server.mjs' },
   { id: 'kv-store', entry: './kv-store/server.mjs' },
+  { id: 'plugin-manager', entry: './plugin-manager/server.mjs' },
 ];
 
 /**

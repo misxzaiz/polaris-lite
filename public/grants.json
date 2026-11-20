@@ -187,6 +187,18 @@
         "cap.kv"
       ],
       "events": []
+    },
+    "plugin-manager": {
+      "capabilities": [
+        "cap.plugin.admin",
+        "cap.meta",
+        "cap.ui.layout",
+        "cap.ui.layout.global"
+      ],
+      "provides": [
+        "cap.plugin.admin"
+      ],
+      "events": []
     }
   }
 }

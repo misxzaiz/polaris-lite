@@ -81,6 +81,7 @@ const plugins = [
   { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 15 },
   { id: 'kv-store', config: 'kv-store/vite.config.ts', dist: 'kv-store/dist', order: 16 },
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 16 },
+  { id: 'plugin-manager', config: 'plugin-manager/vite.config.ts', dist: 'plugin-manager/dist', order: 17 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

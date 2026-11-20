@@ -38,7 +38,8 @@ async function bootstrap(): Promise<void> {
     (reactDomMod as unknown as { default?: unknown }).default ?? reactDomMod;
 
   // 1. 安装核心内建能力（meta 与 layout 都是核心自有 cap，不属于任何业务插件）
-  installMetaCapability(host.bus, () => host.policyTable());
+  //    meta 传入视图注册表：describe 返回 views 清单（自省型面板的免授权数据源）
+  installMetaCapability(host.bus, () => host.policyTable(), viewRegistry);
   // 布局能力走总线：授权、归属校验、审计都复用既有机制，不开第二写通道
   installLayoutCapability(host.bus, { store: workspaceStore, registry: viewRegistry });
   // 宿主槽位视图（host.slot.<anchor>）：把四个锚点原有的槽位内容变成可被布局树引用的视图，
