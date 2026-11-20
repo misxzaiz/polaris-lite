@@ -1,0 +1,139 @@
+/* pocket-ledger 面板样式：只用主题 token；不碰宿主命名空间/全局根。 */
+
+.pl-ledger { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.pl-ledger-tabs {
+  display: flex; gap: 4px; padding: 10px 10px 0; flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.pl-ledger-tab {
+  flex: 1; height: 30px; border: none; border-radius: 6px 6px 0 0;
+  background: transparent; color: var(--text-faint); cursor: pointer;
+  font-size: var(--plite-fs-sm); transition: color var(--plite-dur), background var(--plite-dur);
+}
+.pl-ledger-tab:hover { color: var(--text-soft); background: var(--bg-hover); }
+.pl-ledger-tab.active { color: var(--accent-bright); background: var(--accent-soft); font-weight: 600; }
+.pl-ledger-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+
+.pl-section-title {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); margin: 10px 0 6px;
+}
+
+/* 记账 */
+.pl-quick { display: flex; flex-direction: column; gap: 10px; }
+.pl-quick-type { display: flex; gap: 6px; }
+.pl-quick-type button {
+  flex: 1; height: 30px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: transparent; color: var(--text-dim); cursor: pointer; font-size: var(--plite-fs-sm);
+}
+.pl-quick-type button.active { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
+.pl-quick-amount {
+  height: 44px; text-align: center; font-size: 22px; font-family: var(--plite-font-mono);
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-code); color: var(--text);
+}
+.pl-quick-amount:focus { outline: none; border-color: var(--accent); }
+.pl-quick-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-cat-chip {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: transparent; color: var(--text-dim); cursor: pointer; font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.pl-cat-chip.active { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
+.pl-quick-note, .pl-settings-row input, .pl-list-filters input {
+  height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: var(--bg-code); color: var(--text); font-size: var(--plite-fs-sm);
+}
+.pl-quick-note:focus, .pl-settings-row input:focus, .pl-list-filters input:focus { outline: none; border-color: var(--accent); }
+.pl-quick-submit {
+  height: 36px; border: none; border-radius: var(--radius); cursor: pointer;
+  background: var(--accent); color: #fff; font-size: var(--plite-fs-md); letter-spacing: 0.08em;
+}
+.pl-quick-submit:hover { background: var(--accent-bright); }
+.pl-quick-msg { font-size: 11px; color: var(--plite-warning); }
+.pl-quick-today { display: flex; flex-direction: column; gap: 4px; }
+
+/* 账单行（记账今日 / 明细共用） */
+.pl-bill-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--plite-radius-sm); background: var(--bg-elevated);
+}
+.pl-bill-amount { font-family: var(--plite-font-mono); font-size: 12px; min-width: 70px; }
+.pl-bill-amount.expense { color: var(--text); }
+.pl-bill-amount.income { color: var(--plite-success); }
+.pl-bill-cat { font-size: 11px; color: var(--accent-bright); flex: 0 0 auto; }
+.pl-bill-note { flex: 1; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-bill-time { font-size: 10px; color: var(--text-faint); font-family: var(--plite-font-mono); }
+.pl-bill-del {
+  width: 20px; height: 20px; border: none; border-radius: 50%; background: transparent;
+  color: var(--text-faint); cursor: pointer; font-size: 13px; line-height: 1;
+}
+.pl-bill-del:hover { background: var(--plite-danger); color: #fff; }
+
+/* 明细 */
+.pl-list { display: flex; flex-direction: column; gap: 8px; }
+.pl-list-head { display: flex; align-items: center; gap: 8px; }
+.pl-month { font-family: var(--plite-font-mono); font-size: var(--plite-fs-md); color: var(--text); min-width: 72px; text-align: center; }
+.pl-month-btn {
+  width: 26px; height: 26px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: transparent; color: var(--text-dim); cursor: pointer;
+}
+.pl-month-btn:hover { border-color: var(--accent); color: var(--accent-bright); }
+.pl-export {
+  margin-left: auto; height: 26px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm); background: transparent; color: var(--text-dim);
+  cursor: pointer; font-size: 11px;
+}
+.pl-export:hover { color: var(--accent-bright); border-color: var(--accent); }
+.pl-list-filters { display: flex; gap: 6px; }
+.pl-list-filters select { flex: 1; height: 30px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm); background: var(--bg-code); color: var(--text-soft); font-size: 11px; }
+.pl-list-filters input { flex: 1; min-width: 0; }
+.pl-day-group { display: flex; flex-direction: column; gap: 4px; }
+.pl-day-head {
+  display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint);
+  font-family: var(--plite-font-mono); padding: 2px 2px 0;
+}
+.pl-day-head .income { color: var(--plite-success); }
+.pl-day-head .expense { color: var(--text-soft); }
+.pl-empty { text-align: center; color: var(--text-faint); font-size: 11px; padding: 20px 0; }
+
+/* 统计 */
+.pl-stats { display: flex; flex-direction: column; gap: 8px; }
+.pl-stat-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pl-stat-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elevated);
+}
+.pl-stat-card span { font-size: 10px; color: var(--text-faint); }
+.pl-stat-card strong { font-family: var(--plite-font-mono); font-size: 14px; color: var(--text); }
+.pl-budget { display: flex; flex-direction: column; gap: 4px; }
+.pl-budget-track { height: 6px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; }
+.pl-budget-fill { height: 100%; border-radius: 3px; transition: width 300ms var(--plite-ease); }
+.pl-budget-pct { font-size: 10px; color: var(--text-dim); font-family: var(--plite-font-mono); }
+.pl-cat-rank { display: flex; flex-direction: column; gap: 4px; }
+.pl-cat-row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: var(--plite-radius-sm); background: var(--bg-elevated);
+}
+.pl-cat-name { flex: 1; font-size: 11.5px; color: var(--text-soft); }
+.pl-cat-sum { font-family: var(--plite-font-mono); font-size: 12px; color: var(--text); }
+.pl-cat-budget { font-size: 10px; font-family: var(--plite-font-mono); color: var(--plite-success); }
+.pl-cat-budget.warn { color: var(--plite-warning); }
+.pl-cat-budget.over { color: var(--plite-danger); }
+.pl-bars { display: flex; align-items: flex-end; gap: 2px; height: 90px; padding: 4px 0; }
+.pl-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 3px; }
+.pl-bar { width: 100%; min-height: 1px; background: var(--accent); border-radius: 2px 2px 0 0; opacity: 0.75; }
+.pl-bar-label { font-size: 8px; color: var(--text-faint); }
+
+/* 设置 */
+.pl-settings { display: flex; flex-direction: column; gap: 6px; }
+.pl-settings-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-cat-del { border: none; background: transparent; color: var(--text-faint); cursor: pointer; font-size: 12px; padding: 0 0 0 2px; }
+.pl-cat-del:hover { color: var(--plite-danger); }
+.pl-settings-row { display: flex; align-items: center; gap: 8px; }
+.pl-settings-row input { flex: 1; }
+.pl-settings-row button {
+  height: 32px; padding: 0 12px; border: 1px solid var(--accent); border-radius: var(--plite-radius-sm);
+  background: var(--accent-soft); color: var(--accent-bright); cursor: pointer; font-size: 11px;
+}
+.pl-budget-cat { min-width: 48px; font-size: 11.5px; color: var(--text-soft); }
+.pl-settings-note { font-size: 10px; color: var(--text-faint); line-height: 1.7; margin-top: 8px; }
