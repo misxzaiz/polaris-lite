@@ -104,7 +104,9 @@ export function createServerPart(options = {}) {
       else return { error: `unknown rootId: ${rootId}`, code: 'ROOT_NOT_FOUND' };
     }
     const raw = String(absOrRel);
-    const target = rootPath ? resolve(rootPath, raw) : resolve(raw);
+    // 无 rootId 的相对路径默认落到内建工作区（与 AI 可见 cwd 一致）——
+    // 此前 resolve(raw) 相对 server 进程 cwd，AI 写的 .claude/settings.json 等会落到仓库根（真机 E2E 发现）。
+    const target = rootPath ? resolve(rootPath, raw) : resolve(builtinRoot, raw);
     // 目标存在 → 直接 realpath；不存在（新建）→ 用「存在的最近祖先的 realpath +
     // 原始尾段」重组，保证 mkdir 前也能做边界判定（win32 上 mkdir 前文件不存在）。
     let real;

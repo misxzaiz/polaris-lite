@@ -89,7 +89,7 @@ export const chatLitePlugin: LitePlugin = {
     id: 'chat-lite',
     name: '对话',
     version: '0.3.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.agent.loop', 'cap.meta'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.agent.loop', 'cap.meta', 'cap.hook.bridge'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
@@ -269,6 +269,10 @@ interface StreamEnvelope {
     /** 截断提示（agent-loop 发；finish_reason=length 落可见提示块，不静默） */
     reason?: string;
     text?: string;
+    /** message.continued：自动续写进度（agent-loop 发；burst 计数） */
+    max?: number;
+    /** message.done（length 截断）：聚合中被截断的半截工具调用数（不再静默丢弃） */
+    partialToolCalls?: number;
     /** stream.retry：断流自动重试进度（real-engine 发，agent-loop 透传） */
     attempt?: number;
     maxAttempts?: number;
@@ -379,6 +383,24 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   // read_skill 的参数化形态（$ARGUMENTS/$1/$2 由 skill-loader exec 时替换）。
   // 非斜杠输入 / 未命中技能 / 能力未装 → 原文直发，零行为变化。
   let effectiveText = text;
+
+  // UserPromptSubmit 钩子（P1 补全）：hook-bridge 可拒绝本轮发送（deny → 提示且不入会话）。
+  try {
+    const hp = await api.dispatch<{ decision?: string; reason?: string }>({
+      target: 'cap.hook.bridge',
+      action: 'onPrompt',
+      payload: { sessionId: sid, prompt: text },
+    });
+    if (hp.data?.decision === 'deny') {
+      const reason = hp.data.reason ? '（原因：' + hp.data.reason + '）' : '';
+      // 拦截原因落会话（user 原文 + assistant notice 块），用户能看到为什么没发出去
+      store.appendMessage(sessionId, { id: 'u-' + Date.now(), role: 'user', content: text, ts: Date.now() } as never);
+      const nid = 'a-' + Date.now();
+      store.appendMessage(sessionId, { id: nid, role: 'assistant', streaming: false, blocks: [], ts: Date.now() } as never);
+      store.appendAssistantBlock(sessionId, nid, { type: 'notice', text: '[生命周期钩子] 本轮输入已被 UserPromptSubmit 钩子拦截' + reason + '。输入未发送给 AI。' });
+      return;
+    }
+  } catch { /* 钩子桥未装：正常发送 */ }
   const slashMatch = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (slashMatch) {
     try {
@@ -578,11 +600,17 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       notifyStreamRetry(inner.attempt ?? 0, inner.maxAttempts ?? 10, inner.chars ?? 0);
       armWatchdog(); // 重试也是活跃信号：退避等待期间不让看门狗误报
     } else if (envelope.kind === 'message.truncated') {
-      // finish_reason=length 截断：可见提示块（2026-11-20「突然中断」修复——
-      // 此前 length 静默 break，用户看到的就是「说到一半突然停」）
+      // finish_reason=length 截断且自动续写已耗尽：落 truncated 块（带「继续」按钮兜底）
       useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'text',
-        text: `[${inner.text ?? '回复因达到输出上限被截断'}]`,
+        type: 'truncated',
+        text: inner.text ?? '回复因达到输出上限被截断',
+      });
+    } else if (envelope.kind === 'message.continued') {
+      // 自动续写进行中（burst N/max）：轻提示块，不打断流式渲染
+      armWatchdog();
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'notice',
+        text: `[已自动续写 ${inner.attempt ?? '?'}/${inner.max ?? 3}${inner.reason === 'tool-truncated' ? ' · 工具参数被截断，已引导重试' : inner.reason === 'reasoning-exhausted' ? ' · 思考耗尽预算，已引导直出结论' : ''}]`,
       });
     } else if (envelope.kind === 'message.delta' && inner.delta) {
       armWatchdog();
@@ -683,6 +711,67 @@ export function interruptChat(): void {
       }
     })
     .catch(() => undefined);
+}
+
+/** 续写兜底超时：正常由 loop 的 message.done 收敛；悬死流 5 分钟后复位 streaming（软兜底） */
+const RESUME_TIMEOUT_MS = 300_000;
+
+/**
+ * 截断续写兜底（truncated 块「继续」按钮）：不新增用户消息，直接续开同一 assistant
+ * 消息——shadow 尾是 assistant 半截 prefill（agent-loop resume 动作语义，MOSI 实测支持）。
+ * 轻量监听：只处理 delta/reasoning/continued/truncated/done/error 六类事件，
+ * 不带 sendUserMessage 的完整看门狗机制（超时软兜底复位 streaming）。
+ */
+export function resumeTruncated(sessionId: string, messageId: string): void {
+  const api = hostApi;
+  if (!api) return;
+  const st = useSessionStore.getState();
+  const msg = st.sessions.find((s) => s.id === sessionId)?.messages.find((m) => m.id === messageId);
+  if (!msg || isToolCard(msg) || msg.streaming) return; // 幂等：流式中不重复触发
+  st.updateMessage(sessionId, messageId, { streaming: true });
+
+  const finish = (): void => {
+    useSessionStore.getState().updateMessage(sessionId, messageId, { streaming: false });
+  };
+  const timer = setTimeout(() => {
+    cleanup();
+    finish();
+  }, RESUME_TIMEOUT_MS);
+  const off = api.listen('cap.agent.loop:event', (payload: unknown) => {
+    const envelope = payload as StreamEnvelope;
+    if (!envelope.source) return;
+    const inner = envelope.payload ?? {};
+    if (inner.sessionId && inner.sessionId !== sessionId) return;
+    if (inner.messageId && inner.messageId !== messageId) return;
+    if (envelope.kind === 'message.delta' && inner.delta) {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: inner.delta });
+    } else if (envelope.kind === 'message.reasoning' && inner.delta) {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'thinking', text: inner.delta });
+    } else if (envelope.kind === 'message.continued') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'notice', text: `[已自动续写 ${inner.attempt ?? '?'}/${inner.max ?? 3}]` });
+    } else if (envelope.kind === 'message.truncated') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'truncated', text: inner.text ?? '回复因达到输出上限被截断' });
+    } else if (envelope.kind === 'message.done') {
+      cleanup();
+      finish();
+    } else if (envelope.kind === 'stream.error') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: inner.message ?? '流式请求失败' });
+      cleanup();
+      finish();
+    }
+  });
+  const cleanup = (): void => {
+    off();
+    clearTimeout(timer);
+  };
+  void api.dispatch({
+    target: 'cap.agent.loop',
+    action: 'resume',
+    payload: { sessionId, messageId },
+  }).catch(() => {
+    cleanup();
+    finish();
+  });
 }
 
 /** 审批决策回填（ToolCard 按钮调用；仅 loop 模式会出现审批卡） */

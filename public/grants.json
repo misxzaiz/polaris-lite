@@ -1,5 +1,5 @@
 {
-  "version": "10",
+  "version": "14",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -16,7 +16,8 @@
         "cap.ai.chat",
         "cap.ai.chat.interrupt",
         "cap.agent.loop",
-        "cap.meta"
+        "cap.meta",
+        "cap.hook.bridge"
       ],
       "provides": [],
       "events": [
@@ -112,7 +113,8 @@
         "cap.skill.appendix",
         "cap.hook.bridge",
         "cap.tool.mcp",
-        "cap.tool.mcp-ops"
+        "cap.tool.mcp-ops",
+        "cap.market.tool"
       ],
       "provides": [
         "cap.agent.loop"
@@ -302,6 +304,15 @@
       ],
       "provides": [
         "cap.compat.admin"
+      ],
+      "events": []
+    },
+    "plugin-market": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.market.tool"
       ],
       "events": []
     }

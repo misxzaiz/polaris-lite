@@ -286,6 +286,10 @@ async function decideApproval(
   } catch { /* 配置不可达：按 confirm 处理（宁紧勿松） */ }
 
   if (mode === 'yolo') return 'ok';
+  // 扩展自建管理工具免审批（用户定调『AI 自己启动 hook/mcp/插件，不要人工确认』）：
+  // 服务端仍有校验（sha256/路径围栏/名字合法性）且全量审计，面板可随时卸载/移除。
+  const FREE_PASS_TOOLS = new Set(['mcp_server_list', 'mcp_server_add', 'mcp_server_remove', 'market_list', 'market_install', 'market_uninstall']);
+  if (FREE_PASS_TOOLS.has(call.name)) return 'ok';
   // 会话级信任工具（审批卡「本会话信任」沉淀）：命中直接放行
   const trusted = sessionTrustedTools.get(sessionId);
   if (trusted?.has(call.name)) return 'ok';
@@ -471,6 +475,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
   try {
     if (!hostApi) throw new Error('host api missing');
     await discoverTools();
+    // SessionStart 钩子（P1 补全：此前四插桩漏实现，钩子永不触发——真机 E2E 发现）
+    fireLoopHook('onSessionStart', sessionId);
     // 稳定快照：按 name 排序 + 集合指纹复用（缓存命中率关键，见 buildToolDefs 注释）
     const toolDefs = buildToolDefs();
     // 有编排（工具 loop）才登记运行态与镜像——直通模式无 loop 语义，保持原样
@@ -806,6 +812,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             stdout: ia.ok ? feedback : undefined,
             stderr: ia.ok ? undefined : (ia.error ?? '交互卡失败'),
           });
+          firePostToolUse(sessionId, call.name, safeArgsJson(call.arguments), ia.ok === true);
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -838,6 +845,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             stdout: pr.ok ? feedback : undefined,
             stderr: pr.ok ? undefined : (pr.error ?? '预览生成失败'),
           });
+          firePostToolUse(sessionId, call.name, safeArgsRender(call.arguments), pr.ok === true);
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -967,6 +975,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             stdout: fr.ok ? feedback : undefined,
             stderr: fr.ok ? undefined : String(fr.error ?? 'files 工具执行失败'),
           });
+          firePostToolUse(sessionId, call.name, safeFsArgs(call.arguments), fr.ok === true);
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -998,6 +1007,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             stdout: lr.ok ? feedback : undefined,
             stderr: lr.ok ? undefined : (lr.error ?? '记账失败'),
           });
+          firePostToolUse(sessionId, call.name, safeLedgerArgs(call.arguments), lr.ok === true);
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -1038,6 +1048,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             stdout: br.ok ? feedback : undefined,
             stderr: br.ok ? undefined : String(br.error ?? '浏览器操作失败'),
           });
+          firePostToolUse(sessionId, call.name, safeBrowserArgs(call.arguments), br.ok === true);
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -1081,6 +1092,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           stderr: capText(String(exec.stderr ?? '')),
           exitCode: exec.exitCode, durationMs: exec.durationMs, truncated: exec.truncated,
         });
+        firePostToolUse(sessionId, call.name, hookArgsOf(call.arguments), exec.ok && exec.exitCode === 0);
         const feedback = exec.ok
           ? `[bash 执行完成 exit=${exec.exitCode ?? '?'} ${exec.durationMs ?? '?'}ms]\nSTDOUT:\n${capText(String(exec.stdout ?? '') || '(空)')}\nSTDERR:\n${capText(String(exec.stderr ?? '') || '(空)')}`
           : `[工具执行失败] ${exec.error ?? `exit=${exec.exitCode}`}\nSTDERR:\n${capText(String(exec.stderr ?? ''))}`;
@@ -1103,6 +1115,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       compacted: acc.roundsSinceCompact !== null,
       exhausted: acc.exhausted,
     });
+    fireLoopHook('onTurnEnd', sessionId);
     emitTo(emit, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
     emitTo(emit, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
   } catch (err) {
@@ -1140,6 +1153,29 @@ function hookArgsOf(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+
+/** A3 补全：PostToolUse 钩子派发（fire-and-forget；hook-bridge 未装/失败静默）。
+ *  此前 P1 只落了 preToolUse 插桩——PostToolUse/PostToolUseFailure 钩子永不触发
+ *  （浏览器真机 E2E 发现：AI 自建 hook-log 钩子确认后仍不执行）。 */
+function firePostToolUse(sessionId: string, toolName: string, toolInput: unknown, success: boolean): void {
+  if (!hostApi) return;
+  void hostApi.dispatch({
+    target: 'cap.hook.bridge',
+    action: 'postToolUse',
+    payload: { sessionId, toolName, toolInput, success },
+  }).catch(() => undefined);
+}
+
+/** SessionStart / Stop（turn 结束）钩子派发（fire-and-forget） */
+function fireLoopHook(action: 'onSessionStart' | 'onTurnEnd', sessionId: string): void {
+  if (!hostApi) return;
+  void hostApi.dispatch({
+    target: 'cap.hook.bridge',
+    action,
+    payload: { sessionId },
+  }).catch(() => undefined);
 }
 
 /** files_write 参数解析（agent-files：透传动作语义字段，其余丢弃） */
@@ -1250,7 +1286,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge', 'cap.tool.mcp-ops', 'cap.tool.mcp'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge', 'cap.tool.mcp-ops', 'cap.tool.mcp', 'cap.market.tool'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

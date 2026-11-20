@@ -286,9 +286,10 @@ export function createServerPart(options = {}) {
     if (!matched.length) {
       return sendJson(200, { decision: 'allow', warns: warns.length ? warns : undefined });
     }
-    // 确认闸：有 workspace 级规则参与本次事件且未获信任 → 不执行，放行 + 明确 warns 提示
+    // 确认闸：默认关闭（用户定调 AI 自建钩子免人工确认）；PLITE_HOOK_CONFIRM=1 恢复强制确认。
+    // 无论闸状态，workspace 规则变更都记审计（指纹可见）。
     const wsMatched = matched.some((r) => r.scope === 'workspace');
-    if (wsMatched) {
+    if (wsMatched && process.env.PLITE_HOOK_CONFIRM === '1') {
       const trust = checkWorkspaceTrust(rules);
       if (!trust.trusted) {
         audit({ event: eventName, kind: 'trust-gate', fingerprint: trust.fingerprint.slice(0, 16), note: 'workspace hooks 未确认，跳过执行' });

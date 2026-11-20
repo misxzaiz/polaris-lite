@@ -32,31 +32,34 @@ function hookEnv(t) {
   return { root, dataDir, ws, call };
 }
 
-test('p1: hook 确认闸——workspace 规则未确认时跳过执行，confirm 后生效', async (t) => {
+test('p1: hook 确认闸——默认自动信任（AI 自建免人工确认），PLITE_HOOK_CONFIRM=1 恢复强制', async (t) => {
   const { dataDir, ws, call } = hookEnv(t);
-  // workspace 级 PreToolUse deny hook（会让任何 bash 调用被拒——若闸失效会被识破）
   const hookPath = join(dataDir, 'deny-once.cjs');
-  writeFileSync(hookPath, `let b='';process.stdin.on('data',d=>b+=d);process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'gate-test'}}));process.exit(0);});`);
+  writeFileSync(hookPath, "let b='';process.stdin.on('data',d=>b+=d);process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'gate-test'}}));process.exit(0);});");
   mkdirSync(join(ws, '.claude'), { recursive: true });
   writeFileSync(join(ws, '.claude', 'settings.json'), JSON.stringify({
-    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: `node "${hookPath}"`, timeout: 10 }] }] },
+    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'node "' + hookPath + '"', timeout: 10 }] }] },
   }));
 
-  // 未确认：执行被跳过 → allow + warns 提示
-  const before = await call('/api/hooks/pre-tool-use', { sessionId: 's1', toolName: 'bash', toolInput: { command: 'rm -rf x' } });
-  assert.equal(before.json.decision, 'allow', '未确认时钩子不执行（fail-open）');
-  assert.ok(Array.isArray(before.json.warns) && before.json.warns.some((w) => w.includes('未确认')), '应有未确认 warns');
-  const list1 = await call('/api/hooks/list');
-  assert.equal(list1.json.trust.pending, true, 'list 应报 pending');
+  // 默认（无 PLITE_HOOK_CONFIRM）：workspace 钩子直接执行（AI 自建免人工确认）
+  const auto = await call('/api/hooks/pre-tool-use', { sessionId: 's1', toolName: 'bash', toolInput: { command: 'rm -rf x' } });
+  assert.equal(auto.json.decision, 'deny', '默认应自动信任 workspace 钩子并执行');
 
-  // 确认后：deny 生效
-  const confirm = await call('/api/hooks/confirm', {});
-  assert.equal(confirm.json.ok, true);
-  const after = await call('/api/hooks/pre-tool-use', { sessionId: 's1', toolName: 'bash', toolInput: { command: 'rm -rf x' } });
-  assert.equal(after.json.decision, 'deny', '确认后钩子正常执行');
-  const list2 = await call('/api/hooks/list');
-  assert.equal(list2.json.trust.pending, false);
-  assert.ok(existsSync(join(dataDir, 'hooks-trust.json')), '信任记录应落盘');
+  // PLITE_HOOK_CONFIRM=1：恢复强制确认闸
+  process.env.PLITE_HOOK_CONFIRM = '1';
+  try {
+    const gated = await call('/api/hooks/pre-tool-use', { sessionId: 's1', toolName: 'bash', toolInput: { command: 'rm -rf x' } });
+    assert.equal(gated.json.decision, 'allow', '强制确认模式下未确认应跳过执行');
+    assert.ok((gated.json.warns ?? []).some((w) => w.includes('未确认')), '应提示未确认');
+    // 面板确认 → 生效
+    const confirm = await call('/api/hooks/confirm', {});
+    assert.equal(confirm.json.ok, true);
+    const after = await call('/api/hooks/pre-tool-use', { sessionId: 's1', toolName: 'bash', toolInput: { command: 'rm -rf x' } });
+    assert.equal(after.json.decision, 'deny', '确认后钩子正常执行');
+    assert.ok(existsSync(join(dataDir, 'hooks-trust.json')), '信任记录应落盘');
+  } finally {
+    delete process.env.PLITE_HOOK_CONFIRM;
+  }
 });
 
 test('p1: mcp_server_add 契约——__tool 分发 + 服务端校验拒绝非法名', async (t) => {
