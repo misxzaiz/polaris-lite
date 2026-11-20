@@ -168,3 +168,27 @@ plugin-manager 自己持有 cap.ui.layout 授权，权限面反而更大。取 d
   （host.slot.* 是结构视图被过滤）；树可视化和 reset 已可用。后续插件按
   plugin-contract 声明 views 后该下拉自动获得选项。
 - 启停生效需要刷新/重启（插件在浏览器启动时装配），面板已明确提示。
+
+---
+
+## 九、二次迭代：布局页签重构为「面板排序」（1787b50）
+
+用户反馈：布局页签「看不懂，看着不好用，没有实际意义」。成立——树可视化是开发者
+视角；且当前没有插件声明 contributes.views，打开/关闭操作项全是空摆设。
+
+用户真正要的「调整插件位置」是 **panel 槽 11 个面板 tab 的排列顺序**。重构为
+「排序」页签（commit 1787b50）：
+
+- 宿主 `slotRegistry.ts` 新增 `orderEntriesByUserOrder` 纯函数：用户顺序表覆盖
+  构建期 order（表内按用户排列、表外保持原顺序续后、脏 key 静默忽略、空表直通），
+  单测 4 断言进 core.test.mjs；
+- `SlotOutlet` 消费 `plite.slot.order.<slot>`（localStorage），监听 storage +
+  `plite-slot-order-changed` 自定义事件（storage 事件不触发同文档，面板写侧 dispatch）
+  ——**排序立即生效，无需刷新**；
+- `cap.meta` describe 增加 `slots` 清单（panel 槽贡献：pluginId/component/title/order），
+  作为面板排序的数据源；
+- 面板「排序」页签：序号 + 面板名 + 插件 id + ↑/↓/置顶 + 恢复默认顺序，自定义行高亮；
+- plugin-manager 不再需要 cap.ui.layout(.global) 授权（不再碰工作区树）。
+
+真机验收：置顶「插件」→ tab 条立即重排；「记账」上移一位生效；恢复默认回原排列；
+刷新后自定义顺序保持。typecheck 0 错（提交树），npm test 208/208。
