@@ -139,6 +139,35 @@ async function discoverTools(): Promise<void> {
   } catch { /* cap.meta 不可用：靠 tool-registered 事件兜底 */ }
 }
 
+/**
+ * 工具定义快照（缓存命中率关键，2026-11-20）：
+ * 网关的 prompt 缓存键包含 **tools 集合**——tools 数量/内容变化即全量未命中
+ * （真网关实测：同前缀 tools+1 个 → cached=0）。此前每次请求都从 tools Map 现场重建
+ * toolDefs，且 discoverTools 是异步的：插件 setup 晚于首条消息时，首轮 tools 少、
+ * 次轮才齐 → 第二轮请求 tools 集合变化 → 前缀缓存全废。
+ * 修复：按 name 排序输出稳定顺序；会话维度记住「上次发过的 tools 集合指纹」，
+ * 集合未变时复用同一数组（内容与顺序都稳定）；集合变化只发生在工具真正增删时。
+ */
+let toolDefsSnapshot: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[] = [];
+let toolDefsFingerprint = '';
+
+function buildToolDefs(): typeof toolDefsSnapshot {
+  const names = [...tools.keys()].sort();
+  const fingerprint = names.join(',');
+  if (fingerprint === toolDefsFingerprint && toolDefsSnapshot.length === names.length) {
+    return toolDefsSnapshot;
+  }
+  toolDefsFingerprint = fingerprint;
+  toolDefsSnapshot = names.map((name) => {
+    const d = tools.get(name)!;
+    return {
+      type: 'function' as const,
+      function: { name: d.name, description: d.description, parameters: d.parameters },
+    };
+  });
+  return toolDefsSnapshot;
+}
+
 /** 审批裁决：返回 null=放行；字符串=拒绝原因 */
 async function decideApproval(
   sessionId: string,
@@ -327,10 +356,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
   try {
     if (!hostApi) throw new Error('host api missing');
     await discoverTools();
-    const toolDefs = [...tools.values()].map((d) => ({
-      type: 'function' as const,
-      function: { name: d.name, description: d.description, parameters: d.parameters },
-    }));
+    // 稳定快照：按 name 排序 + 集合指纹复用（缓存命中率关键，见 buildToolDefs 注释）
+    const toolDefs = buildToolDefs();
 
     // 无工具：直通模式（start 原样透传 cap.ai.chat；引擎事件直达 chat-lite）。
     // interrupt 语义：注册取消柄，中断时向引擎转发 interrupt——否则直通流无法被「停止」打断。
@@ -765,8 +792,11 @@ export const agentLoopPlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     hostApi = api;
     api.registerCapability.registerStreaming('cap.agent.loop', loopHandler);
-    // 迟到的工具注册（loop 先于工具装配时的兜底；主路径是启动时主动拉取）
-    api.listen('tool-registered', () => void discoverTools());
+    // 迟到的工具注册（loop 先于工具装配时的兜底；主路径是启动时主动拉取）。
+    // 注册后立即刷新稳定快照（buildToolDefs 按 name 排序，顺序确定）。
+    api.listen('tool-registered', () => {
+      void discoverTools().then(() => buildToolDefs());
+    });
     // ai.usage（real-engine 流末发出）：更新压缩触发基准 + 留存速率样本（spec §4.1/§5.2）
     api.listen('cap.ai.chat:event', (envelope) => {
       const ev = envelope as { source?: string; payload?: AiUsageEvent } & AiUsageEvent;
