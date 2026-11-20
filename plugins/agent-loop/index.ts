@@ -672,6 +672,28 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           continue;
         }
 
+        // 日常记账（cap.tool.ledger）：动作语义工具（add/query/...），不走 exec——
+        // 模型在 arguments 里给 {action,...}，解析后透传给 ledger 处理器；入账响应自带预算提醒。
+        if (desc?.cap === 'cap.tool.ledger') {
+          let lr: { ok?: boolean; error?: string; hint?: string };
+          try {
+            const args = safeLedgerArgs(call.arguments);
+            const res = await hostApi.dispatch<{ ok?: boolean; error?: string; hint?: string }>({
+              target: 'cap.tool.ledger',
+              action: String(args.action ?? 'add'),
+              payload: { ...args, sessionId },
+            });
+            lr = res.data ?? { ok: false, error: 'empty response' };
+          } catch (err) {
+            lr = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          const feedback = lr.ok
+            ? `[记账成功] ${JSON.stringify(lr)}${lr.hint ? `；${lr.hint}` : ''}`
+            : `[记账失败] ${lr.error ?? 'unknown error'}`;
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+          continue;
+        }
+
         // 执行（经工具插件的 cap；approved 标记供服务端二次校验）
         // cwd=本会话绑定的工作区根（无绑定/失效回落时 execCwd 为空 → 服务端用默认 workspace）
         inFlightExec.set(sessionId, callId);
@@ -759,6 +781,23 @@ function safeArgsJson(raw: string): { kind?: string; title?: string; options?: s
       ...(Array.isArray(p.options) ? { options: p.options.map(String) } : {}),
       ...(Array.isArray(p.fields) ? { fields: p.fields } : {}),
     };
+  } catch {
+    return {};
+  }
+}
+
+/** 日常记账参数解析（ledger：动作 + 常用字段透传；金额/limit 数字化） */
+function safeLedgerArgs(raw: string): Record<string, unknown> {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of ['action', 'type', 'category', 'note', 'date', 'time', 'timeOfDay', 'id', 'month', 'keyword', 'op', 'name', 'kind']) {
+      if (p[k] !== undefined && p[k] !== null && p[k] !== '') out[k] = String(p[k]);
+    }
+    if (p.amount !== undefined) out.amount = Number(p.amount);
+    if (p.limit !== undefined) out.limit = Number(p.limit);
+    if (p.patch !== undefined && typeof p.patch === 'object') out.patch = p.patch;
+    return out;
   } catch {
     return {};
   }
