@@ -1,10 +1,11 @@
 /**
- * plugin-manager 插件：插件管理面板（启停 + 布局调整）。
+ * plugin-manager 插件：插件管理面板（启停 + 面板排序）。
  *
  * 职责：
  * - cap.plugin.admin：本插件提供的管理能力（list/setEnabled 经 server 半边落盘 registry.json）；
- * - panel 槽：两页签面板（插件清单 + 工作区布局）；
- * - 位置调整走既有 cap.ui.layout（open/close/reset），不新开布局通道。
+ * - panel 槽：两页签面板（插件清单 + 面板排序）；
+ * - 面板排序写 plite.slot.order.panel（localStorage），宿主 SlotOutlet 消费该顺序覆盖
+ *   构建期 order——运行时调整面板 tab 排列，立即生效。
  *
  * 禁用语义：插件在浏览器启动时装配，enabled=false 于下次加载生效；
  * 面板明确展示这一点，服务端写入时同步 bump 产物版本号保证刷新后拉新。
@@ -52,11 +53,10 @@ export const pluginManagerPlugin: LitePlugin = {
   manifest: {
     id: 'plugin-manager',
     name: '插件管理',
-    version: '0.1.0',
+    version: '0.2.0',
     // cap.plugin.admin：自供自用（总线按调用方权限放行，自调也要声明）；
-    // cap.meta：describe 取插件权限表与视图清单；
-    // cap.ui.layout：布局页签的 getTree/open/close/reset。
-    capabilities: ['cap.plugin.admin', 'cap.meta', 'cap.ui.layout', 'cap.ui.layout.global'],
+    // cap.meta：describe 取插件权限表与 panel 槽贡献清单（面板排序的数据源）。
+    capabilities: ['cap.plugin.admin', 'cap.meta'],
     provides: ['cap.plugin.admin'],
     events: [],
     contributes: {

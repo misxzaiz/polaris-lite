@@ -41,21 +41,6 @@ interface PluginRow {
   deniedCount: number;
 }
 
-interface ViewInfo {
-  viewType: string;
-  title: string;
-  pluginId: string;
-}
-
-interface TreeNode {
-  kind: 'anchor' | 'split' | 'tabs' | 'view';
-  id: string;
-  anchor?: string;
-  viewType?: string;
-  dir?: string;
-  children?: TreeNode[];
-}
-
 /** 服务端 /api/plugin-admin/* 调用（同源，会话 cookie 自动携带） */
 async function adminApi<T>(path: string, body?: unknown): Promise<T> {
   const resp = await fetch(path, {
@@ -125,154 +110,138 @@ function PluginList({ rows, onChanged }: { rows: PluginRow[]; onChanged: () => v
   );
 }
 
-// ── 布局页签 ────────────────────────────────────────────────────────────────
+// ── 面板顺序页签（原「布局」重构：树可视化对用户无意义，改为管理 panel 槽 tab 顺序） ──
 
-function TreeNodeView({ node, depth, views }: { node: TreeNode; depth: number; views: Map<string, ViewInfo> }) {
-  const label =
-    node.kind === 'view'
-      ? (views.get(node.viewType ?? '')?.title ?? node.viewType ?? node.id)
-      : node.kind === 'anchor'
-        ? `锚点 ${node.anchor ?? node.id}`
-        : node.kind === 'tabs'
-          ? '标签组'
-          : `分栏 ${node.dir ?? ''}`;
-  const meta = node.kind === 'view' ? node.viewType : node.id;
-  return (
-    <div className="pm-tree-node" style={{ paddingLeft: depth === 0 ? 0 : 14 }}>
-      <div className={`pm-tree-row pm-tree-${node.kind}`}>
-        <span className="pm-tree-kind">{node.kind}</span>
-        <span className="pm-tree-label">{label}</span>
-        {meta && <span className="pm-tree-meta">{meta}</span>}
-      </div>
-      {node.children?.map((c) => (
-        <TreeNodeView key={c.id} node={c} depth={depth + 1} views={views} />
-      ))}
-    </div>
-  );
+interface SlotEntryInfo {
+  slot: string;
+  pluginId: string;
+  component: string;
+  title: string;
+  order: number;
 }
 
-function LayoutTab() {
-  const [tree, setTree] = useState<TreeNode | null>(null);
-  const [views, setViews] = useState<ViewInfo[]>([]);
+const PANEL_ORDER_KEY = 'plite.slot.order.panel';
+
+function readPanelOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(PANEL_ORDER_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePanelOrder(keys: string[]): void {
+  try {
+    localStorage.setItem(PANEL_ORDER_KEY, JSON.stringify(keys));
+  } catch {
+    /* 持久化失败不阻断（会话内仍生效） */
+  }
+  // 通知同文档的 SlotOutlet 重读顺序（storage 事件只跨文档触发，同文档用自定义事件）
+  window.dispatchEvent(new CustomEvent('plite-slot-order-changed', { detail: PANEL_ORDER_KEY }));
+}
+
+/** 纯函数：按 customOrder 重排 entries（稳定 key；未覆盖的保持原顺序排在后面） */
+function applyOrder(entries: SlotEntryInfo[], customOrder: string[]): SlotEntryInfo[] {
+  if (customOrder.length === 0) return entries;
+  const rank = new Map(customOrder.map((k, i) => [k, i]));
+  const keyOf = (e: SlotEntryInfo): string => `${e.pluginId}:${e.component}`;
+  const inOrder = entries.filter((e) => rank.has(keyOf(e)));
+  const rest = entries.filter((e) => !rank.has(keyOf(e)));
+  inOrder.sort((a, b) => rank.get(keyOf(a))! - rank.get(keyOf(b))!);
+  return [...inOrder, ...rest];
+}
+
+function OrderTab() {
+  const [entries, setEntries] = useState<SlotEntryInfo[]>([]);
+  const [customOrder, setCustomOrder] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [pick, setPick] = useState('');
-  const [anchor, setAnchor] = useState<'panel' | 'stream' | 'sidebar' | 'input'>('panel');
-  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
+    setError(null);
     if (!api) return;
-    const meta = await api.dispatch<{ views?: ViewInfo[] }>({ target: 'cap.meta', action: 'describe' });
-    setViews(meta.data?.views ?? []);
-    const ws = api.workspace;
-    if (!ws) {
-      setError('当前未授予 cap.ui.layout，布局页签不可用');
-      return;
-    }
-    const res = await ws.getTree();
-    if (res.ok) setTree(res.data as TreeNode);
-    else setError(res.error?.message ?? '读取布局失败');
+    const meta = await api.dispatch<{ slots?: SlotEntryInfo[] }>({
+      target: 'cap.meta',
+      action: 'describe',
+      payload: { slot: 'panel' },
+    });
+    setEntries(meta.data?.slots ?? []);
+    setCustomOrder(readPanelOrder());
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const openView = async () => {
-    if (!api?.workspace || !pick) return;
-    setBusy(true);
-    setError(null);
-    const res = await api.workspace.open(pick, { where: 'tab', anchor });
-    setBusy(false);
-    if (!res.ok) setError(res.error?.message ?? '打开失败');
-    else await refresh();
+  const commit = (next: string[]) => {
+    setCustomOrder(next);
+    writePanelOrder(next);
   };
 
-  const closeNode = async (nodeId: string) => {
-    if (!api?.workspace) return;
-    setBusy(true);
-    setError(null);
-    const res = await api.workspace.close(nodeId);
-    setBusy(false);
-    if (!res.ok) setError(res.error?.message ?? '关闭失败');
-    else await refresh();
+  const keyOf = (e: SlotEntryInfo): string => `${e.pluginId}:${e.component}`;
+  const ordered = applyOrder(entries, customOrder);
+
+  /** 上移/下移：交换 customOrder 里的相邻位置（不在表里的先补进去再换） */
+  const move = (key: string, dir: -1 | 1) => {
+    const base = ordered.map(keyOf);
+    const list = [...customOrder.filter((k) => base.includes(k)), ...base.filter((k) => !customOrder.includes(k))];
+    const i = list.indexOf(key);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    commit(list);
   };
 
-  const resetLayout = async () => {
-    if (!api?.workspace) return;
-    setBusy(true);
-    setError(null);
-    const res = await api.workspace.reset();
-    setBusy(false);
-    if (!res.ok) setError(res.error?.message ?? '重置失败');
-    else await refresh();
+  const toTop = (key: string) => {
+    const base = ordered.map(keyOf);
+    const list = [...customOrder.filter((k) => base.includes(k)), ...base.filter((k) => !customOrder.includes(k))];
+    commit([key, ...list.filter((k) => k !== key)]);
   };
 
-  const openableViews = views.filter((v) => !v.viewType.startsWith('host.'));
+  const resetOrder = () => {
+    try { localStorage.removeItem(PANEL_ORDER_KEY); } catch { /* ignore */ }
+    setCustomOrder([]);
+    window.dispatchEvent(new CustomEvent('plite-slot-order-changed', { detail: PANEL_ORDER_KEY }));
+  };
 
   return (
-    <div className="pm-layout">
-      <div className="pm-layout-actions">
-        <select
-          className="pm-select"
-          value={pick}
-          onChange={(e) => setPick(e.target.value)}
-          aria-label="选择要打开的视图"
-        >
-          <option value="">选择视图…</option>
-          {openableViews.map((v) => (
-            <option key={v.viewType} value={v.viewType}>{v.title}（{v.viewType}）</option>
-          ))}
-        </select>
-        <select
-          className="pm-select pm-select-anchor"
-          value={anchor}
-          onChange={(e) => setAnchor(e.target.value as typeof anchor)}
-          aria-label="落位锚点"
-        >
-          <option value="panel">面板</option>
-          <option value="stream">主区</option>
-          <option value="sidebar">侧栏</option>
-          <option value="input">输入区</option>
-        </select>
-        <button type="button" className="pm-btn" disabled={!pick || busy} onClick={openView}>打开</button>
-        <button type="button" className="pm-btn pm-btn-danger" disabled={busy} onClick={resetLayout}>恢复默认布局</button>
+    <div className="pm-order">
+      <div className="pm-order-actions">
+        <button type="button" className="pm-btn" onClick={resetOrder} disabled={customOrder.length === 0}>
+          恢复默认顺序
+        </button>
       </div>
       {error && <div className="pm-error" role="alert">{error}</div>}
-      <div className="pm-tree">
-        {tree ? <TreeNodeView node={tree} depth={0} views={new Map(views.map((v) => [v.viewType, v]))} /> : <div className="pm-empty">布局读取中…</div>}
+      <div className="pm-order-list" role="list" aria-label="面板顺序">
+        {ordered.map((e, i) => {
+          const key = keyOf(e);
+          const customized = customOrder.includes(key);
+          return (
+            <div className="pm-order-row" role="listitem" key={key} data-customized={customized ? 'true' : undefined}>
+              <span className="pm-order-idx">{i + 1}</span>
+              <span className="pm-order-name" title={`${e.pluginId}:${e.component}`}>{e.title}</span>
+              <span className="pm-order-plugin">{e.pluginId}</span>
+              <span className="pm-order-btns">
+                <button type="button" className="pm-icon-btn" aria-label={`上移 ${e.title}`} disabled={i === 0} onClick={() => move(key, -1)}>↑</button>
+                <button type="button" className="pm-icon-btn" aria-label={`下移 ${e.title}`} disabled={i === ordered.length - 1} onClick={() => move(key, 1)}>↓</button>
+                <button type="button" className="pm-icon-btn" aria-label={`置顶 ${e.title}`} disabled={i === 0} onClick={() => toTop(key)}>⤒</button>
+              </span>
+            </div>
+          );
+        })}
+        {ordered.length === 0 && <div className="pm-empty">暂无面板贡献</div>}
       </div>
-      {tree && <CloseButtons tree={tree} onClose={closeNode} />}
-      <p className="pm-hint">细粒度重排（拖拽 tab / 调整分栏宽度）请直接在界面操作；本页提供打开 / 关闭 / 重置三个入口。</p>
-    </div>
-  );
-}
-
-/** 收集可关闭的视图节点（非 host.slot.*），给出关闭按钮 */
-function CloseButtons({ tree, onClose }: { tree: TreeNode; onClose: (id: string) => void }) {
-  const closable: { id: string; viewType: string }[] = [];
-  const walk = (n: TreeNode): void => {
-    if (n.kind === 'view' && n.viewType && !n.viewType.startsWith('host.')) closable.push({ id: n.id, viewType: n.viewType });
-    n.children?.forEach(walk);
-  };
-  walk(tree);
-  if (closable.length === 0) return null;
-  return (
-    <div className="pm-close-list">
-      <span className="pm-section-title">已打开的视图</span>
-      {closable.map((v) => (
-        <div className="pm-close-row" key={v.id}>
-          <span className="pm-close-name">{v.viewType}</span>
-          <button type="button" className="pm-btn pm-btn-danger" onClick={() => onClose(v.id)}>关闭</button>
-        </div>
-      ))}
+      <p className="pm-hint">调整面板 tab 的排列顺序，<strong>立即生效并持久保存</strong>。上移/下移/置顶只改顺序，不影响功能。</p>
     </div>
   );
 }
 
 // ── 面板入口 ────────────────────────────────────────────────────────────────
 
-type Tab = 'plugins' | 'layout';
+type Tab = 'plugins' | 'order';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'plugins', label: '插件' },
-  { key: 'layout', label: '布局' },
+  { key: 'order', label: '排序' },
 ];
 
 export function PluginManagerPanel() {
@@ -327,7 +296,7 @@ export function PluginManagerPanel() {
       <div className="pm-body">
         {error && <div className="pm-error" role="alert">{error}</div>}
         {tab === 'plugins' && <PluginList rows={rows} onChanged={() => void refresh()} />}
-        {tab === 'layout' && <LayoutTab />}
+        {tab === 'order' && <OrderTab />}
       </div>
     </div>
   );

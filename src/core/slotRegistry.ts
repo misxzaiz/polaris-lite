@@ -24,6 +24,23 @@ export function orderEntriesWithPins(entries: SlotEntry[], pins: string[]): Slot
   return [...pinned, ...rest];
 }
 
+/**
+ * 用户自定义顺序覆盖（纯函数，插件管理面板「面板排序」用）：
+ * `orderKey` 里的 key 按用户排列的顺序输出；未出现在表里的条目保持既有顺序追加在后。
+ * 未知 key（面板下线后残留）静默忽略；表为空时原样返回（不制造多余渲染）。
+ * 与 orderEntriesWithPins 组合使用：先按用户顺序重排，再做置顶提升。
+ */
+export function orderEntriesByUserOrder(entries: SlotEntry[], orderKey: string[]): SlotEntry[] {
+  if (orderKey.length === 0) return entries;
+  const rank = new Map(orderKey.map((k, i) => [k, i]));
+  const keyed = entries.map((e) => ({ e, key: `${e.pluginId}:${e.component}` }));
+  const inOrder = keyed.filter((x) => rank.has(x.key));
+  const rest = keyed.filter((x) => !rank.has(x.key));
+  if (inOrder.length === 0) return entries;
+  inOrder.sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
+  return [...inOrder.map((x) => x.e), ...rest.map((x) => x.e)];
+}
+
 export class SlotRegistry {
   private slots = new Map<SlotId, SlotEntry[]>();
 

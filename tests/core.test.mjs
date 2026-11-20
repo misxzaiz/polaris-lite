@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CapBus } from '../src/core/bus.ts';
 import { resolvePolicy } from '../src/core/policy.ts';
-import { SlotRegistry, orderEntriesWithPins } from '../src/core/slotRegistry.ts';
+import { SlotRegistry, orderEntriesWithPins, orderEntriesByUserOrder } from '../src/core/slotRegistry.ts';
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
@@ -173,4 +173,30 @@ test('置顶排序：置顶项按置顶顺序排最前，其余保持 order 顺�
     stale.map((e) => e.title),
     ['模型', '能力', 'Bash', '账号'],
   );
+});
+
+test('用户自定义顺序：order 表里的按用户排列输出，未覆盖的保持原顺序续后', () => {
+  const reg = new SlotRegistry();
+  reg.register('cap-panel', [{ slot: 'panel', component: 'Caps', order: 1, title: '能力' }]);
+  reg.register('model-admin', [{ slot: 'panel', component: 'Models', order: 2, title: '模型' }]);
+  reg.register('agent-bash', [{ slot: 'panel', component: 'Bash', order: 3, title: 'Bash' }]);
+  reg.register('mock-auth', [{ slot: 'panel', component: 'Creds', order: 4, title: '账号' }]);
+  const entries = reg.list('panel');
+
+  // 完整覆盖：完全按用户顺序
+  const full = orderEntriesByUserOrder(entries, [
+    'agent-bash:Bash', 'cap-panel:Caps', 'mock-auth:Creds', 'model-admin:Models',
+  ]);
+  assert.deepEqual(full.map((e) => e.title), ['Bash', '能力', '账号', '模型']);
+
+  // 部分覆盖：表内项按用户顺序提前，表外项保持 order 顺序追加在后
+  const partial = orderEntriesByUserOrder(entries, ['mock-auth:Creds']);
+  assert.deepEqual(partial.map((e) => e.title), ['账号', '能力', '模型', 'Bash']);
+
+  // 空表：原样返回（同一引用）
+  assert.equal(orderEntriesByUserOrder(entries, []), entries);
+
+  // 脏 key（面板已下线）静默忽略，不炸不重排
+  const stale = orderEntriesByUserOrder(entries, ['gone:Panel']);
+  assert.deepEqual(stale.map((e) => e.title), ['能力', '模型', 'Bash', '账号']);
 });

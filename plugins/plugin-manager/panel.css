@@ -98,22 +98,9 @@
 .pm-switch.on .pm-switch-knob { transform: translateX(15px); background: var(--accent-bright); }
 .pm-switch:disabled { cursor: wait; opacity: 0.6; }
 
-/* ---- 布局页签 ---- */
-.pm-layout { display: flex; flex-direction: column; gap: 10px; }
-.pm-layout-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.pm-select {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid rgba(var(--border-rgb), 0.5);
-  border-radius: var(--plite-radius-sm, 6px);
-  background: var(--bg, transparent);
-  color: var(--text);
-  font-size: 12px;
-}
-.pm-select:focus { border-color: var(--accent); outline: none; }
-.pm-select-anchor { flex: 0 0 auto; width: 84px; }
+/* ---- 面板顺序页签 ---- */
+.pm-order { display: flex; flex-direction: column; gap: 10px; }
+.pm-order-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .pm-btn {
   height: 28px;
   padding: 0 12px;
@@ -129,66 +116,69 @@
 .pm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pm-btn-danger:hover:not(:disabled) { border-color: var(--plite-danger, #c0392f); color: var(--plite-danger, #c0392f); }
 
-.pm-tree {
+.pm-order-list {
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(var(--border-rgb), 0.4);
   border-radius: var(--plite-radius-sm, 6px);
-  padding: 8px;
-  font-size: 12px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-.pm-tree-node { display: flex; flex-direction: column; gap: 2px; }
-.pm-tree-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 4px;
-  border-radius: 4px;
-  min-width: 0;
-}
-.pm-tree-row:hover { background: var(--bg-hover); }
-.pm-tree-kind {
-  flex: none;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  width: 44px;
-}
-.pm-tree-label { color: var(--text); font-weight: 500; white-space: nowrap; }
-.pm-tree-meta {
-  font-size: 11px;
-  color: var(--text-faint);
-  font-family: var(--plite-font-mono, monospace);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.pm-tree-view .pm-tree-label { color: var(--accent-bright); }
-
-.pm-close-list { display: flex; flex-direction: column; gap: 4px; }
-.pm-section-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.pm-close-row {
+.pm-order-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 4px 2px;
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(var(--border-rgb), 0.25);
+  background: var(--bg-panel, transparent);
+  min-width: 0;
 }
-.pm-close-name {
+.pm-order-row:last-child { border-bottom: none; }
+.pm-order-row:hover { background: var(--bg-hover); }
+.pm-order-row[data-customized='true'] { background: var(--accent-soft); }
+.pm-order-row[data-customized='true']:hover { background: var(--accent-soft); }
+.pm-order-idx {
+  flex: none;
+  width: 20px;
   font-size: 11px;
+  color: var(--text-faint);
   font-family: var(--plite-font-mono, monospace);
-  color: var(--text-dim);
+  text-align: right;
+}
+.pm-order-name {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pm-order-plugin {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--plite-font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pm-order-btns { display: flex; gap: 3px; flex: none; }
+.pm-icon-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(var(--border-rgb), 0.4);
+  border-radius: 4px;
+  background: var(--bg, transparent);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pm-icon-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-bright); background: var(--bg-hover); }
+.pm-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ---- 通用 ---- */
 .pm-error {

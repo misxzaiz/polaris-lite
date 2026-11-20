@@ -19,11 +19,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SlotId } from './types';
 import { host } from './hostRuntime';
 import { getRuntimeComponent } from './externalPlugins';
-import { orderEntriesWithPins } from './slotRegistry';
+import { orderEntriesByUserOrder, orderEntriesWithPins } from './slotRegistry';
 import { getIsNarrow, subscribeNarrow } from './shellState';
 
 const ACTIVE_KEY_PREFIX = 'plite.slot.active.';
 const PIN_KEY_PREFIX = 'plite.slot.pins.';
+const USER_ORDER_KEY_PREFIX = 'plite.slot.order.';
 
 function entryKey(pluginId: string, component: string): string {
   return `${pluginId}:${component}`;
@@ -68,6 +69,20 @@ function writePinKeys(slot: SlotId, keys: string[]): void {
   }
 }
 
+/** 读取用户自定义面板顺序（插件管理面板写入）；坏数据回空 */
+function readUserOrder(slot: SlotId): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(USER_ORDER_KEY_PREFIX + slot);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((k): k is string => typeof k === 'string');
+  } catch {
+    return [];
+  }
+}
+
 function SlotEntryView({ pluginId, component, slot }: { pluginId: string; component: string; slot: SlotId }) {
   const Comp = getRuntimeComponent(pluginId, component);
   if (!Comp) {
@@ -101,6 +116,8 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
   const entries = host.slots.list(slot);
   const [activeKey, setActiveKey] = useState<string | null>(() => readActiveKey(slot));
   const [pins, setPins] = useState<string[]>(() => readPinKeys(slot));
+  // 用户自定义顺序（插件管理面板写入 localStorage；本组件经 storage 事件跨实例同步）
+  const [userOrder, setUserOrder] = useState<string[]>(() => readUserOrder(slot));
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [focusIdx, setFocusIdx] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -114,11 +131,29 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
   const [narrow, setNarrow] = useState(getIsNarrow);
   useEffect(() => subscribeNarrow(setNarrow), []);
 
+  // 面板排序由插件管理面板写 localStorage（本组件挂载在 panel 槽，同页不同实例）；
+  // storage 事件只在**其他**文档触发，同文档写不上——用自定义事件兜底（写侧 dispatch）。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === USER_ORDER_KEY_PREFIX + slot) setUserOrder(readUserOrder(slot));
+    };
+    const onLocal = (e: Event): void => {
+      if ((e as CustomEvent<string>).detail === USER_ORDER_KEY_PREFIX + slot) setUserOrder(readUserOrder(slot));
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('plite-slot-order-changed', onLocal);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('plite-slot-order-changed', onLocal);
+    };
+  }, [slot]);
+
   // 多面板槽：Tab 切换（tab 名 = SlotDescriptor.title ?? 插件 manifest.name）
   const useTabs = slot === 'panel' && entries.length > 1;
 
-  // 置顶在前（稳定 key，不是下标）：高频面板不随数量增长被挤到滚动尽头
-  const ordered = orderEntriesWithPins(entries, pins);
+  // 用户自定义顺序优先（插件管理面板「面板排序」写入），再做置顶提升；
+  // 两者都是稳定 key 操作，未覆盖的条目保持 order 顺序。无自定义时零开销直通。
+  const ordered = orderEntriesWithPins(orderEntriesByUserOrder(entries, userOrder), pins);
   const nameOf = (e: (typeof entries)[number]): string =>
     e.title ?? host.getManifest(e.pluginId)?.name ?? e.pluginId;
 
