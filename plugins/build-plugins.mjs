@@ -97,6 +97,8 @@ const plugins = [
   { id: 'hook-bridge', config: 'hook-bridge/vite.config.ts', dist: 'hook-bridge/dist', order: 25 },
   // mcp-bridge = MCP server 接入（stdio JSON-RPC client 池 + cap.tool.mcp 聚合工具 + 管理面）
   { id: 'mcp-bridge', config: 'mcp-bridge/vite.config.ts', dist: 'mcp-bridge/dist', order: 26 },
+  // zcode-compat = CC/ZC 扩展文件扫描与固化导入（纯导入器，能力由上面三个插件承载）
+  { id: 'zcode-compat', config: 'zcode-compat/vite.config.ts', dist: 'zcode-compat/dist', order: 27 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

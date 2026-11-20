@@ -32,6 +32,7 @@ export const SERVER_PLUGINS = [
   { id: 'skill-loader', entry: './skill-loader/server.mjs' },
   { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
+  { id: 'zcode-compat', entry: './zcode-compat/server.mjs' },
 ];
 
 /**

@@ -356,6 +356,29 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   if (!sessionId) sessionId = store.createSession();
   const sid: string = sessionId;
 
+  // /name 斜杠命令（P2，plans/extension-capability-pure-plugin-plan.md §2.2）：
+  // `/deploy args...` → 若 skill-loader 的技能索引里有名为 deploy 的技能，则把正文替换为
+  // read_skill 的参数化形态（$ARGUMENTS/$1/$2 由 skill-loader exec 时替换）。
+  // 非斜杠输入 / 未命中技能 / 能力未装 → 原文直发，零行为变化。
+  let effectiveText = text;
+  const slashMatch = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (slashMatch) {
+    try {
+      // 技能存在性由 skill-loader 的 /api/skills/read 校验（404=不存在）。
+      const skillName = slashMatch[1];
+      const args = (slashMatch[2] ?? '').trim();
+      const resp = await fetch(`/api/skills/read?name=${encodeURIComponent(skillName)}`, { credentials: 'include' });
+      if (resp.ok) {
+        const j = (await resp.json().catch(() => null)) as { ok?: boolean } | null;
+        if (j?.ok) {
+          effectiveText = args
+            ? `请按技能「${skillName}」执行（参数：${args}）。先用 read_skill 读取该技能全文再遵循执行。`
+            : `请按技能「${skillName}」执行。先用 read_skill 读取该技能全文再遵循执行。`;
+        }
+      }
+    } catch { /* 探测失败：原文直发 */ }
+  }
+
   // 上下文 = 本次提问之前的全部消息（排除工具卡；blocks 模式的 assistant 文本取块拼接）。
   // 协议上下文由 agent-loop 的 shadow transcript 自持，此处只喂可见文本。
   const history = store.sessions
@@ -569,7 +592,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     payload: {
       sessionId: sid,
       messageId: assistantId,
-      prompt: text,
+      prompt: effectiveText,
       history,
       // 会话绑定的文件工作区（agent-loop 据此设置 bash cwd 与 system prompt；缺省=默认 workspace）
       ...(store.sessions.find((s) => s.id === sid)?.workspaceId

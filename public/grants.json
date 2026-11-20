@@ -1,5 +1,5 @@
 {
-  "version": "6",
+  "version": "7",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -290,6 +290,15 @@
       "events": [
         "tool-registered"
       ]
+    },
+    "zcode-compat": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.compat.admin"
+      ],
+      "events": []
     }
   }
 }
