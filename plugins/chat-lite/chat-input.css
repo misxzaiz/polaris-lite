@@ -298,6 +298,48 @@
 .chat-assistant-val { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 .chat-assistant-row .chat-queue-clear { margin-left: auto; }
 
+/* ===== 待发队列条目：文本单行省略 + 操作按钮右对齐成组 ===== */
+.chat-queue-list { display: flex; flex-direction: column; }
+.chat-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 0 5px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-queue-item:last-child { border-bottom: none; }
+.chat-queue-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text);
+}
+.chat-queue-acts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-queue-act {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color var(--plite-dur) var(--plite-ease), color var(--plite-dur) var(--plite-ease);
+}
+.chat-queue-act:hover { border-color: var(--accent); color: var(--accent-bright); }
+.chat-queue-act.danger:hover { border-color: var(--plite-danger); color: var(--plite-danger); }
+
 /* 调谐入口（操作行图标按钮）：展开工作区 / 执行模式 / 队列面板 */
 .chat-send.tune {
   position: relative;
