@@ -18,7 +18,8 @@ import {
   type Attachment, validateFile, validateBatch, fileToAttachment, acceptAttr, isImageMime,
 } from './attachments';
 import { AttachmentStrip } from './AttachmentStrip';
-import { PaperclipIcon, SendIcon, StopIcon, FolderIcon, ChevronRightIcon } from './icons';
+import { SessionNav } from './SessionNav';
+import { PaperclipIcon, SendIcon, StopIcon, FolderIcon, ChevronRightIcon, PlusIcon } from './icons';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
 import { ContextMeter } from './ContextMeter';
@@ -364,6 +365,33 @@ export function ChatInput() {
     interruptTimer.current = setTimeout(() => setInterrupting(false), 5000);
   };
 
+  /** 新增对话：当前会话已是空壳（0 条消息）时不再新建，只聚焦（防连点产生空壳会话） */
+  const startNewSession = useCallback(() => {
+    const st = useSessionStore.getState();
+    const cur = st.sessions.find((s) => s.id === st.activeId);
+    if (cur && cur.messages.length === 0) {
+      taRef.current?.focus();
+      return;
+    }
+    st.createSession();
+    // createSession 后 activeId 已指向新会话；草稿清空由既有 activeId effect 完成
+    setText('');
+    setHistoryIndex(null);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
+
+  /** 相邻会话切换（Alt+←/→ 与切换行共用）：到头即停 */
+  const gotoNeighbor = useCallback((dir: 'prev' | 'next') => {
+    const st = useSessionStore.getState();
+    const idx = st.sessions.findIndex((s) => s.id === st.activeId);
+    if (idx < 0) return;
+    // sessions[0] 最新：next = 下标-1（更新），prev = 下标+1（更旧）
+    const target = st.sessions[dir === 'next' ? idx - 1 : idx + 1];
+    if (!target) return;
+    st.setActive(target.id);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
+
   useEffect(() => {
     if (!streaming && interrupting) {
       if (interruptTimer.current) clearTimeout(interruptTimer.current);
@@ -377,6 +405,25 @@ export function ChatInput() {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const native = e.nativeEvent;
+    // Alt+←/→ 相邻会话切换；Alt+N 新增对话。IME 组词中不接管（候选键可能是 Alt 组合）
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (native.isComposing) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        gotoNeighbor('prev');
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        gotoNeighbor('next');
+        return;
+      }
+      if (e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        startNewSession();
+        return;
+      }
+    }
     // ↑↓ 历史召回：空输入或浏览态才接管，不抢多行光标移动；IME 组词中不接管
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       if (native.isComposing) return;
@@ -458,6 +505,7 @@ export function ChatInput() {
       onDrop={handleDrop}
     >
         {attachErr && <div className="chat-input-warn">{attachErr}</div>}
+        <SessionNav onFocusInput={() => taRef.current?.focus()} />
         <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
         <textarea
           ref={taRef}
@@ -559,6 +607,15 @@ export function ChatInput() {
             {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
           </button>
           <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
+          {/* 新增对话：输入框旁一键开新会话（与左侧栏「新会话」等效；空会话防重复） */}
+          <button
+            className="chat-send new-session"
+            onClick={startNewSession}
+            title="新增对话（Alt+N）"
+            aria-label="新增对话"
+          >
+            <PlusIcon />
+          </button>
           {/* 上下文进度圆圈（spec §5.3 v2）：紧贴发送/停止按钮左侧；点击经 portal 在输入条上方展开详情 */}
           <ContextMeter />
           {showBoth && (
