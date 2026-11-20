@@ -39,13 +39,15 @@ export function HookPanel() {
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [importLog, setImportLog] = useState<string[] | null>(null);
   const [hasCompat, setHasCompat] = useState<boolean | null>(null);
+  const [trustPending, setTrustPending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const resp = await fetch('/api/hooks/list', { credentials: 'include' });
-      const j = (await resp.json().catch(() => null)) as { rules?: HookRule[]; warns?: string[] } | null;
+      const j = (await resp.json().catch(() => null)) as { rules?: HookRule[]; warns?: string[]; trust?: { trusted?: boolean; pending?: boolean } } | null;
       setRules(j?.rules ?? []);
       setWarns(j?.warns ?? []);
+      setTrustPending(Boolean(j?.trust?.pending));
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -83,6 +85,23 @@ export function HookPanel() {
     }
   };
 
+  const confirmTrust = async () => {
+    setBusy(true);
+    try {
+      await fetch('/api/hooks/confirm', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="hk-panel">
       <div className="hk-toolbar">
@@ -91,6 +110,12 @@ export function HookPanel() {
           <button className="hk-btn" disabled={busy} onClick={doImport} title="扫描并固化导入 Claude/ZCode 的 MCP/skills/hooks 配置">从 CC/ZC 导入</button>
         )}
       </div>
+      {trustPending && (
+        <div className="hk-trust">
+          <div>工作区级钩子有未确认的变更：当前已跳过执行（防 AI 绕过审批自行放行）。请核对下方 workspace 规则后确认。</div>
+          <button className="hk-btn danger" disabled={busy} onClick={confirmTrust}>确认启用当前规则集</button>
+        </div>
+      )}
       {error && <div className="hk-error">{error}</div>}
       {scanResult && <div className="hk-scan">扫描预览：{scanResult}</div>}
       {importLog && <div className="hk-import">{importLog.map((l, i) => <div key={i}>· {l}</div>)}</div>}

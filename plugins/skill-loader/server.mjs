@@ -153,6 +153,14 @@ export function createServerPart(options = {}) {
         lines.join('\n'),
       );
     }
+    // 自建扩展操作指引（runtime-extensions-and-market-final.md P1.3）：教会 AI 运行时创建技能/钩子/MCP server
+    parts.push(
+      '# 自建扩展指引\n' +
+      '你可以运行时创建扩展，均实时生效：\n' +
+      '- 技能：用 files_write 写 <工作区>/.claude/skills/<名>/SKILL.md（frontmatter 含 name 与 description），下一轮对话即可用 read_skill 读取。\n' +
+      '- MCP server：用 mcp_server_add 工具（参数 name/command/args，需用户审批），登记后下一轮对话其工具（mcp__<名>__*）可用；用 mcp_server_list 查看。\n' +
+      '- 钩子：用 files_write 编辑 <工作区>/.claude/settings.json 的 hooks 键（PreToolUse/PostToolUse 等 7 事件）。注意：工作区钩子需用户在面板确认后才执行。',
+    );
     if (docText) parts.push('# Project instructions\n' + docText);
     return parts.join('\n\n');
   }

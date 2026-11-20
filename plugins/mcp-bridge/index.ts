@@ -5,15 +5,19 @@
  * 1. cap.tool.mcp（聚合工具 cap）：describe 返回 {descriptors:[...]}（全部 MCP 工具，
  *    命名 mcp__<server>__<tool>）；exec 按 name 路由到对应 server 的 tools/call。
  *    agent-loop A1 已兼容聚合数组形态。
- * 2. cap.mcp.admin：管理面（list servers/tools、门控开关），供面板/设置使用。
- * 3. server 半边：MCP client 池（stdio NDJSON JSON-RPC 2.0，协议 2024-11-05）+
+ * 2. cap.tool.mcp-ops（AI 自建通道，runtime-extensions-and-market-final.md P1.1）：
+ *    describe 同样返回聚合数组（mcp_server_add/remove/list 三个管理工具，danger='execute'
+ *    走 agent-loop 审批链）——AI 可在会话里登记/移除 MCP server，写完下轮对话即生效。
+ * 3. cap.mcp.admin：管理面（list/add/remove/gate），供面板/设置使用。
+ * 4. server 半边：MCP client 池（stdio NDJSON JSON-RPC 2.0，协议 2024-11-05）+
  *    配置仓库（<dataDir>/mcp-servers.json 原生格式，唯一写目标）+ /api/mcp/* 管理端点。
  *
  * 配置来源：原生 <dataDir>/mcp-servers.json 为权威；外部格式（.mcp.json 等）由
  * zcode-compat 插件负责发现并「固化导入」到原生文件——本插件只吃原生格式。
  *
  * 安全模型：PLITE_MCP=0 一键禁用；server 启动/调用全量审计（mcp-audit.log）；
- * per-tool 门控存 cap.kv（namespace 'mcp-bridge'）。
+ * per-tool 门控存 cap.kv（namespace 'mcp-bridge'）；mcp_server_add/remove 是危险操作，
+ * exec 内部复用 /api/mcp/servers 的服务端校验（name 合法性/command 字符串/绝对路径存在性）。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import { McpPanel, setMcpPanelApi } from './Panel';
@@ -25,6 +29,97 @@ interface McpToolDescriptor {
   description: string;
   parameters: unknown;
   danger: 'read' | 'write' | 'execute';
+}
+
+const MCP_OPS_DESCRIPTORS: McpToolDescriptor[] = [
+  {
+    cap: 'cap.tool.mcp-ops',
+    name: 'mcp_server_add',
+    description:
+      '登记一个 MCP server（stdio）。写入后立即生效：下一轮对话其工具（mcp__<server>__<tool>）即可用。' +
+      '危险操作需用户审批。command 须为可执行命令（如 node），args 为字符串数组。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'server 名（仅字母数字_-，将出现在工具名 mcp__<name>__* 中）' },
+        command: { type: 'string', description: '启动命令（如 node / npx）' },
+        args: { type: 'array', items: { type: 'string' }, description: '命令参数数组' },
+      },
+      required: ['name', 'command'],
+    },
+    danger: 'execute',
+  },
+  {
+    cap: 'cap.tool.mcp-ops',
+    name: 'mcp_server_remove',
+    description: '移除一个已登记的 MCP server（其工具随下轮对话消失）。危险操作需用户审批。',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: '要移除的 server 名' } },
+      required: ['name'],
+    },
+    danger: 'execute',
+  },
+  {
+    cap: 'cap.tool.mcp-ops',
+    name: 'mcp_server_list',
+    description: '列出当前已登记的 MCP server（名称/命令/启用状态/来源）。',
+    parameters: { type: 'object', properties: {} },
+    danger: 'read',
+  },
+];
+
+function createMcpOpsHandler(): CapabilityHandler {
+  return async (req) => {
+    const payload = (req.payload ?? {}) as Record<string, unknown>;
+    try {
+      if (req.action === 'describe') {
+        return { descriptors: MCP_OPS_DESCRIPTORS };
+      }
+      if (req.action === 'exec') {
+        // agent-loop 通用 exec 会把被调工具名放进 __tool（聚合 cap 的分发标记）。
+        // 模型按各工具的 parameters 传参：add/remove 的 name 是 server 名。
+        const op = String(payload.__tool ?? '');
+        if (op === 'mcp_server_add') {
+          const resp = await fetch('/api/mcp/servers', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: payload.name,
+              command: payload.command,
+              args: payload.args,
+              enabled: true,
+            }),
+          });
+          const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+          if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+          return { ok: true, stdout: `[已登记 MCP server ${String(payload.name)}] 其工具将在下一轮对话中可用。`, exitCode: 0 };
+        }
+        if (op === 'mcp_server_remove') {
+          const resp = await fetch('/api/mcp/servers/remove', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: payload.name }),
+          });
+          const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+          if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+          return { ok: true, stdout: `[已移除 MCP server ${String(payload.name)}]`, exitCode: 0 };
+        }
+        if (op === 'mcp_server_list') {
+          const resp = await fetch('/api/mcp/active', { credentials: 'include' });
+          const j = (await resp.json().catch(() => null)) as { mcpServers?: { server_name: string; command: string; args: string[] }[] } | null;
+          const lines = (j?.mcpServers ?? []).map((s) => `- ${s.server_name}: ${s.command} ${s.args.join(' ')}`);
+          return { ok: true, stdout: lines.length ? lines.join('\n') : '（无已启用的 MCP server）', exitCode: 0 };
+        }
+        return { ok: false, error: `未知操作: ${op || '(缺 __tool)'}` };
+      }
+      return { ok: false, error: `unknown action: ${req.action}` };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  };
 }
 
 function createMcpToolHandler(): CapabilityHandler {
@@ -114,7 +209,7 @@ export const mcpBridgePlugin: LitePlugin = {
     name: 'MCP 桥',
     version: '0.2.0',
     capabilities: ['cap.meta', 'cap.mcp.admin'],
-    provides: ['cap.tool.mcp', 'cap.mcp.admin'],
+    provides: ['cap.tool.mcp', 'cap.tool.mcp-ops', 'cap.mcp.admin'],
     events: ['tool-registered'],
     contributes: {
       slots: [{ slot: 'panel', component: 'McpPanel', order: 21, title: 'MCP' }],
@@ -123,6 +218,7 @@ export const mcpBridgePlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     setMcpPanelApi(api);
     api.registerCapability.register('cap.tool.mcp', createMcpToolHandler());
+    api.registerCapability.register('cap.tool.mcp-ops', createMcpOpsHandler());
     api.registerCapability.register('cap.mcp.admin', createMcpAdminHandler());
     api.emit('tool-registered', { cap: 'cap.tool.mcp', name: 'mcp' });
   },

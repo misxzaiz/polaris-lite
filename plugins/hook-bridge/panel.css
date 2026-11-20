@@ -5,6 +5,9 @@
 .hk-btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
 .hk-btn:disabled { opacity: 0.5; cursor: default; }
 .hk-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
+.hk-trust { border: 1px solid #d9a441; border-radius: 6px; padding: 8px; margin-bottom: 8px; color: #d9a441; line-height: 1.6; font-size: 11px; }
+.hk-trust button { margin-top: 6px; }
+.hk-btn.danger { background: #d64545; color: #fff; border-color: transparent; }
 .hk-scan { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; white-space: pre-wrap; color: var(--text-dim, var(--text)); font-size: 11px; }
 .hk-import { border: 1px solid #4caf7d; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #4caf7d; font-size: 11px; }
 .hk-warns { border: 1px solid #d9a441; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d9a441; font-size: 11px; line-height: 1.6; word-break: break-word; }

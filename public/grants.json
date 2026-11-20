@@ -1,5 +1,5 @@
 {
-  "version": "9",
+  "version": "10",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -111,7 +111,8 @@
         "cap.tool.skill",
         "cap.skill.appendix",
         "cap.hook.bridge",
-        "cap.tool.mcp"
+        "cap.tool.mcp",
+        "cap.tool.mcp-ops"
       ],
       "provides": [
         "cap.agent.loop"
@@ -288,6 +289,7 @@
       ],
       "provides": [
         "cap.tool.mcp",
+        "cap.tool.mcp-ops",
         "cap.mcp.admin"
       ],
       "events": [

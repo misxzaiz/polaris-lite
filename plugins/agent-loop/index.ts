@@ -897,7 +897,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             ? { ...safeArgsFilesWrite(call.arguments), sessionId, approved: true }
             : desc.cap === 'cap.tool.skill'
               ? { ...hookArgsOf(call.arguments), sessionId, approved: true }
-              : { ...safeArgs(call.arguments), sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
+              : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
           const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
             target: desc.cap,
             action: 'exec',
@@ -1089,7 +1089,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge', 'cap.tool.mcp-ops'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

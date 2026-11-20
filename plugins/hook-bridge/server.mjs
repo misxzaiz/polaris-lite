@@ -18,8 +18,9 @@
  * 安全：会话门禁；PLITE_HOOKS=0 禁用；workspace 级来源首启确认（kv 指纹）；全量审计。
  */
 import { spawn } from 'node:child_process';
-import { existsSync, appendFileSync, readFileSync } from 'node:fs';
-import { join, resolve, isAbsolute } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, appendFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, resolve, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -42,6 +43,7 @@ export function createServerPart(options = {}) {
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_HOOKS === '0';
   const auditPath = join(dataDir, 'hooks-audit.log');
+  const hooksTrustPath = join(dataDir, 'hooks-trust.json');
 
   let cache = { key: '', rules: null, warns: [] };
 
@@ -243,11 +245,57 @@ export function createServerPart(options = {}) {
     return { decision, reason, additionalContext, updatedInput };
   }
 
+  /** workspace 级钩子变更确认闸（runtime-extensions-and-market-final.md P1.2）：
+   * workspace 作用域（含 zcode-compat 导入的 hooks-import.json）的规则集首次出现/内容变更时，
+   * 用户须在面板确认后才执行；未确认只记审计并放行（fail-open，不阻塞主流程）。
+   * 信任依据 = workspace 规则集的内容指纹（sha256）；确认记录持久化在 <dataDir>/hooks-trust.json。
+   * AI 可写工作区 hooks（files_write），此闸防止其绕过审批体系给自己放行。 */
+  function workspaceRulesFingerprint(rules) {
+    const ws = rules.filter((r) => r.scope === 'workspace');
+    const text = JSON.stringify(ws.map(({ event, matcher, handler }) => ({ event, matcher, handler })));
+    return createHash('sha256').update(text).digest('hex');
+  }
+
+  function loadTrust() {
+    try {
+      if (!existsSync(hooksTrustPath)) return {};
+      return JSON.parse(readFileSync(hooksTrustPath, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  function saveTrust(t) {
+    try {
+      mkdirSync(dirname(hooksTrustPath), { recursive: true });
+      writeFileSync(hooksTrustPath, JSON.stringify(t, null, 2) + '\n');
+    } catch { /* 信任记录写失败不阻塞（下次仍会要求确认） */ }
+  }
+
+  /** 返回 {trusted: boolean, fingerprint, changed}——changed=true 表示有未确认的变更 */
+  function checkWorkspaceTrust(rules) {
+    const fp = workspaceRulesFingerprint(rules);
+    const trust = loadTrust();
+    return { trusted: trust.fingerprint === fp, fingerprint: fp, changed: trust.fingerprint !== fp };
+  }
+
   async function runEvent(eventName, input, res, sendJson) {
     const { rules, warns } = loadRules();
     const matched = rules.filter((r) => r.event === eventName && matcherMatches(r.matcher, input.tool_name ?? ''));
     if (!matched.length) {
       return sendJson(200, { decision: 'allow', warns: warns.length ? warns : undefined });
+    }
+    // 确认闸：有 workspace 级规则参与本次事件且未获信任 → 不执行，放行 + 明确 warns 提示
+    const wsMatched = matched.some((r) => r.scope === 'workspace');
+    if (wsMatched) {
+      const trust = checkWorkspaceTrust(rules);
+      if (!trust.trusted) {
+        audit({ event: eventName, kind: 'trust-gate', fingerprint: trust.fingerprint.slice(0, 16), note: 'workspace hooks 未确认，跳过执行' });
+        return sendJson(200, {
+          decision: 'allow',
+          warns: [...warns, 'workspace 级 hooks 有未确认的变更：本次未执行钩子（请在「钩子」面板确认）'],
+        });
+      }
     }
     const hookInput = {
       session_id: input.session_id ?? '',
@@ -319,10 +367,24 @@ export function createServerPart(options = {}) {
       }
       if (pathname === '/api/hooks/list' && req.method === 'GET') {
         const { rules, warns } = loadRules();
+        const trust = checkWorkspaceTrust(rules);
         return sendJson(200, {
           rules: rules.map(({ event, matcher, scope, source, handler }) => ({ event, matcher, scope, source, type: handler.type, command: handler.command, timeoutMs: handler.timeoutMs })),
           warns,
+          // 确认闸状态：pending=workspace 规则集有未确认变更（执行被跳过）
+          trust: { trusted: trust.trusted, pending: trust.changed },
         });
+      }
+      if (pathname === '/api/hooks/confirm' && req.method === 'POST') {
+        // 用户在面板点「确认」：把当前 workspace 规则集指纹写入信任记录
+        const { rules } = loadRules();
+        const fp = workspaceRulesFingerprint(rules);
+        const trust = loadTrust();
+        trust.fingerprint = fp;
+        trust.confirmedAt = new Date().toISOString();
+        saveTrust(trust);
+        audit({ kind: 'trust-confirm', fingerprint: fp.slice(0, 16) });
+        return sendJson(200, { ok: true });
       }
       return sendJson(404, { error: 'not found' });
     } catch (e) {
