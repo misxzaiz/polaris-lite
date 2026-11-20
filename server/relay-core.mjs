@@ -91,15 +91,40 @@ export function createRelayMiddleware({ store, policy, getSession }) {
       if (!up.body) return res.end();
 
       const reader = up.body.getReader();
+      // 上游传输层中断（区别于客户端断开与正常结束）。此前这里 catch{} 静默吞掉再正常
+      // res.end()——前端把断尾当正常结束，表现为「回复说到一半无声停止、零报错」，
+      // 服务端日志也无从查证（2026-11-20「对话突然中断」修复的第一环）。
+      let upstreamBroke = null;
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           if (!res.write(Buffer.from(value))) {
-            await new Promise((r) => res.once('drain', r)); // 背压
+            // 背压：与 close 竞速——客户端中途断开时 drain 永不触发，纯等 drain 会把
+            // 本协程永久挂死（连接对象泄漏；此前每次中断都漏一个）。
+            await new Promise((r) => { res.once('drain', r); res.once('close', r); });
           }
         }
-      } catch { /* 客户端中断或上游中断 */ }
+      } catch (e) {
+        if (!abort.signal.aborted) upstreamBroke = e; // 客户端断开走 close→abort，不算上游错
+      }
+      if (upstreamBroke) {
+        // ① 服务端留痕：pm2-error.log 可查上游断流的真实原因（SocketError/timeout 等）
+        console.error('[relay] 上游中断:', String(upstreamBroke?.message ?? upstreamBroke));
+        // ② 向 SSE 流内追加结构化错误帧，引擎据此向用户报错并自动续写（real-engine 解析
+        //   top-level error.code='UPSTREAM_DISCONNECTED'）。仅对 event-stream 追加，
+        //   不破坏非流式 JSON 响应的协议。
+        if ((up.headers.get('content-type') ?? '').includes('text/event-stream')) {
+          try {
+            res.write(`data: ${JSON.stringify({
+              error: {
+                code: 'UPSTREAM_DISCONNECTED',
+                message: `上游连接中断：${String(upstreamBroke?.message ?? upstreamBroke)}`,
+              },
+            })}\n\n`);
+          } catch { /* 客户端已离开 */ }
+        }
+      }
       res.end();
     } catch (e) {
       if (abort.signal.aborted) return; // 客户端主动断开：无需回包

@@ -69,6 +69,12 @@ interface EngineEvent {
     interrupted?: boolean;
     finishReason?: string;
     toolCalls?: ToolCallProto[];
+    /** stream.retry：断流自动重试进度（real-engine 发出） */
+    attempt?: number;
+    maxAttempts?: number;
+    chars?: number;
+    /** message.truncated：截断提示文本 */
+    text?: string;
   };
 }
 
@@ -244,6 +250,7 @@ function engineTurn(
   toolDefs: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[],
   onDelta?: (delta: string) => void,
   onReasoning?: (delta: string) => void,
+  onRetry?: (attempt: number, maxAttempts: number) => void,
 ): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>; cancel: () => void } {
   let off: (() => void) | undefined;
   const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string }>((resolve, reject) => {
@@ -278,6 +285,10 @@ function engineTurn(
         if (!done) { done = true; off?.(); resolve({ text, toolCalls, finishReason }); }
       } else if (ev.kind === 'stream.error') {
         if (!done) { done = true; off?.(); reject(new Error(inner.message ?? 'stream error')); }
+      } else if (ev.kind === 'stream.retry') {
+        // 引擎断流自动重试：原样转发到编排通道（chat-lite 据此渲染「正在重试 N/10」
+        // 瞬态浮层；重试由引擎自持，loop 不参与不收敛）
+        onRetry?.(inner.attempt ?? 0, inner.maxAttempts ?? 0);
       }
     });
     void hostApi.dispatch({
@@ -568,6 +579,9 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       }, (delta) => {
         // 思考流转发（messageId=assistantId，chat-lite 落 thinking 块并喂看门狗）
         emitTo(emit, 'message.reasoning', { sessionId, messageId: assistantId, delta });
+      }, (attempt, maxAttempts) => {
+        // 引擎断流自动重试：转发到编排通道（chat-lite 渲染「正在重试 N/10」浮层）
+        emitTo(emit, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts });
       });
       running.set(`${sessionId}::turn`, t.cancel);
       let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string };
@@ -586,6 +600,16 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
       if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
         shadow.push({ role: 'assistant', content: result.text });
+        // finish_reason=length：达到 max_tokens 被上游硬掐（不是错误但也不是说完了）。
+        // 静默 break 会让用户以为「AI 说到一半突然停了」——落一个可见提示块，
+        // 引导用户「继续」；下一轮 shadow 已含半截回复，模型能接着写。
+        if (result.finishReason === 'length') {
+          emitTo(emit, 'message.truncated', {
+            sessionId, messageId: assistantId,
+            reason: 'length',
+            text: '回复因达到单次输出上限（max_tokens）被截断。发送「继续」可接续。'
+          });
+        }
         break;
       }
 

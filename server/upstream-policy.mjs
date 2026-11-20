@@ -62,9 +62,14 @@ export function createHostPolicy(extraHosts = loadExtraHosts(), options = {}) {
     } catch {
       throw new Error('upstream url 非法');
     }
-    if (u.protocol !== 'https:') throw new Error('only https upstream allowed');
+    // 环回 http 仅在 allowPrivate（本地联调/测试）时放行——mock 上游挂不了证书；
+    // 生产 allowPrivate 恒为 false，远端上游仍强制 https。
+    const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1';
+    if (u.protocol !== 'https:' && !(allowPrivate && u.protocol === 'http:' && loopback)) {
+      throw new Error('only https upstream allowed');
+    }
     if (!allowPrivate && isPrivateHost(u.hostname)) throw new Error(`private upstream blocked: ${u.hostname}`);
-    if (!allowed.has(u.hostname.toLowerCase())) {
+    if (!allowed.has(u.hostname.toLowerCase()) && !(allowPrivate && loopback)) {
       throw new Error(`host not allowed: ${u.hostname}（如需支持，加入 plugins/relay-hosts.json）`);
     }
     return u;

@@ -61,6 +61,17 @@ export function requestCompose(text: string): void {
   composeListeners.forEach((fn) => fn(text));
 }
 
+/** 断流重试提示（瞬态）：MessageStream 订阅渲染「正在重试 N/10」浮层 */
+type RetryListener = (attempt: number, maxAttempts: number, chars: number) => void;
+const retryListeners = new Set<RetryListener>();
+export function onStreamRetry(fn: RetryListener): () => void {
+  retryListeners.add(fn);
+  return () => retryListeners.delete(fn);
+}
+function notifyStreamRetry(attempt: number, maxAttempts: number, chars: number): void {
+  for (const fn of retryListeners) fn(attempt, maxAttempts, chars);
+}
+
 let hostApi: SlotHostApi | null = null;
 let msgCounter = 0;
 
@@ -255,6 +266,13 @@ interface StreamEnvelope {
     message?: string;
     interrupted?: boolean;
     finishReason?: string;
+    /** 截断提示（agent-loop 发；finish_reason=length 落可见提示块，不静默） */
+    reason?: string;
+    text?: string;
+    /** stream.retry：断流自动重试进度（real-engine 发，agent-loop 透传） */
+    attempt?: number;
+    maxAttempts?: number;
+    chars?: number;
     // 工具卡事件（cap.agent.loop:event；source='agent-loop' 宿主注入不可伪造）
     callId?: string;
     name?: string;
@@ -553,6 +571,19 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (envelope.kind === 'message.reasoning' && inner.delta) {
       armWatchdog(); // 思考流也是活跃信号：长思考期间看门狗持续续期（只软提示不收敛）
       pushReasoning(inner.delta);
+    } else if (envelope.kind === 'stream.retry') {
+      // 引擎断流自动重试（2026-11-20「突然中断」修复）：页面上可见
+      // 「正在重试 N/10」——不写 store（瞬态，重试成功/失败都不留痕在历史），
+      // 经重试提示通道通知 MessageStream 渲染瞬态浮层。
+      notifyStreamRetry(inner.attempt ?? 0, inner.maxAttempts ?? 10, inner.chars ?? 0);
+      armWatchdog(); // 重试也是活跃信号：退避等待期间不让看门狗误报
+    } else if (envelope.kind === 'message.truncated') {
+      // finish_reason=length 截断：可见提示块（2026-11-20「突然中断」修复——
+      // 此前 length 静默 break，用户看到的就是「说到一半突然停」）
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'text',
+        text: `[${inner.text ?? '回复因达到输出上限被截断'}]`,
+      });
     } else if (envelope.kind === 'message.delta' && inner.delta) {
       armWatchdog();
       pushDelta(inner.delta);

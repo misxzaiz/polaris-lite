@@ -91,3 +91,16 @@ test('sortSessions：不修改入参数组（纯函数）', () => {
   sortSessions(list);
   assert.deepEqual(list, copy);
 });
+
+// ---- 服务端快照合并不得污染排序（回归：拉取导致的列表颠倒） ----
+// 成因：applyServerSnapshot 曾对每条拉回的快照 touch()——拉取按索引（新→旧）逐条
+// 进行，晚拉到的旧会话反而拿到更大的本地时间戳，列表整体颠倒（最新沉底）。
+// 修复后：合并保留服务端权威 lastActiveAt。此处断言源码不再含 touch 合并。
+test('applyServerSnapshot：合并保留服务端 lastActiveAt，不做本地 touch（排序不颠倒回归）', () => {
+  const snapStart = storeSrc.indexOf('function applyServerSnapshot');
+  assert.ok(snapStart >= 0, 'store.ts 必须含 applyServerSnapshot');
+  const snapEnd = storeSrc.indexOf('\n}\n', snapStart);
+  const snapSrc = storeSrc.slice(snapStart, snapEnd);
+  assert.ok(!/\btouch\s*\(/.test(snapSrc),
+    'applyServerSnapshot 不得调用 touch()——拉取逐条进行，touch 会把后拉的旧会话排到最前（bug：最新会话沉底）');
+});

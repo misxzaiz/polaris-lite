@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProdServer } from '../server/prod-server.mjs';
@@ -22,8 +22,8 @@ function tempRoot() {
   return { root, dist, dataDir: join(root, 'data') };
 }
 
-async function startHost(t, { dist, dataDir }) {
-  const server = createProdServer({ dist, dataDir });
+async function startHost(t, { dist, dataDir }, opts = {}) {
+  const server = createProdServer({ dist, dataDir, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   t.after(() => server.close());
   const { port } = server.address();
@@ -270,6 +270,77 @@ test('中继：未知 provider 拒绝；指向内网地址的 provider 被 SSRF 
   assert.equal(blocked.status, 400);
   assert.equal(blocked.json.code, 'UPSTREAM_NOT_ALLOWED');
   assert.match(blocked.json.error, /private upstream/);
+});
+
+// ------------------------------------------------- 中继上游断流（「对话突然中断」修复）
+
+/**
+ * 本地 mock 上游：POST /chat/completions 开 event-stream，先推两帧，然后 destroy 连接。
+ * 用于复现 MOSI 一类网关中途断流的真实形态——中继必须在断流时追加
+ * UPSTREAM_DISCONNECTED 错误帧（此前 catch{} 吞掉错误正常 end()，前端静默收敛）。
+ */
+async function startBrokenUpstream(t, { breakAfterMs }) {
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"content":"你"}}]}\n\n');
+    res.write('data: {"choices":[{"delta":{"content":"好"}}]}\n\n');
+    setTimeout(() => res.destroy(), breakAfterMs);
+  });
+  // listen 是异步的：不等 'listening' 就取 address() 是 null（时序坑）
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const { port } = server.address();
+  return `http://127.0.0.1:${port}`;
+}
+
+test('中继：上游 SSE 中途断流时追加 UPSTREAM_DISCONNECTED 错误帧（不静默吞掉）', async (t) => {
+  const env = tempRoot();
+  // allowPrivate 仅供本地联调/测试放行环回上游（生产永远 false）
+  const h = await startHost(t, env, { policyOptions: { allowPrivate: true } });
+  const c = h.client();
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  const upUrl = await startBrokenUpstream(t, { breakAfterMs: 60 });
+  mkdirSync(env.dataDir, { recursive: true });
+  writeFileSync(join(env.dataDir, 'providers.json'), JSON.stringify({
+    providers: [{ id: 'mock', name: 'mock', baseURL: upUrl, apiKey: 'k', models: [], activeModel: '', enabled: true }],
+  }));
+
+  // 流式读完整响应体（client.send 等价：读到底即收到中继追加的错误帧）
+  const final = await c.send('/api/model-relay', { method: 'POST', body: { providerId: 'mock', body: { stream: true } } });
+  assert.equal(final.status, 200);
+  // 前两帧是正常 delta；末尾必须带中继注入的结构化错误帧（引擎据此报 stream.error）
+  assert.match(final.text, /"delta":\{"content":"你"\}/);
+  assert.match(final.text, /UPSTREAM_DISCONNECTED/, '上游断流必须穿透为错误帧，不得静默结束');
+  assert.match(final.text, /上游连接中断/, '错误帧须带可读 message');
+});
+
+test('中继：上游正常收尾（含 [DONE]）时不追加错误帧', async (t) => {
+  const env = tempRoot();
+  const h = await startHost(t, env, { policyOptions: { allowPrivate: true } });
+  const c = h.client();
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  // 正常上游：推一帧 + [DONE] 后干净 end()
+  const up = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"content":"完整回复"},"finish_reason":"stop"}]}\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  await new Promise((r) => up.listen(0, '127.0.0.1', r));
+  t.after(() => up.close());
+  const upUrl = `http://127.0.0.1:${up.address().port}`;
+
+  mkdirSync(env.dataDir, { recursive: true });
+  writeFileSync(join(env.dataDir, 'providers.json'), JSON.stringify({
+    providers: [{ id: 'mock', name: 'mock', baseURL: upUrl, apiKey: 'k', models: [], activeModel: '', enabled: true }],
+  }));
+
+  const final = await c.send('/api/model-relay', { method: 'POST', body: { providerId: 'mock', body: { stream: true } } });
+  assert.equal(final.status, 200);
+  assert.match(final.text, /\[DONE\]/);
+  assert.doesNotMatch(final.text, /UPSTREAM_DISCONNECTED/, '正常结束不得注入错误帧');
 });
 
 // ---------------------------------------------------------------- 直连配置（独立档 B）

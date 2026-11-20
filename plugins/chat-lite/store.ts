@@ -204,14 +204,16 @@ function syncState() {
   return { sessions: st.sessions, versions, dirty, activeId: st.activeId };
 }
 
-/** 服务端快照合并进 store（服务端为权威；本地 streaming 消息复位；按 lastActiveAt 归位排序） */
+/** 服务端快照合并进 store（服务端为权威；本地 streaming 消息复位；按 lastActiveAt 归位排序）。
+ *  注意：**不 touch**——lastActiveAt 保留服务端权威值。拉取是按索引逐条进行的，
+ *  若在此 touch，越晚拉到的旧会话 lastActiveAt 越大，列表会整体颠倒（最新沉底）。 */
 function applyServerSnapshot(snap: SessionSnapshot): void {
   const incoming = snap.session;
   if (!incoming || typeof incoming.id !== 'string') return;
-  const clean = touch({
+  const clean = {
     ...incoming,
     messages: (incoming.messages ?? []).map((m) => ({ ...m, streaming: false })),
-  });
+  };
   versions[incoming.id] = snap.version;
   useSessionStore.setState(st => ({
     sessions: sortSessions(st.sessions.some(s => s.id === incoming.id)
