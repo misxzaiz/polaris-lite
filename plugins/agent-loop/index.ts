@@ -452,6 +452,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             '当任务缺少用户的必要信息或需要用户拍板时，优先用 interactive 直接问，不要自行猜测用户偏好。' +
             'render 工具可生成自包含 HTML 交互面板（小游戏/原型/图表/教具），在对话卡片与「预览」面板中运行；' +
             'HTML 必须自包含：内联 CSS/JS、不引 CDN、不 fetch、模型与贴图用 base64；改动旧面板传 basePreviewId。' +
+            'browser 工具可驱动系统 Chrome 搜索/阅读/操作网页（search 搜索、read 读正文、click/fill 交互、screenshot 截图）；' +
+            '本会话的操作自动路由到本会话绑定的标签，不会影响其他会话打开的网页；优先用结构化动作而非 evaluate。' +
             readonlyHint,
         },
         ...(payload.history ?? []).map((m) => ({ role: m.role as ShadowMsg['role'], content: m.content })),
@@ -694,6 +696,30 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           continue;
         }
 
+        // 浏览器（cap.tool.browser）：动作语义工具，不走 exec 通用路径——
+        // 返回是结构化结果（搜索数组/标签列表/截图引用），且导航动作需要服务端围栏与审计。
+        // sessionId 即服务端 agentKey（会话绑定标签，A 会话不会动到 B 会话的标签）。
+        if (desc?.cap === 'cap.tool.browser') {
+          let br: { ok?: boolean; error?: string; [k: string]: unknown };
+          try {
+            const args = safeBrowserArgs(call.arguments);
+            const res = await hostApi.dispatch<{ ok?: boolean; error?: string; [k: string]: unknown }>({
+              target: 'cap.tool.browser',
+              action: String(args.action ?? ''),
+              payload: { ...args, sessionId, messageId: assistantId },
+            });
+            br = res.data ?? { ok: false, error: 'empty response' };
+          } catch (err) {
+            br = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          // 喂回 shadow：只回摘要级 JSON（截图 base64 不进 transcript——服务端落盘只回引用）
+          const feedback = br.ok
+            ? `[浏览器操作完成] ${JSON.stringify(br)}`
+            : `[浏览器操作失败] ${br.error ?? 'unknown error'}`;
+          shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+          continue;
+        }
+
         // 执行（经工具插件的 cap；approved 标记供服务端二次校验）
         // cwd=本会话绑定的工作区根（无绑定/失效回落时 execCwd 为空 → 服务端用默认 workspace）
         inFlightExec.set(sessionId, callId);
@@ -817,12 +843,30 @@ function safeArgsRender(raw: string): { html?: string; title?: string; basePrevi
   }
 }
 
+/** 浏览器工具参数解析（browser：动作白名单键透传，与 browser-lite BROWSER_ARG_KEYS 对齐） */
+function safeBrowserArgs(raw: string): Record<string, unknown> {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of [
+      'action', 'url', 'query', 'engine', 'limit', 'label', 'selector', 'index', 'value', 'keys',
+      'amount', 'direction', 'selector_wait', 'urlPattern', 'downloadComplete', 'timeoutMs',
+      'fullPage', 'mode', 'closeAll', 'historyAction', 'kinds', 'sinceSeq', 'title', 'newWindow',
+    ]) {
+      if (p[k] !== undefined && p[k] !== null) out[k] = p[k];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export const agentLoopPlugin: LitePlugin = {
   manifest: {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

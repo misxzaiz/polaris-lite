@@ -103,7 +103,8 @@
         "cap.interactive",
         "cap.tool.render",
         "cap.model.admin",
-        "cap.tool.ledger"
+        "cap.tool.ledger",
+        "cap.tool.browser"
       ],
       "provides": [
         "cap.agent.loop"
@@ -168,6 +169,16 @@
       "events": [
         "tool-registered",
         "ledger-changed"
+      ]
+    },
+    "browser-lite": {
+      "capabilities": [],
+      "provides": [
+        "cap.tool.browser"
+      ],
+      "events": [
+        "tool-registered",
+        "artifact.created"
       ]
     }
   }

@@ -79,6 +79,7 @@ const plugins = [
   { id: 'interactive-cards', config: 'interactive-cards/vite.config.ts', dist: 'interactive-cards/dist', order: 13 },
   { id: 'html-preview', config: 'html-preview/vite.config.ts', dist: 'html-preview/dist', order: 14 },
   { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 15 },
+  { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 16 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
