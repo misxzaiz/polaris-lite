@@ -35,7 +35,13 @@ interface McpServer {
 async function admin<T>(action: string, payload?: Record<string, unknown>): Promise<T> {
   if (!api) throw new Error('面板未就绪');
   const r = await api.dispatch<T>({ target: 'cap.mcp.admin', action, payload: payload ?? {} });
-  if (!r.ok) throw new Error((r as { error?: string }).error ?? 'cap 调用失败');
+  if (!r.ok) {
+    // bus 失败返回 {ok:false, error:{code,message}}（error 是对象）——取 message 而非整个对象，
+    // 否则 new Error(对象) 的 message 变成 '[object Object]'。
+    const err = (r as { error?: { message?: string } | string }).error;
+    const msg = typeof err === 'string' ? err : (err?.message ?? 'cap 调用失败');
+    throw new Error(msg);
+  }
   return r.data as T;
 }
 

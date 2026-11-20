@@ -1,5 +1,5 @@
 {
-  "version": "8",
+  "version": "9",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -283,7 +283,8 @@
     },
     "mcp-bridge": {
       "capabilities": [
-        "cap.meta"
+        "cap.meta",
+        "cap.mcp.admin"
       ],
       "provides": [
         "cap.tool.mcp",

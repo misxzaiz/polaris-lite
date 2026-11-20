@@ -113,7 +113,7 @@ export const mcpBridgePlugin: LitePlugin = {
     id: 'mcp-bridge',
     name: 'MCP 桥',
     version: '0.2.0',
-    capabilities: ['cap.meta'],
+    capabilities: ['cap.meta', 'cap.mcp.admin'],
     provides: ['cap.tool.mcp', 'cap.mcp.admin'],
     events: ['tool-registered'],
     contributes: {
