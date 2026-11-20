@@ -175,7 +175,7 @@ export const pocketLedgerPlugin: LitePlugin = {
     id: 'pocket-ledger',
     name: '日常记账',
     version: '0.1.0',
-    capabilities: ['cap.config'],
+    capabilities: ['cap.kv'],
     provides: ['cap.tool.ledger'],
     events: ['tool-registered', 'ledger-changed'],
     contributes: {

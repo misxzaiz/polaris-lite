@@ -326,7 +326,7 @@ function SettingsTab({ settings, save }: { settings: LedgerSettings; save: (s: L
             if (next !== settings.monthlyTotalBudget) void save({ ...settings, monthlyTotalBudget: next });
           }} />
       </div>
-      <div className="pl-settings-note">数据保存在本机（localStorage，经 cap.config）；清空浏览器数据会丢账，需要留存请先「导出 CSV」。</div>
+      <div className="pl-settings-note">数据保存在服务端键值库（cap.kv，kv-store 插件）；换浏览器/多端打开看到同一份账。需要带走请「导出 CSV」。</div>
     </div>
   );
 }

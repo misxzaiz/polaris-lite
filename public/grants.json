@@ -161,7 +161,7 @@
     },
     "pocket-ledger": {
       "capabilities": [
-        "cap.config"
+        "cap.kv"
       ],
       "provides": [
         "cap.tool.ledger"
@@ -180,6 +180,13 @@
         "tool-registered",
         "artifact.created"
       ]
+    },
+    "kv-store": {
+      "capabilities": [],
+      "provides": [
+        "cap.kv"
+      ],
+      "events": []
     }
   }
 }

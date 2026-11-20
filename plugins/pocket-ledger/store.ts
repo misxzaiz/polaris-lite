@@ -1,14 +1,14 @@
 /**
  * pocket-ledger 存取层（面板与 AI 工具层共用；计算在 ledger-core.cjs 单一权威）。
  *
- * 存储经 cap.config（namespace='pocket-ledger'）：
+ * 存储经 cap.kv（namespace='pocket-ledger'，服务端 sqlite 持久化，见 kv-store 插件）：
  *   key = 'day.<YYYY-MM-DD>' → Bill[]（原 cap.kv ledger.day.* 一一对应）
  *   key = 'settings'         → LedgerSettings
  * 写入协议：读日键 → appendBills 按 id 幂等去重 → 写回（重试/双端并发安全）。
  *
  * 为什么面板不经总线 dispatch cap.tool.ledger：总线按「调用方权限」放行，
  * 面板不具备工具 cap（也不该有）；直接读写同一键空间即与 AI 层天然同账，
- * 双方变更经 config-changed / ledger-changed 事件互达。
+ * 双方变更经 ledger-changed 事件互达；多端打开同一份账（数据在服务端，不在浏览器）。
  */
 import type { SlotHostApi } from '@sdk';
 import * as core from './core';
@@ -22,17 +22,17 @@ export function setLedgerApi(a: SlotHostApi | null): void { api = a; }
 
 async function cfgGet<T>(key: string): Promise<T | null> {
   if (!api) return null;
-  const res = await api.dispatch<{ value?: T }>({ target: 'cap.config', action: 'get', payload: { namespace: NS, key } });
+  const res = await api.dispatch<{ value?: T }>({ target: 'cap.kv', action: 'get', payload: { namespace: NS, key } });
   return res.ok ? (res.data?.value ?? null) : null;
 }
 
 async function cfgSet(key: string, value: unknown): Promise<void> {
-  await api?.dispatch({ target: 'cap.config', action: 'set', payload: { namespace: NS, key, value } });
+  await api?.dispatch({ target: 'cap.kv', action: 'set', payload: { namespace: NS, key, value } });
 }
 
 export async function cfgKeys(): Promise<string[]> {
   if (!api) return [];
-  const res = await api.dispatch<{ keys?: string[] }>({ target: 'cap.config', action: 'list', payload: { namespace: NS } });
+  const res = await api.dispatch<{ keys?: string[] }>({ target: 'cap.kv', action: 'list', payload: { namespace: NS } });
   return (res.data?.keys ?? []).filter((k) => typeof k === 'string' && k.startsWith('ledger.day.')).sort();
 }
 

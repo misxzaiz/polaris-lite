@@ -22,6 +22,7 @@ export const SERVER_PLUGINS = [
   { id: 'agent-bash', entry: './agent-bash/server.mjs' },
   { id: 'html-preview', entry: './html-preview/server.mjs' },
   { id: 'browser-lite', entry: './browser-lite/server.mjs' },
+  { id: 'kv-store', entry: './kv-store/server.mjs' },
 ];
 
 /**
