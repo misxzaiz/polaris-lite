@@ -607,6 +607,53 @@
   padding: 3px 10px;
   cursor: pointer;
 }
+
+/* ===== 思考块（reasoning_content：推理模型长思考过程可视化） ===== */
+.tc-thinking { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tc-thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 2px 12px;
+  text-align: left;
+  border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--plite-dur) var(--plite-ease), border-color var(--plite-dur) var(--plite-ease);
+}
+.tc-thinking-summary:hover { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.tc-thinking-icon { width: 15px; height: 15px; color: var(--accent); flex-shrink: 0; }
+.tc-thinking.live .tc-thinking-icon { animation: tc-group-pulse 1.6s ease-in-out infinite; }
+.tc-thinking-label { font-weight: 600; flex-shrink: 0; }
+.tc-thinking-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.tc-thinking .tc-chevron { width: 13px; height: 13px; color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
+.tc-thinking-body {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--plite-font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
 .tc-group-collapse:hover { color: var(--accent); }
 
 /* ===== 待审批胶囊（流容器内 sticky 底部；点击定位审批卡） ===== */

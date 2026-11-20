@@ -1,15 +1,11 @@
 /**
  * 可折叠块组（参考 Polaris chat-desk blockGrouping 的收敛版）。
  *
- * 规则：
- * - 连续 tool 块归为一个折叠组（lite 无 thinking 块）；非空 text 块打断分组；
- * - 默认折叠为一条汇总条（含流式期间，过程密度可控）：
- *   · 流式中显示「执行中 · N 项」，有失败即时显示「有失败」；
- *   · 结束后显示「全部完成 / 有失败 · N 项」；
- * - 展开态：块平铺，工具卡自身仍可展开看命令/输出 + 底部轻量「收起」。
- *
- * 变更说明：旧版流式全程平铺，4~6 个 bash 调用会把消息区铺满（截图中 4 张卡
- * 连续展开即此场景）。改为默认折叠，想看过程点一下汇总条即可，兼顾密度与可见性。
+ * 规则（2026-11-20 修订：流式平铺，结束折叠）：
+ * - 连续 tool 块（含夹在其间的 thinking 块，思考也按「过程项」归组）归为一个组；
+ * - **流式期间一律平铺**：每个工具卡/思考块实时可见，不折叠——用户要能看着 AI 干活；
+ * - **流结束统一折叠**：整组收拢为一条汇总条（全部完成/有失败 · N 项），点开回看全程；
+ * - 非空 text 块打断分组（正文永远平铺，流式末尾带光标）。
  */
 import { useEffect, useState } from 'react';
 import { Markdown } from './markdown';
@@ -23,15 +19,16 @@ function CardShim({ card }: { card: ToolCardData }) {
 }
 
 type ToolBlock = Extract<AsstBlock, { type: 'tool' }>;
+type GroupItem = { kind: 'tool'; block: ToolBlock } | { kind: 'thinking'; block: Extract<AsstBlock, { type: 'thinking' }> };
 
-/** 识别相邻 tool 块分组（非空 text 打断） */
-function identifyGroups(blocks: AsstBlock[]): { start: number; blocks: ToolBlock[] }[] {
-  const groups: { start: number; blocks: ToolBlock[] }[] = [];
-  let current: ToolBlock[] = [];
+/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text 打断 */
+function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[] }[] {
+  const groups: { start: number; items: GroupItem[] }[] = [];
+  let current: GroupItem[] = [];
   let start = -1;
   const flush = () => {
     if (current.length > 0) {
-      groups.push({ start, blocks: current });
+      groups.push({ start, items: current });
       current = [];
       start = -1;
     }
@@ -39,13 +36,41 @@ function identifyGroups(blocks: AsstBlock[]): { start: number; blocks: ToolBlock
   blocks.forEach((b, i) => {
     if (b.type === 'tool') {
       if (current.length === 0) start = i;
-      current.push(b);
+      current.push({ kind: 'tool', block: b });
+      return;
+    }
+    if (b.type === 'thinking') {
+      // 思考也当归组项——夹在工具之间的思考是「过程」的一部分；
+      // 组首之前的独立思考（组外）由渲染层单独处理
+      if (current.length > 0) current.push({ kind: 'thinking', block: b });
       return;
     }
     if (b.type === 'text' && b.text.trim().length > 0) flush();
   });
   flush();
   return groups;
+}
+
+/** 思考块：默认折叠，流式期间显示最新思考片段预览；展开看全文（纯文本，保留换行） */
+function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const preview = text.length > 90 ? `…${text.slice(-90)}` : text;
+  return (
+    <div className={`tc-thinking ${live ? 'live' : ''}`} data-testid="thinking-block">
+      <button type="button" className="tc-thinking-summary" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <svg className="tc-thinking-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.1.7h5.2l.1-.7c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          <path d="M9.8 19h4.4M10.6 21.5h2.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+        <span className="tc-thinking-label">{live ? '深度思考中' : '深度思考'}</span>
+        {!open && <span className="tc-thinking-preview">{preview}</span>}
+        <svg className="tc-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d={open ? 'M9 6l6 6-6 6' : 'M6 9l6 6 6-6'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && <pre className="tc-thinking-body">{text}</pre>}
+    </div>
+  );
 }
 
 function GroupSummary({ count, anyFail, streaming, onExpand }: {
@@ -65,28 +90,34 @@ function GroupSummary({ count, anyFail, streaming, onExpand }: {
 }
 
 /**
- * 单个折叠组：默认折叠汇总条，点开看平铺。
- * 流式期间也默认折叠（但用户可点开看实时过程）；流结束时若处于展开态则自动收起，
- * 回到汇总条——与「结束后收敛」的既有语义保持一致。
+ * 过程块组：流式期间平铺（每张工具卡/思考块实时可见）；
+ * 流结束统一折叠为汇总条，点开回看全程。
  */
-function CollapsibleGroup({ blocks, streaming }: { blocks: ToolBlock[]; streaming: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+function ProcessGroup({ items, streaming }: { items: GroupItem[]; streaming: boolean }) {
+  const [expanded, setExpanded] = useState(streaming); // 流式=平铺；结束后收拢
   useEffect(() => {
-    if (!streaming && expanded) setExpanded(false);
-  }, [streaming]); // eslint-disable-line react-hooks/exhaustive-deps -- 仅在流结束那一瞬收起，用户主动展开不应被其它渲染打断
+    // 流结束那一瞬自动收拢；用户随后仍可点汇总条展开回看
+    if (!streaming) setExpanded(false);
+  }, [streaming]);
 
-  const anyFail = blocks.some((b) => b.card.status === 'error' || b.card.status === 'denied');
+  const toolCount = items.filter((it) => it.kind === 'tool').length;
+  const anyFail = items.some((it) => it.kind === 'tool' && (it.block.card.status === 'error' || it.block.card.status === 'denied'));
 
   return (
     <div className="tc-group">
-      {!expanded && (
-        <GroupSummary count={blocks.length} anyFail={anyFail} streaming={streaming} onExpand={() => setExpanded(true)} />
-      )}
-      {expanded && (
+      {expanded ? (
         <>
-          {blocks.map((b, i) => <CardShim key={b.card.callId || i} card={b.card} />)}
-          <button type="button" className="tc-group-collapse" onClick={() => setExpanded(false)}>收起</button>
+          {items.map((it, i) =>
+            it.kind === 'tool'
+              ? <CardShim key={`t-${it.block.card.callId || i}`} card={it.block.card} />
+              : <ThinkingBlock key={`th-${i}`} text={it.block.text} live={streaming && i === items.length - 1} />,
+          )}
+          {!streaming && items.length > 1 && (
+            <button type="button" className="tc-group-collapse" onClick={() => setExpanded(false)}>收起</button>
+          )}
         </>
+      ) : (
+        <GroupSummary count={toolCount} anyFail={anyFail} streaming={streaming} onExpand={() => setExpanded(true)} />
       )}
     </div>
   );
@@ -94,19 +125,23 @@ function CollapsibleGroup({ blocks, streaming }: { blocks: ToolBlock[]; streamin
 
 /**
  * assistant blocks 渲染入口：分组 + 平铺（text→Markdown，tool→ToolCard，
- * interactive→InteractiveCard）。连续 tool 块归组；非空 text 块打断分组并原序渲染
- * （流式末尾带光标）；interactive 块独立渲染（不归组）。
+ * thinking→ThinkingBlock，interactive→InteractiveCard）。
+ * 连续过程块（tool + 夹在其间的 thinking）归为一组：流式平铺、结束折叠；
+ * 非空 text 块打断分组并原序渲染（流式末尾带光标）；interactive 独立渲染。
  */
 export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.ReactNode {
   const groups = identifyGroups(blocks);
 
-  // 块索引 → 所属组序号（组内 tool 块连续）
+  // 块索引 → 所属组序号（组内为连续 tool / 组内 thinking）
   const owner = new Map<number, number>();
   let gi = -1;
   let inGroup = false;
   blocks.forEach((b, i) => {
     if (b.type === 'tool') {
       if (!inGroup) { gi += 1; inGroup = true; }
+      owner.set(i, gi);
+    } else if (b.type === 'thinking' && inGroup) {
+      // 已在组内（前面有 tool）的思考随组渲染；组外的独立思考不归组
       owner.set(i, gi);
     } else if (b.type === 'text' && b.text.trim().length > 0) {
       inGroup = false;
@@ -120,18 +155,24 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
     const g = owner.get(i);
     if (g !== undefined) {
       const group = groups[g];
-      result.push(<CollapsibleGroup key={`g-${group.start}`} blocks={group.blocks} streaming={streaming} />);
-      // 组内所有 tool 块索引标记已处理（从 i 起连续 tool 块）
-      let seen = 0;
-      for (let k = i; k < blocks.length && seen < group.blocks.length; k++) {
-        if (blocks[k].type === 'tool') { processed.add(k); seen += 1; }
-      }
+      result.push(<ProcessGroup key={`g-${group.start}`} items={group.items} streaming={streaming} />);
+      // 组内所有块索引标记已处理（从 i 起到该组最后一项）
+      let lastIdx = i;
+      group.items.forEach((it) => {
+        for (let k = lastIdx; k < blocks.length; k++) {
+          if (blocks[k] === (it.kind === 'tool' ? it.block : it.block)) { lastIdx = k; break; }
+        }
+      });
+      for (let k = i; k <= lastIdx; k++) processed.add(k);
     } else if (b.type === 'interactive') {
       result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
     } else if (b.type === 'artifact') {
       // 通用产物块：渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记（rendererType → 组件），
       // chat-lite 不再为每种可视化产物加硬编码分支。未登记（插件被停用）渲兜底提示，不崩不空白。
       result.push(<ArtifactSlot key={`af-${b.card.callId}`} card={b.card} />);
+    } else if (b.type === 'thinking') {
+      // 组外独立思考（工具之前/之后的纯思考段）
+      result.push(<ThinkingBlock key={`th-${i}`} text={b.text} live={streaming && i === blocks.length - 1} />);
     } else if (b.type === 'text') {
       result.push(<div key={`t-${i}`} className="tc-text"><Markdown text={b.text} /></div>);
       if (streaming && i === blocks.length - 1) result.push(<span key={`cur-${i}`} className="cursor" />);

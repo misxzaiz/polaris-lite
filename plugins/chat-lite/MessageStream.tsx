@@ -36,7 +36,9 @@ export function MessageStream() {
     if (!last) return 0;
     let size = (last.content ?? '').length;
     if (hasBlocks(last)) {
-      for (const b of last.blocks) size += b.type === 'text' ? b.text.length : 40;
+      for (const b of last.blocks) {
+        size += b.type === 'text' || b.type === 'thinking' ? b.text.length : 40;
+      }
     }
     return size;
   })();
