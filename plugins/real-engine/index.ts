@@ -7,6 +7,15 @@
  * - 因此本插件不再依赖 cap.config，也不再在浏览器里存放任何密钥；
  * - 对外仍提供 cap.ai.chat / cap.ai.chat.interrupt（流式，message.delta → message.done）。
  *
+ * 独立档直连（docs/mobile-app-plan.md §10.3，B 档数据面）：
+ * - 监听 mode-changed：standalone（宿主不可达）时经 /api/providers/direct-config
+ *   取一次「当前供应商明文配置」（服务端三重约束：登录+回环+PLITE_ALLOW_DIRECT_CONFIG），
+ *   后续请求直连供应商 baseURL——手机在无电脑时仍可对话；
+ * - 可直连白名单 CORS_ALLOW：直连要求供应商放行浏览器跨域（历史实证：Moonshot 拦
+ *   OPTIONS 404）。不在名单且探测失败的供应商返回结构化错误「需连接电脑使用」，
+ *   不假装可用；名单按实测维护（OpenAI 等放行 ACAO:*）。
+ * - connected 恢复：丢弃直连配置，回到中继路径（密钥重新只在服务端）。
+ *
  * 其它约定：
  * - running map 按 sessionId::messageId 精确中断（并发流互不误伤）；
  * - 中断路径必须补发 message.done，否则 UI 的「停止」按钮永远不回位。
@@ -14,6 +23,7 @@
 import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 
 const RELAY_URL = '/api/model-relay'; // 宿主内嵌中继（同源；会话 cookie 自动携带）
+const DIRECT_CONFIG_URL = '/api/providers/direct-config';
 
 interface ModelCaps {
   maxInputTokens: number;
@@ -84,6 +94,96 @@ let currentProvider: ActiveProvider | null = null;
 /** 刷新供应商配置的函数引用（setup 时注入，流式调用前兜底重试） */
 let refreshProvider: () => Promise<void> = async () => {};
 
+/** ---- 独立档直连态（docs/mobile-app-plan.md §10.3；v2 修订：key 由用户显式同意后存本机） ---- */
+/**
+ * 直连配置的本机存储键。独立档设计（真机可用版）：
+ * - 手机在**连接档**时，用户在「端点/独立模式」面板显式点「保存直连配置到本机」→
+ *   前端调 /api/providers/direct-config（登录会话门禁）拉取当前供应商明文配置 → 存 localStorage；
+ * - 宿主不可达（standalone）时，real-engine 读这份本地配置**直连供应商**（不经宿主中继）；
+ * - key 属于「用户显式同意后保存在自己设备上」——与服务端持钥模型并存：
+ *   连接档永远走中继（服务端 key），独立档才用本机副本。
+ */
+const DIRECT_STORE_KEY = 'real-engine.direct-config.v1';
+/** 直连配置的服务端形态（models 供能力参数；activeModel 供请求体） */
+interface DirectConfigFull {
+  id: string;
+  name: string;
+  baseURL: string;
+  apiKey: string;
+  models: { id: string; capabilities?: ModelCaps }[];
+  activeModel: string;
+}
+/** 宿主是否可达（standalone-mode 插件经 mode-changed 广播；缺省 connected 语义） */
+let hostReachable = true;
+
+function readStoredDirectConfig(): DirectConfigFull | null {
+  try {
+    const raw = localStorage.getItem(DIRECT_STORE_KEY);
+    if (!raw) return null;
+    const cfg = JSON.parse(raw) as DirectConfigFull;
+    return cfg?.baseURL && cfg?.apiKey ? cfg : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 用户显式同意后拉取直连配置并保存到本机（面板按钮触发；返回结果供 UI 提示） */
+async function fetchAndStoreDirectConfig(): Promise<{ ok: boolean; message: string }> {
+  try {
+    const res = await fetch(DIRECT_CONFIG_URL, { method: 'POST', credentials: 'include' });
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; config?: DirectConfigFull }
+      | null;
+    if (res.ok && data?.ok && data.config?.baseURL && data.config?.apiKey) {
+      localStorage.setItem(DIRECT_STORE_KEY, JSON.stringify(data.config));
+      return { ok: true, message: `已保存 ${data.config.name ?? data.config.baseURL} 的直连配置到本机` };
+    }
+    const errCode = (data as { error?: { code?: string; message?: string } } | null)?.error;
+    return { ok: false, message: errCode?.message ?? (res.ok ? '服务端无可用供应商' : `拉取失败（HTTP ${res.status}）`) };
+  } catch (e) {
+    return { ok: false, message: `网络不可达：${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** 清除本机直连配置（面板「清除」按钮；登出场景同样调用） */
+function clearStoredDirectConfig(): void {
+  localStorage.removeItem(DIRECT_STORE_KEY);
+}
+
+/**
+ * 直连供应商的 CORS 预检（实测替代静态白名单——历史实证 Moonshot 拦 OPTIONS 404，
+ * 静态清单永远跟不上供应商变化）。发一个最小 OPTIONS 预检：上游必须回
+ * access-control-allow-origin（* 或含本 origin）。预检失败=需连接电脑，如实降级。
+ */
+async function probeDirectCors(baseURL: string): Promise<boolean> {
+  const url = `${baseURL.replace(/\/+$/, '')}/chat/completions`;
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('OPTIONS', url);
+    xhr.timeout = 8000;
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 4) return;
+      const acao = xhr.getResponseHeader('access-control-allow-origin');
+      resolve(xhr.status > 0 && !!acao);
+    };
+    xhr.ontimeout = () => resolve(false);
+    xhr.onerror = () => resolve(false);
+    xhr.send();
+  });
+}
+
+/** 直连请求（OpenAI 兼容 /chat/completions；key 本地注入） */
+async function directFetch(body: unknown, signal?: AbortSignal): Promise<Response> {
+  const cfg = readStoredDirectConfig();
+  if (!cfg) throw new Error('direct config missing');
+  return fetch(`${cfg.baseURL.replace(/\/+$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
 async function relayFetch(body: unknown, providerId: string, signal?: AbortSignal): Promise<Response> {
   return fetch(RELAY_URL, {
     method: 'POST',
@@ -91,6 +191,101 @@ async function relayFetch(body: unknown, providerId: string, signal?: AbortSigna
     body: JSON.stringify({ providerId, body }),
     signal,
   });
+}
+
+/**
+ * 独立档直连流（docs/mobile-app-plan.md §10.3）：SSE 解析与中继路径同构，
+ * 但请求直发供应商（key 经 direct-config 下发，本地注入 Authorization）。
+ * 工具编排（agent-loop）在宿主侧不可用——直连是纯聊天形态，工具调用不透传。
+ */
+async function streamDirect(
+  payload: { prompt?: string; history?: { role: string; content: unknown }[] },
+  sessionId: string,
+  messageId: string,
+  emit: (ev: { kind: string; payload: unknown }) => void,
+): Promise<void> {
+  const cfg = readStoredDirectConfig();
+  if (!cfg) return; // 无本机直连配置：上游调用方已做降级提示
+  const startedAt = Date.now();
+  let wireUsage: WireUsage | null = null;
+  let responseModel: string | undefined;
+
+  let cancelled = false;
+  const abort = new AbortController();
+  const streamKey = `${sessionId}::${messageId}`;
+  running.set(streamKey, () => { cancelled = true; abort.abort(); });
+
+  try {
+    const messages = [
+      ...(payload.history ?? []).map((m) => ({ role: m.role as 'user' | 'assistant' | 'system', content: m.content })),
+      { role: 'user' as const, content: payload.prompt ?? '' },
+    ];
+    const caps = cfg.models.find((m) => m.id === cfg.activeModel)?.capabilities ?? cfg.models[0]?.capabilities;
+    const resp = await directFetch(
+      {
+        model: cfg.activeModel || cfg.models[0]?.id || '',
+        stream: true,
+        messages,
+        ...(caps?.maxOutputTokens && caps.maxOutputTokens > 0 ? { max_tokens: caps.maxOutputTokens } : {}),
+        ...(caps?.effort ? { reasoning_effort: caps.effort } : {}),
+      },
+      abort.signal,
+    );
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      let msg = `HTTP ${resp.status}`;
+      try {
+        const j = JSON.parse(text);
+        msg = j.error?.message ?? j.message ?? j.error ?? msg;
+      } catch { /* 保留 HTTP 状态描述 */ }
+      emit({ kind: 'stream.error', payload: { sessionId, messageId, message: `独立模式直连失败：${String(msg)}` } });
+      return;
+    }
+    // SSE 解析（与中继路径同构：reasoning_content 思考流 + content 正文 + usage）
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      if (cancelled) {
+        emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const json = JSON.parse(data);
+          const choice = json.choices?.[0];
+          if (json.usage && typeof json.usage === 'object') wireUsage = json.usage as WireUsage;
+          if (typeof json.model === 'string' && json.model) responseModel = json.model;
+          const reasoning: string | undefined = choice?.delta?.reasoning_content;
+          if (reasoning) emit({ kind: 'message.reasoning', payload: { sessionId, messageId, delta: reasoning } });
+          const delta: string | undefined = choice?.delta?.content;
+          if (delta) emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
+        } catch { /* 跳过不完整行 */ }
+      }
+    }
+    emitUsage(streamKey, sessionId, messageId, messages, wireUsage, responseModel, caps?.maxInputTokens, startedAt, emit);
+    emit({ kind: 'message.done', payload: { sessionId, messageId } });
+  } catch (err) {
+    if (cancelled) {
+      emit({ kind: 'message.done', payload: { sessionId, messageId, interrupted: true } });
+    } else {
+      emit({
+        kind: 'stream.error',
+        payload: { sessionId, messageId, message: `独立模式直连不可达：${err instanceof Error ? err.message : String(err)}` },
+      });
+    }
+  } finally {
+    running.delete(streamKey);
+  }
 }
 
 function pickProvider(): ActiveProvider | null {
@@ -192,6 +387,38 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     try { await refreshProvider(); } catch { /* 下方统一报错 */ }
   }
   const provider = pickProvider();
+
+  // ---- 独立档分支（standalone；docs/mobile-app-plan.md §10.3）----
+  // 宿主不可达时中继/resolveActive 都不通：provider 恒空。此时读本机直连配置
+  // （用户在连接档经「保存直连配置到本机」显式同意后存的），并实测供应商 CORS；
+  // 不通则给结构化降级——「需连接电脑使用」，不假装可用、不裸抛网络错误。
+  if (!hostReachable) {
+    const cfg = readStoredDirectConfig();
+    if (!cfg) {
+      emit({
+        kind: 'stream.error',
+        payload: {
+          sessionId, messageId,
+          message: '独立模式：本机没有直连配置。请连接电脑后在「端点」面板点「保存直连配置到本机」，再离线使用。',
+        },
+      });
+      return;
+    }
+    const corsOk = await probeDirectCors(cfg.baseURL);
+    if (!corsOk) {
+      emit({
+        kind: 'stream.error',
+        payload: {
+          sessionId, messageId,
+          message: `独立模式：该供应商（${new URL(cfg.baseURL).host}）不允许浏览器直连（CORS），需连接电脑后经中继使用。`,
+        },
+      });
+      return;
+    }
+    await streamDirect(payload, sessionId, messageId, emit);
+    return;
+  }
+
   if (!provider) {
     emit({
       kind: 'stream.error',
@@ -399,11 +626,12 @@ export const realEnginePlugin: LitePlugin = {
   manifest: {
     id: 'real-engine',
     name: '真实模型引擎',
-    version: '0.3.0',
+    version: '0.4.0',
     capabilities: ['cap.model.admin'],
     /** 依赖供应商管理：装配顺序由声明驱动（面板先于引擎） */
     requires: ['cap.model.admin'],
-    events: ['model-config-changed', 'auth-changed'],
+    // mode-changed：standalone-mode 的运行模式广播（独立档切直连，docs/mobile-app-plan.md §10.3）
+    events: ['model-config-changed', 'auth-changed', 'mode-changed'],
     provides: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
     contributes: { slots: [] },
   },
@@ -418,12 +646,32 @@ export const realEnginePlugin: LitePlugin = {
     api.listen('model-config-changed', () => void refresh());
     api.listen('auth-changed', () => void refresh());
 
+    // 独立档切换（docs/mobile-app-plan.md §10.3）：只切模式标记——直连配置是
+    // 用户显式同意后存的 localStorage 副本，不随模式自动拉取/清除（清除走
+    // 面板按钮或登出）。连接档聊天永远走中继（服务端 key），独立档才读本机副本。
+    api.listen('mode-changed', (payload) => {
+      const p = payload as { status?: string } | null;
+      if (p?.status === 'standalone') hostReachable = false;
+      else if (p?.status === 'connected') hostReachable = true;
+    });
+
     // 启动尝试一次（若尚未登录会失败，登录后由 auth-changed 补上）
     void refresh();
     // 面板保存时也会直接广播，这里不额外轮询：避免未登录空转
 
     api.registerCapability.registerStreaming('cap.ai.chat', streamHandler);
     api.registerCapability.register('cap.ai.chat.interrupt', interruptHandler);
+
+    // 独立档配置操作桥（standalone-mode 面板按钮调用；同 __FILE_BROWSER_COMPOSE__ 先例：
+    // 经受限 window 通道而非跨插件 cap——这是「数据搬运动作」而非可声明能力）
+    (window as unknown as Record<string, unknown>).__REAL_ENGINE_DIRECT__ = {
+      /** 用户显式同意：拉当前供应商直连配置存本机 localStorage */
+      save: fetchAndStoreDirectConfig,
+      /** 清除本机直连配置 */
+      clear: clearStoredDirectConfig,
+      /** 本机是否已有直连配置（面板状态显示） */
+      has: () => readStoredDirectConfig() !== null,
+    };
   },
 };
 

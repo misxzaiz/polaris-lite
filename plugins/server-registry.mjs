@@ -28,6 +28,9 @@ export const SERVER_PLUGINS = [
   { id: 'chat-store', entry: './chat-store/server.mjs' },
   { id: 'phone-agent', entry: './phone-agent/server.mjs' },
   { id: 'codebuddy-engine', entry: './codebuddy-engine/server.mjs' },
+  // 扩展能力插件（plans/extension-capability-pure-plugin-plan.md）
+  { id: 'skill-loader', entry: './skill-loader/server.mjs' },
+  { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
 ];
 
 /**

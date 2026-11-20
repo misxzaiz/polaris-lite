@@ -1,0 +1,253 @@
+/**
+ * chat-store 插件的服务端半边（/api/chat/sessions*）：AI 对话会话的**服务端权威存储**。
+ *
+ * 这是「对话多设备共享」的服务端那一半（spec：docs/chat-multi-device-sync-plan.md）：
+ * 会话从浏览器 localStorage 上移为服务端文件（<dataDir>/chat-store/<id>.json），
+ * 同一账号的多个设备（多个 cookie 会话）读写同一份数据。
+ *
+ * 与 kv-store 的区别：kv-store 是通用 KV（1MB/键）；本插件面向「会话」这一领域形状——
+ * 整会话读写、版本号乐观并发控制（409）、软删除墓碑、索引增量查询。服务端不理解
+ * 消息内部语义（blocks/tool 卡等），只做外壳校验与存取——前端 chat-lite 是唯一解释者。
+ *
+ * 安全模型（对齐 kv-store/html-preview server 半边）：
+ * - 会话 cookie 硬门禁（未登录 401）；PLITE_CHAT_STORE=0 一键禁用；
+ * - sessionId 必须匹配 ^[A-Za-z0-9_-]{1,64}$（防路径穿越；前端 id 形如 s-<b36>-<b36>）；
+ * - 单会话 JSON ≤ 4MB；写入原子（tmp + rename）；每会话一把互斥锁串行化读改写；
+ * - 写操作落审计（JSON Lines），读不打点（轮询高频）。
+ *
+ * 端点：
+ *   GET    /api/chat/sessions        → { sessions: [{id,title,createdAt,updatedAt,msgCount,lastMsgPreview,version,deletedAt?}] }
+ *                                       ?since=<ts> 增量：只回 updatedAt>since 的条目；tombstones 恒回全量
+ *   GET    /api/chat/sessions/:id    → { session, version, updatedAt }
+ *   PUT    /api/chat/sessions/:id    → body { session, baseVersion, force? }；版本不符 409
+ *   DELETE /api/chat/sessions/:id    → 软删除（墓碑），物理文件保留待清理
+ */
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+
+const MAX_SESSION_BYTES = 4 * 1024 * 1024; // 单会话 4MB（附件 base64 大图可能到 MB 级）
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PREVIEW_LEN = 60;
+/** 墓碑保留期：到期物理清理（进程内懒清理，命中即扫） */
+const TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 提取会话的展示字段（服务端不理解消息语义，只数条数与取首条 content 做预览） */
+function summarize(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  const firstUser = messages.find((m) => m && m.role === 'user' && typeof m.content === 'string');
+  const preview = (firstUser?.content ?? '').replace(/\s+/g, ' ').slice(0, PREVIEW_LEN);
+  return {
+    id: String(session.id),
+    title: typeof session.title === 'string' ? session.title : '新会话',
+    createdAt: Number(session.createdAt) || 0,
+    msgCount: messages.length,
+    lastMsgPreview: preview,
+  };
+}
+
+export function createServerPart(options = {}) {
+  const getSession = options.getSession;
+  const dataDir = resolve(options.dataDir ?? '.polaris-lite');
+  const storeDir = resolve(dataDir, 'chat-store');
+  const auditFile = resolve(dataDir, 'chat-store-audit.log');
+  const hardOff = process.env.PLITE_CHAT_STORE === '0';
+
+  /** 每会话互斥锁：sessionId → Promise 链尾（同会话读改写串行化） */
+  const locks = new Map();
+
+  function lock(key, fn) {
+    const prev = locks.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // 防止未处理 rejection 累积；错误由调用方在 fn 内自行捕获
+    locks.set(key, next.catch(() => undefined));
+    return next;
+  }
+
+  function audit(entry) {
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      appendFileSync(auditFile, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
+    } catch { /* 审计失败不阻断业务 */ }
+  }
+
+  const sessionFile = (id) => join(storeDir, `${id}.json`);
+
+  function readRecord(id) {
+    const file = sessionFile(id);
+    if (!existsSync(file)) return null;
+    try {
+      return JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      return null; // 损坏按不存在处理（不 brick 索引）
+    }
+  }
+
+  function writeRecord(id, record) {
+    mkdirSync(storeDir, { recursive: true });
+    const file = sessionFile(id);
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(record), 'utf8');
+    renameSync(tmp, file);
+  }
+
+  /** 目录级索引（会话量级 ≤ 数百，每次全扫可忽略；读损坏文件跳过） */
+  function listRecords() {
+    if (!existsSync(storeDir)) return [];
+    const out = [];
+    for (const name of readdirSync(storeDir)) {
+      if (!name.endsWith('.json') || name.endsWith('.tmp')) continue;
+      const id = name.slice(0, -5);
+      if (!ID_RE.test(id)) continue;
+      const rec = readRecord(id);
+      if (rec) out.push(rec);
+    }
+    return out;
+  }
+
+  /** 墓碑到期物理清理（写路径懒触发，不设定时器） */
+  function sweepTombstones() {
+    const now = Date.now();
+    for (const rec of listRecords()) {
+      if (rec.deletedAt && now - rec.deletedAt > TOMBSTONE_TTL_MS) {
+        try { rmSync(sessionFile(rec.id)); } catch { /* 忽略 */ }
+      }
+    }
+  }
+
+  return async function chatStoreApi(req, res, next) {
+    if (hardOff) return next?.();
+    const [pathname] = (req.url ?? '').split('?');
+    if (!pathname.startsWith('/api/chat/sessions')) return next?.();
+
+    // 会话 cookie 硬门禁
+    const session = getSession?.(req);
+    if (!session) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
+    }
+
+    const sendJson = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    const readBody = () => new Promise((r) => {
+      let b = '';
+      let torn = false;
+      req.on('data', (c) => {
+        if (torn) return;
+        b += c;
+        if (b.length > MAX_SESSION_BYTES + 4096) {
+          // 超限：不能直接 destroy（客户端只看到 ECONNRESET）——
+          // 标记后继续排空，请求结束时统一回 413
+          torn = true;
+          b = '';
+        }
+      });
+      req.on('end', () => r({ body: b, tooLarge: torn }));
+    });
+
+    try {
+      const url = new URL(req.url, 'http://x');
+
+      // ---- 索引 ----
+      if (pathname === '/api/chat/sessions' && req.method === 'GET') {
+        const since = Number(url.searchParams.get('since') ?? 0) || 0;
+        const recs = listRecords();
+        const sessions = recs
+          .filter((r) => !r.deletedAt) // 墓碑不进常规索引（删除即从列表消失）
+          .filter((r) => !since || r.updatedAt > since)
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .map((r) => ({
+            ...summarize(r.session),
+            updatedAt: r.updatedAt,
+            version: r.version,
+            ...(r.deletedAt ? { deletedAt: r.deletedAt } : {}),
+          }));
+        // 墓碑恒回全量（删除事件不能因 since 截断而漏）；记录顶层无 id，id 在 session.id
+        const tombstones = recs
+          .filter((r) => r.deletedAt)
+          .map((r) => ({ id: String(r.session?.id ?? ''), deletedAt: r.deletedAt, version: r.version }))
+          .filter((tb) => tb.id);
+        return sendJson(200, { sessions, tombstones });
+      }
+
+      // ---- 单会话（:id）----
+      const m = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})$/);
+      if (m) {
+        const id = m[1];
+
+        if (req.method === 'GET') {
+          const rec = readRecord(id);
+          if (!rec || rec.deletedAt) return sendJson(404, { error: 'session not found', code: 'SESSION_NOT_FOUND' });
+          return sendJson(200, { session: rec.session, version: rec.version, updatedAt: rec.updatedAt });
+        }
+
+        if (req.method === 'PUT') {
+          const { body: raw, tooLarge } = await readBody();
+          if (tooLarge) {
+            return sendJson(413, { error: `session too large (> ${MAX_SESSION_BYTES} bytes)`, code: 'SESSION_TOO_LARGE' });
+          }
+          let body;
+          try {
+            body = JSON.parse(raw || '{}');
+          } catch {
+            return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' });
+          }
+          const incoming = body?.session;
+          if (!incoming || typeof incoming !== 'object') {
+            return sendJson(400, { error: 'session required', code: 'BAD_REQUEST' });
+          }
+          if (String(incoming.id ?? '') !== id) {
+            return sendJson(400, { error: 'session.id must match url id', code: 'BAD_REQUEST' });
+          }
+          if (!Array.isArray(incoming.messages)) {
+            return sendJson(400, { error: 'session.messages must be an array', code: 'BAD_REQUEST' });
+          }
+          const baseVersion = Number(body.baseVersion ?? 0);
+          if (!Number.isInteger(baseVersion) || baseVersion < 0) {
+            return sendJson(400, { error: 'baseVersion must be a non-negative integer', code: 'BAD_REQUEST' });
+          }
+          const force = body.force === true;
+
+          const result = await lock(id, () => {
+            const cur = readRecord(id);
+            if (cur?.deletedAt) {
+              return { status: 404, body: { error: 'session deleted', code: 'SESSION_NOT_FOUND' } };
+            }
+            if (cur && !force && cur.version !== baseVersion) {
+              return { status: 409, body: { error: 'version conflict', code: 'VERSION_CONFLICT', currentVersion: cur.version, updatedAt: cur.updatedAt } };
+            }
+            const version = (cur?.version ?? 0) + 1;
+            const updatedAt = Date.now();
+            writeRecord(id, { version, updatedAt, session: incoming });
+            audit({ op: 'put', sessionId: id, version, ok: true, force });
+            return { status: 200, body: { ok: true, version, updatedAt } };
+          });
+          if (result.status !== 200) audit({ op: 'put', sessionId: id, ok: false, code: result.body.code });
+          return sendJson(result.status, result.body);
+        }
+
+        if (req.method === 'DELETE') {
+          const result = await lock(id, () => {
+            const cur = readRecord(id);
+            if (!cur) return { status: 404, body: { error: 'session not found', code: 'SESSION_NOT_FOUND' } };
+            if (cur.deletedAt) return { status: 200, body: { ok: true, version: cur.version } };
+            const version = cur.version + 1;
+            const now = Date.now();
+            writeRecord(id, { ...cur, version, updatedAt: now, deletedAt: now });
+            audit({ op: 'delete', sessionId: id, version, ok: true });
+            sweepTombstones();
+            return { status: 200, body: { ok: true, version } };
+          });
+          return sendJson(result.status, result.body);
+        }
+
+        return sendJson(405, { error: 'method not allowed' });
+      }
+
+      return sendJson(404, { error: 'not found' });
+    } catch (e) {
+      return sendJson(500, { error: String(e?.message ?? e), code: 'CHAT_STORE_ERROR' });
+    }
+  };
+}

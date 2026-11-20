@@ -1,0 +1,41 @@
+/* standalone-mode：模式提示样式 */
+.sm-panel { display: flex; flex-direction: column; gap: 10px; }
+.sm-panel h3 { margin: 0; font-size: 14px; font-weight: 500; color: var(--text); letter-spacing: 0.06em; }
+.sm-status { font-size: 13px; color: var(--text); }
+.sm-status[data-mode="standalone"] { color: #d9a441; }
+.sm-status[data-mode="connected"] { color: var(--accent); }
+.sm-hint { color: var(--text-faint); font-size: 11px; line-height: 1.8; }
+
+#sm-mode-layer { position: sticky; top: 0; left: 0; right: 0; z-index: 998; pointer-events: none; }
+.sm-banner {
+  margin: 10px 12px;
+  padding: 9px 14px;
+  border: 1px solid #d9a441;
+  border-radius: 8px;
+  background: rgba(217, 164, 65, 0.12);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.sm-direct { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-hover); }
+.sm-direct-title { color: var(--text-soft); font-size: 11px; letter-spacing: 0.12em; }
+.sm-direct-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sm-direct-row .sm-ok { flex: 1; min-width: 120px; color: var(--accent); font-size: 12px; }
+.sm-direct-row .sm-none { flex: 1; min-width: 120px; color: var(--text-faint); font-size: 12px; }
+.sm-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--plite-dur), color var(--plite-dur);
+}
+.sm-btn:hover { background: var(--accent); color: #fff; }
+.sm-btn:disabled { opacity: 0.5; cursor: default; }
+.sm-danger { border-color: #d64545 !important; color: #d64545 !important; }
+.sm-danger:hover { background: rgba(214, 69, 69, 0.15) !important; color: #d64545 !important; }

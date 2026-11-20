@@ -1,5 +1,5 @@
 {
-  "version": "4",
+  "version": "5",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -107,7 +107,10 @@
         "cap.model.admin",
         "cap.tool.ledger",
         "cap.tool.browser",
-        "cap.tool.files-write"
+        "cap.tool.files-write",
+        "cap.tool.skill",
+        "cap.skill.appendix",
+        "cap.hook.bridge"
       ],
       "provides": [
         "cap.agent.loop"
@@ -253,6 +256,27 @@
         "cap.ai.chat.interrupt"
       ],
       "events": []
+    },
+    "skill-loader": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.tool.skill",
+        "cap.skill.appendix"
+      ],
+      "events": []
+    },
+    "hook-bridge": {
+      "capabilities": [
+        "cap.meta"
+      ],
+      "provides": [
+        "cap.hook.bridge"
+      ],
+      "events": [
+        "user.prompt"
+      ]
     }
   }
 }

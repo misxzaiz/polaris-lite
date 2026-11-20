@@ -132,9 +132,13 @@ async function discoverTools(): Promise<void> {
     const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
     const caps = (res.data?.capabilities ?? []).filter((c) => c.startsWith('cap.tool.') || c === 'cap.interactive');
     for (const cap of caps) {
-      const r = await hostApi.dispatch<{ descriptor?: ToolDescriptorProto }>({ target: cap, action: 'describe' });
-      const d = r.data?.descriptor;
-      if (d?.name) tools.set(d.name, d);
+      const r = await hostApi.dispatch<{ descriptor?: ToolDescriptorProto; descriptors?: ToolDescriptorProto[] }>({ target: cap, action: 'describe' });
+      // A1 兼容两种 describe 形态：单 descriptor（存量插件）与聚合 descriptors 数组
+      // （如 mcp-bridge 的 cap.tool.mcp 一次返回全部 MCP 工具）。单形态视作长度 1 数组。
+      const list = r.data?.descriptor ? [r.data.descriptor] : (r.data?.descriptors ?? []);
+      for (const d of list) {
+        if (d?.name) tools.set(d.name, d);
+      }
     }
   } catch { /* cap.meta 不可用：靠 tool-registered 事件兜底 */ }
 }
@@ -459,6 +463,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         ...(payload.history ?? []).map((m) => ({ role: m.role as ShadowMsg['role'], content: m.content })),
       ];
       shadows.set(sessionId, shadow);
+      // A2 系统提示附录：技能索引（# Available skills）+ 项目指令（AGENTS.md/CLAUDE.md）
+      // 由 skill-loader 插件经 cap.skill.appendix 提供；插件未装/失败时静默跳过（零影响）。
+      try {
+        const app = await hostApi!.dispatch<{ text?: string }>({ target: 'cap.skill.appendix', action: 'get', payload: { sessionId, cwd: execCwd } });
+        if (app.data?.text) shadow[0].content += '\n\n' + app.data.text;
+      } catch { /* 附录不可用：无附录继续 */ }
     }
     shadow.push({ role: 'user', content: prompt });
 
@@ -692,6 +702,28 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
+
+        // A3 生命周期钩子（hook-bridge 插件经 cap.hook.bridge 提供）：
+        // PreToolUse 事件可在用户审批之后、实际执行前拦截工具调用（deny → 跳过执行并告知模型原因）。
+        // 钩子桥未装/失败时按放行处理（fail-open），零行为变化。
+        try {
+          const hv = await hostApi!.dispatch<{ decision?: string; reason?: string; updatedInput?: Record<string, unknown> }>({
+            target: 'cap.hook.bridge',
+            action: 'preToolUse',
+            payload: { sessionId, toolName: call.name, toolInput: hookArgsOf(call.arguments) },
+          });
+          if (hv.data?.decision === 'deny') {
+            const reason = hv.data.reason ? `原因：${hv.data.reason}` : '（无附加原因）';
+            emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command });
+            shadow.push({
+              role: 'tool',
+              content: `[工具被生命周期钩子拦截] ${reason}。请尊重该策略，改用其他方式或直接回答；不要原样重试同一被拦截调用。`,
+              tool_call_id: call.id,
+              name: call.name,
+            });
+            continue;
+          }
+        } catch { /* 钩子桥不可用：放行 */ }
 
         // files（cap.tool.fs）：动作语义只读工具（roots/list/read），不走 exec——
         // 服务端只有 GET /api/fs/*；模型给 {action,...}，按动作分发并回结构化结果。
@@ -934,6 +966,17 @@ function safeArgs(raw: string): { command?: string; timeoutMs?: number } {
   }
 }
 
+/** A3 钩子入参：把模型给的 arguments JSON 完整透传给钩子（不剥字段——
+ *  钩子需要看到完整 tool_input 才能按 CC/ZC 语义做 matcher/decision） */
+function hookArgsOf(raw: string): Record<string, unknown> {
+  try {
+    const p = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return p && typeof p === 'object' ? p : {};
+  } catch {
+    return {};
+  }
+}
+
 /** files_write 参数解析（agent-files：透传动作语义字段，其余丢弃） */
 function safeArgsFilesWrite(raw: string): {
   action?: string; path?: string; content?: string;
@@ -1042,7 +1085,7 @@ export const agentLoopPlugin: LitePlugin = {
     id: 'agent-loop',
     name: 'Agent 循环',
     version: '0.1.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.tool.bash', 'cap.meta', 'cap.tool.fs', 'cap.tool.files-write', 'cap.interactive', 'cap.tool.render', 'cap.model.admin', 'cap.tool.ledger', 'cap.tool.browser', 'cap.tool.skill', 'cap.skill.appendix', 'cap.hook.bridge'],
     requires: ['cap.ai.chat', 'cap.tool.bash'],
     provides: ['cap.agent.loop'],
     events: ['cap.ai.chat:event', 'tool-registered', 'workspace-changed'],

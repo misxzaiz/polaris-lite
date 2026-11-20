@@ -1,0 +1,25 @@
+{
+  "providers": [
+    {
+      "id": "prov-mwoqp0w9",
+      "name": "mosi",
+      "baseURL": "https://api.mosi.cn/v1",
+      "apiKey": "sk-fd5f77761a1abde10e37f2dc8cc025154d8109fcec8d36bb",
+      "models": [
+        {
+          "id": "nex-n2.6",
+          "capabilities": {
+            "maxInputTokens": 1000000,
+            "maxOutputTokens": 0,
+            "effort": "high",
+            "vision": true,
+            "detected": "manual"
+          }
+        }
+      ],
+      "activeModel": "nex-n2.6",
+      "enabled": true,
+      "isDefault": true
+    }
+  ]
+}

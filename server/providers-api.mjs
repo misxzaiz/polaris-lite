@@ -200,6 +200,39 @@ export function createProvidersApi({ store, policy, getSession }) {
       }
       return { ok: true, catalogIds, probes, notes };
     },
+
+    /**
+     * 直连配置（独立档 B 专用；docs/mobile-app-plan.md §10.3）：
+     * 把当前启用供应商的明文 key + baseURL 发给前端，供手机在宿主不可达时
+     * 直连供应商。这是「key 不出服务端」原则的唯一受控例外——约束：
+     *   ① 已登录会话硬门禁（未登录 401）；
+     *   ② PLITE_ALLOW_DIRECT_CONFIG=0 一键禁用（公网部署建议关闭）；
+     *   ③ 调用方视角是「手机端点在连接档主动拉取」——UI 侧（real-engine 的
+     *     独立模式面板）只在用户显式点「保存直连配置到本机」后才调用本接口，
+     *     拉到的 key 由 UI 存本机 localStorage 供独立档使用。
+     * （v2 修订：不再限回环 IP——手机经局域网访问时来源非回环，回环限制会让
+     *  独立档在真机上永远取不到配置——原设计缺陷，单测从回环跑而掩盖了它。）
+     */
+    'POST /api/providers/direct-config': async (req) => {
+      requireSession(req);
+      if (process.env.PLITE_ALLOW_DIRECT_CONFIG === '0') {
+        throw new HttpError(403, 'DIRECT_CONFIG_DISABLED', '本部署已禁用直连配置下发');
+      }
+      const active = store.getActive();
+      if (!active || !active.apiKey) {
+        throw new HttpError(404, 'PROVIDER_NO_ACTIVE', '没有已启用且配置了 Key 的供应商');
+      }
+      return {
+        config: {
+          id: active.id,
+          name: active.name,
+          baseURL: active.baseURL,
+          apiKey: active.apiKey,
+          models: active.models,
+          activeModel: active.activeModel,
+        },
+      };
+    },
   };
 
   return function providersApi(req, res, next) {

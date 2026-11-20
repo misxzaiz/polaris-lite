@@ -271,3 +271,58 @@ test('中继：未知 provider 拒绝；指向内网地址的 provider 被 SSRF 
   assert.equal(blocked.json.code, 'UPSTREAM_NOT_ALLOWED');
   assert.match(blocked.json.error, /private upstream/);
 });
+
+// ---------------------------------------------------------------- 直连配置（独立档 B）
+
+test('direct-config：登录+回环下返回明文配置；未登录 401；无供应商 404', async (t) => {
+  const env = tempRoot();
+  const h = await startHost(t, env);
+  const c = h.client();
+
+  // 未登录拒绝
+  const anon = await c.send('/api/providers/direct-config', { method: 'POST' });
+  assert.equal(anon.status, 401);
+
+  // 登录（首登即注册）
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  // 无供应商 → 404
+  const none = await c.send('/api/providers/direct-config', { method: 'POST' });
+  assert.equal(none.status, 404);
+  assert.equal(none.json.error.code, 'PROVIDER_NO_ACTIVE');
+
+  // 配置一个供应商（白名单公网 https）→ 返回明文 key + baseURL（本机回环形态）
+  const saved = await c.send('/api/providers/save', {
+    method: 'POST',
+    body: { config: { id: 'p1', name: 'openai', baseURL: 'https://api.openai.com/v1', apiKey: 'sk-dest-direct-123456', models: [], activeModel: 'gpt-4o-mini', enabled: true } },
+  });
+  assert.equal(saved.status, 200);
+
+  const direct = await c.send('/api/providers/direct-config', { method: 'POST' });
+  assert.equal(direct.status, 200);
+  assert.equal(direct.json.ok, true);
+  assert.equal(direct.json.config.baseURL, 'https://api.openai.com/v1');
+  assert.equal(direct.json.config.apiKey, 'sk-dest-direct-123456');
+  assert.equal(direct.json.config.activeModel, 'gpt-4o-mini');
+});
+
+test('direct-config：PLITE_ALLOW_DIRECT_CONFIG=0 一键禁用', async (t) => {
+  const prev = process.env.PLITE_ALLOW_DIRECT_CONFIG;
+  process.env.PLITE_ALLOW_DIRECT_CONFIG = '0';
+  try {
+    const env = tempRoot();
+    const h = await startHost(t, env);
+    const c = h.client();
+    await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+    await c.send('/api/providers/save', {
+      method: 'POST',
+      body: { config: { id: 'p1', name: 'openai', baseURL: 'https://api.openai.com/v1', apiKey: 'sk-x-1234567890', models: [], activeModel: '', enabled: true } },
+    });
+    const res = await c.send('/api/providers/direct-config', { method: 'POST' });
+    assert.equal(res.status, 403);
+    assert.equal(res.json.error.code, 'DIRECT_CONFIG_DISABLED');
+  } finally {
+    if (prev === undefined) delete process.env.PLITE_ALLOW_DIRECT_CONFIG;
+    else process.env.PLITE_ALLOW_DIRECT_CONFIG = prev;
+  }
+});

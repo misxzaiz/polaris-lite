@@ -11,8 +11,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSy
 import { dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-const EMPTY = { providers: [] };
-
 export function maskKey(key) {
   if (!key) return '';
   if (key.length <= 8) return '*'.repeat(key.length);
@@ -82,13 +80,13 @@ export function createProviderStore({ dataDir = '.polaris-lite' } = {}) {
 
   const read = () => {
     try {
-      if (!existsSync(file)) return { ...EMPTY };
+      if (!existsSync(file)) return { providers: [] };
       const data = JSON.parse(readFileSync(file, 'utf8'));
       // 兼容早期形态：直接是数组
       const providers = Array.isArray(data) ? data : Array.isArray(data?.providers) ? data.providers : [];
       return { providers };
     } catch {
-      return { ...EMPTY }; // 损坏则从空开始，不阻塞启动
+      return { providers: [] }; // 损坏则从空开始，不阻塞启动
     }
   };
 

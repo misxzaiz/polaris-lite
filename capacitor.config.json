@@ -1,0 +1,12 @@
+{
+  "appId": "com.polarislite.app",
+  "appName": "Polaris Lite",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": ["*"]
+  }
+}

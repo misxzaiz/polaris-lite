@@ -11,7 +11,7 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, hasBlocks, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
@@ -84,7 +84,8 @@ export const chatLitePlugin: LitePlugin = {
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
     // interactive.*：interactive-cards 的交互卡事件；artifact.created：html-preview 等产物插件
     // workspace-renamed：file-browser 改名广播，输入区目录名据此即时同步（不再停留在旧名）
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed'],
+    // mode-changed：standalone-mode 的运行模式广播（独立档切换本地会话镜像，docs/mobile-app-plan.md §10）
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -138,6 +139,15 @@ export const chatLitePlugin: LitePlugin = {
     };
     api.listen('interactive.created', onInteractive(true));
     api.listen('interactive.answered', onInteractive(false));
+
+    // 独立档数据面（docs/mobile-app-plan.md §10.4）：standalone-mode 广播模式变化 →
+    // 切换会话同步层。standalone（宿主不可达）时暂停服务端轮询/推送，会话变更只落
+    // IndexedDB 本地镜像（手机独立使用不丢）；恢复连接档时自动对账+补偿上传。
+    api.listen('mode-changed', (payload) => {
+      const p = payload as { status?: string } | null;
+      if (p?.status === 'standalone') setOfflineMode(true);
+      else if (p?.status === 'connected') setOfflineMode(false);
+    });
     // 通用产物事件（html-preview 等产物插件直发）：一次性落块，无回填流；
     // 渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记，chat-lite 只认
     // {rendererType, callId, title, data} 契约——第二个产物插件起零改动。

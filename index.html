@@ -7,7 +7,12 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#ffffff" />
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Polaris Lite</title>
     <!--
       主题引导：必须内联且在样式/模块之前执行。
@@ -32,5 +37,40 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!--
+      Android 壳引导（docs/mobile-app-plan.md §5，MainActivity 配套）：
+      仅当运行在 https://localhost 壳源（=尚未配置电脑地址）时，显示「输入电脑地址」
+      引导层；提交经 plite://set-server?u=<addr> 交回原生侧（MainActivity 拦截保存并切源）。
+      已配置/浏览器/桌面环境（origin 非 https://localhost）不渲染，行为零变化。
+    -->
+    <script>
+      (function () {
+        if (window.location.origin !== 'https://localhost') return;
+        var el = document.createElement('div');
+        el.id = 'plite-native-bootstrap';
+        el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#fff;display:flex;align-items:center;justify-content:center;';
+        el.innerHTML = '<div style="width:min(88vw,360px);font-family:system-ui,sans-serif;color:#111;">'
+          + '<div style="font-size:20px;letter-spacing:.24em;text-align:center;margin-bottom:6px;">POLARIS</div>'
+          + '<div style="font-size:10px;letter-spacing:.22em;color:#888;text-align:center;margin-bottom:22px;">LITE · PRIVATE INTELLIGENCE</div>'
+          + '<div style="font-size:13px;color:#444;line-height:1.7;margin-bottom:14px;">首次使用：请输入电脑上 Polaris Lite 的服务地址（含端口）。</div>'
+          + '<input id="plite-boot-addr" placeholder="192.168.1.100:9825" style="width:100%;box-sizing:border-box;height:44px;padding:0 12px;border:1px solid #d8d8dc;border-radius:7px;font-size:16px;outline:none;" />'
+          + '<div id="plite-boot-err" style="color:#d64545;font-size:11px;margin-top:6px;min-height:14px;"></div>'
+          + '<button id="plite-boot-go" style="width:100%;height:44px;margin-top:10px;border:0;border-radius:7px;background:#4f5bff;color:#fff;font-size:14px;cursor:pointer;">连接电脑</button>'
+          + '</div>';
+        document.addEventListener('DOMContentLoaded', function () {
+          document.body.appendChild(el);
+          var go = function () {
+            var v = (document.getElementById('plite-boot-addr').value || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+            if (!/^[\w.-]+:\d{2,5}$/.test(v)) {
+              document.getElementById('plite-boot-err').textContent = '格式：IP:端口 或 域名:端口';
+              return;
+            }
+            window.location.href = 'plite://set-server?u=' + encodeURIComponent('http://' + v);
+          };
+          document.getElementById('plite-boot-go').addEventListener('click', go);
+          document.getElementById('plite-boot-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -572,6 +572,15 @@ export async function pullNow(): Promise<void> {
   if (syncHandle) await syncHandle.pullNow();
 }
 
+/**
+ * 独立档开关（standalone-mode 插件经 mode-changed 驱动；spec docs/mobile-app-plan.md §10.4）：
+ * on=true（宿主不可达）：暂停服务端同步，会话变更只写 IndexedDB 本地镜像——手机独立使用不丢；
+ * on=false（恢复连接）：立即对账并补偿上传独立期间积攒的脏会话。
+ */
+export function setOfflineMode(on: boolean): void {
+  syncHandle?.setOfflineMode(on);
+}
+
 /** 启动：IndexedDB 缓存秒开 → 服务端对账。旧 localStorage 只提示不迁移（R5）。 */
 void (async () => {
   if (typeof window === 'undefined') return;
