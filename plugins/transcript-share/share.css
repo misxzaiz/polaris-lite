@@ -1,0 +1,64 @@
+/* transcript-share 面板样式：只用主题 token；不碰宿主命名空间/全局根。 */
+
+.pl-share { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.pl-share-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+
+.pl-section-title {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); margin: 6px 0 2px;
+}
+
+.pl-share-select {
+  width: 100%; min-height: 66px; padding: 6px; border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm); background: var(--bg); color: var(--text);
+  font-size: var(--plite-fs-sm);
+}
+
+.pl-share-ttls { display: flex; gap: 6px; flex-wrap: wrap; }
+.pl-share-ttl {
+  height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: transparent; color: var(--text-dim); cursor: pointer; font-size: var(--plite-fs-sm);
+}
+.pl-share-ttl:hover { color: var(--text-soft); background: var(--bg-hover); }
+.pl-share-ttl.active { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
+
+.pl-share-create {
+  height: 32px; border: none; border-radius: var(--plite-radius-sm);
+  background: var(--accent); color: var(--accent-contrast, #fff); font-size: var(--plite-fs-sm);
+  font-weight: 600; cursor: pointer;
+}
+.pl-share-create:disabled { opacity: 0.5; cursor: default; }
+.pl-share-create:not(:disabled):hover { filter: brightness(1.08); }
+
+.pl-share-created { border: 1px solid var(--border); border-radius: var(--plite-radius-sm); padding: 8px; }
+.pl-share-url-row { display: flex; align-items: center; gap: 6px; }
+.pl-share-url-row a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--accent-bright); font-size: var(--plite-fs-sm); text-decoration: none; }
+.pl-share-url-row button {
+  flex: 0 0 auto; height: 24px; padding: 0 8px; border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm); background: transparent; color: var(--text-dim);
+  font-size: var(--plite-fs-sm); cursor: pointer;
+}
+
+.pl-share-note { font-size: var(--plite-fs-sm); color: var(--text-faint); }
+
+.pl-share-list { display: flex; flex-direction: column; gap: 6px; }
+.pl-share-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid var(--border); border-radius: var(--plite-radius-sm); padding: 6px 8px;
+}
+.pl-share-item-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pl-share-item .mono { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-soft); }
+.pl-share-left { font-size: 11px; color: var(--text-faint); }
+.pl-share-livebadge {
+  font-size: 10px; padding: 0 6px; border-radius: 99px; line-height: 16px;
+  background: var(--accent-soft); color: var(--accent-bright);
+}
+.pl-share-item-ops { display: flex; gap: 4px; flex: 0 0 auto; }
+.pl-share-item-ops button {
+  height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: transparent; color: var(--text-dim); font-size: 11px; cursor: pointer;
+}
+.pl-share-item-ops button.danger { color: #c5221f; }
+
+.pl-share-tip { font-size: 11px; color: var(--text-faint); line-height: 1.5; padding-top: 4px; }

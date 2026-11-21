@@ -34,6 +34,7 @@ export const SERVER_PLUGINS = [
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
   { id: 'zcode-compat', entry: './zcode-compat/server.mjs' },
   { id: 'plugin-market', entry: './plugin-market/server.mjs' },
+  { id: 'transcript-share', entry: './transcript-share/server.mjs' },
 ];
 
 /**

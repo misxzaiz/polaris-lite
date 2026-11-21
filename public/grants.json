@@ -317,6 +317,15 @@
       "events": [
         "tool-registered"
       ]
+    },
+    "transcript-share": {
+      "capabilities": [],
+      "provides": [
+        "cap.tool.transcript"
+      ],
+      "events": [
+        "tool-registered"
+      ]
     }
   }
 }

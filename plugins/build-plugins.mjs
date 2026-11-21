@@ -103,6 +103,8 @@ const plugins = [
   { id: 'zcode-compat', config: 'zcode-compat/vite.config.ts', dist: 'zcode-compat/dist', order: 27 },
   // plugin-market = 外部插件商城与运行时安装器（plans/runtime-extensions-and-market-final.md P2）
   { id: 'plugin-market', config: 'plugin-market/vite.config.ts', dist: 'plugin-market/dist', order: 28 },
+  // transcript-share = AI 对话全过程只读分享（needs #069）：链接分享接口（token+有效期）+ panel + cap.tool.transcript
+  { id: 'transcript-share', config: 'transcript-share/vite.config.ts', dist: 'transcript-share/dist', order: 29 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
