@@ -114,7 +114,8 @@
         "cap.hook.bridge",
         "cap.tool.mcp",
         "cap.tool.mcp-ops",
-        "cap.market.tool"
+        "cap.market.tool",
+        "cap.tool.transcript"
       ],
       "provides": [
         "cap.agent.loop"
@@ -206,7 +207,9 @@
       "provides": [
         "cap.plugin.admin"
       ],
-      "events": []
+      "events": [
+        "tool-registered"
+      ]
     },
     "agent-files": {
       "capabilities": [],

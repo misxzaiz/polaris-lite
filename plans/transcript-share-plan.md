@@ -1,8 +1,9 @@
 # transcript-share 实施全过程（needs #069）
 
-> 日期：2026-11-21 · 状态：delivered
+> 日期：2026-11-21 · 状态：delivered（v2 重构：API 请求轨迹 + 标题推导）
 > 需求：AI 对话全过程分享——链接分享接口（token+有效期）+ 可视化插件面板 + AI 工具（MCP 同源）只读查看
 > 约束：**全插件方案**（核心仓 `src/`、`server/` 零改动）· 三端全只读 · 内容脱敏
+> v2（2026-11-21 下午）：用户反馈两问题——①标题全是"新会话"②要的是 **API 请求调用轨迹**（如 ZCode/dsh 的调用过程：messages/tokens/SSE），而非工具卡摘要。重构方案见 §8。
 
 本文档记录完整实施过程：探索结论 → 设计决策 → 踩坑与修复 → 验证证据。目的是让 AI（或人）能完整复盘本次实施，并据此优化引擎/流程。
 
@@ -140,3 +141,73 @@ curl -s -b $J -X POST http://127.0.0.1:5000/api/share/revoke \
 - **实时是 3s 轮询**（近实时），不是 SSE 推送——理由见 4#10。
 - 分享页的"AI 用 MCP 看"通道实现为 `cap.tool.transcript`（agent-loop describe 协议）；真·外部 MCP server 接入走 mcp-bridge 也能消费同一份 HTTP 数据面。
 - tokens.json 无加密（48B 随机 token 本身即凭证）；分享页不承诺公网安全边界（边界：本机/内网）。
+
+## 8. v2 重构：API 请求调用轨迹 + 标题自动推导（2026-11-21 下午）
+
+### 8.1 用户反馈与根因
+
+| # | 反馈 | 根因 | 方案 |
+|---|------|------|------|
+| 1 | 分享页标题全是"新会话" | chat-lite 只有手动重命名才改 title，分享页照抄 | `deriveTitle()`：title 为空或默认「新会话」时，取首条用户消息前 40 字 |
+| 2 | 要的是 API 请求调用轨迹（如 ZCode/dsh 那种 messages/tokens/SSE 过程） | v1 只转录工具卡摘要（command/stdout 摘要级），模型请求的完整上下文（messages/tools/参数）与响应（usage/SSE 帧/工具分片）只在 ai-events 的浏览器 IndexedDB 里，从未进服务端 | **traceTap 全链路**（见 8.2） |
+
+### 8.2 API 轨迹数据链（v2 核心）
+
+```
+real-engine relayFetch ──带 X-Plite-Session: <sessionId>──┐
+                                                          ▼
+浏览器 window.fetch ── transcript-share traceTap.ts 拦截 /api/model-relay
+  ├─ 请求侧: providerId + body{model, messages 全文, tools, max_tokens…}（256KB 截断）
+  ├─ 响应侧: tee() 旁路 collectSse() —— 帧数/文本长/finish_reason/usage(tokens)/
+  │          tool_calls 分片拼接/首 6 帧+末 4 帧原文
+  └─ 批量上报 POST /api/share/trace {traces:[…]}（4s 批/64 条上限/失败静默不阻塞）
+                                                          ▼
+server.mjs /api/share/trace → traceStore.append()
+  落盘 <dataDir>/transcript-share/traces/<sessionId>.jsonl（一行一条，追加原子；
+  护栏: 单条 512KB/单文件 16MB/单会话 200 条丢最旧）
+                                                          ▼
+/share/:token 三出口读 traces.readAll() 并入 transcript.apiCalls
+  （redactJson 统一脱敏——reqBody 里可能有密钥形态文本）
+```
+
+关键设计决策：
+- **X-Plite-Session header**（real-engine 3 行改动）：relay 请求体里没有会话归属，
+  header 是最短无侵入关联键；服务端不消费，纯浏览器层取证用。
+- **不复用 ai-events/netTap**：那条线是本机 IndexedDB 全量取证；本线只取 model-relay
+  一类且要落地服务端——职责不同，独立实现（collectSse 同构但独立，避免跨插件依赖，
+  arch 门禁也禁止插件互相 import）。
+- **JSONL 而非 sqlite/单 JSON**：追加写天然原子，无需读改写锁。
+
+### 8.3 渲染（三出口）
+
+- HTML：`.api-section`（API 调用轨迹 · N 次模型请求）+ 每条 `.apicall` 卡片：
+  HTTP 状态/耗时/模型名/finish_reason/tokens in→out/SSE 帧数/模型请求的工具调用/
+  请求体（messages/tools 折叠）/SSE 首帧样本（折叠）。暗色样式适配。
+- JSON：`apiCalls[]` 数组（结构化，AI 直接消费）。
+- Markdown：`## API 调用轨迹` 区，`#### API #N` 每条含 tokens: X→Y、请求体代码块、SSE 首帧。
+- 标题：deriveTitle 三出口统一生效。
+
+### 8.4 顺手修复：agent-loop 无权调 transcript 工具
+
+真实对话审计发现 `DENY cap.tool.transcript · describe · agent-loop is not granted`——
+v1 只给 transcript-share 登记了 provides，漏了给 agent-loop（消费方）授权。
+修复：grants.json agent-loop.capabilities + agent-loop manifest.capabilities 各加
+`cap.tool.transcript`（双闸同步）。**教训：新增 cap 时要同时查提供方与全部消费方的授权。**
+
+### 8.5 v2 踩坑记录
+
+| # | 现象 | 根因 | 修复 |
+|---|------|------|------|
+| 11 | arch 门禁：trace-store.mjs → node:fs 未声明 | arch 规则只豁免 `server.mjs` 后缀文件的 node:* 依赖 | 不动核心测试；把 trace-store 内联进 server.mjs（60 行） |
+| 12 | 单测断言 HTML 里 /1234ms/ 失败 | 自包含 HTML 的渲染由浏览器 JS 完成，服务端返回的 HTML 里只有内联 JSON（durMs:1234），没有渲染后 DOM | 测试改断言内联数据与渲染函数字符串存在（`"durMs":1234`、`renderApiCalls`），DOM 渲染留给浏览器 E2E 验证 |
+
+### 8.6 v2 验证证据
+
+- 测试：新增 3 用例（trace 上报→三出口 apiCalls/标题推导/未登录与空 sessionId），共 10/10；全仓 **305/305** 绿。
+- 开发环境 5000 真实 AI 对话 E2E：
+  - 一次"请只回复两个字：收到"→ trace 落盘 1 条（nex-n2.6, 200, 2097ms, SSE 20 帧, tokens 4691→39 含 reasoning_tokens）；
+  - 分享页标题自动推导 = 「请只回复两个字：收到」；API 轨迹卡渲染 = API #1 · HTTP 200 · 2097ms · nex-n2.6 · finish=stop · tokens 4691→39 · SSE 20 帧 + 请求体/SSE 首帧折叠；
+  - JSON/Markdown 出口同含 apiCalls（tokens: 4691→39）；
+  - 多跳对话（AI 用 bash/files 探索 9 跳）→ 9 条 trace 全捕获，tokens 递增链 4750→213 … 5873→68 可见上下文增长；
+  - 冒烟 token 已全部吊销（dev tokens remaining: 0）。
+- 生产 9825：完整 build + 重启，`/api/share/list` 匿名 401、agent-loop transcript grant True。

@@ -282,7 +282,106 @@ test('旧版 role:tool 消息可渲染；会话删除后 404', async (t) => {
   assert.match(r.text, /已删除/);
 });
 
-// ---------------------------------------------------------------- 禁用开关
+// ---------------------------------------------------------------- API 轨迹 + 标题推导
+
+test('trace 上报 → 分享三出口含 apiCalls；标题自动推导', async (t) => {
+  const env = tempRoot();
+  seedSession(env.dataDir, 's-trace', mkSession('s-trace', [
+    { id: 'm1', role: 'user', content: '帮我看看这个报错是怎么回事？它出现在启动的时候', createdAt: 1700000000000 },
+    { id: 'm2', role: 'assistant', content: '好的', createdAt: 1700000000001 },
+  ]));
+  const c = await login(t, env);
+
+  const trace = {
+    id: 'tr1', sessionId: 's-trace', at: 1700000000100, durMs: 1234, status: 200,
+    model: 'gpt-test', providerId: 'p1',
+    reqBody: JSON.stringify({ model: 'gpt-test', messages: [{ role: 'user', content: '帮我看看' }], stream: true }),
+    sse: {
+      frames: 12, textLen: 8, finishReason: 'stop',
+      usage: { prompt_tokens: 100, completion_tokens: 20 },
+      toolCalls: [{ name: 'bash', args: '{"command":"ls"}' }],
+      first: ['data: {"choices":[]}'],
+      last: ['data: [DONE]'],
+    },
+  };
+  const r1 = await c.send('/api/share/trace', { method: 'POST', body: { traces: [trace] } });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.json.stored, 1);
+
+  // 空数组 / 超上限 400
+  assert.equal((await c.send('/api/share/trace', { method: 'POST', body: { traces: [] } })).status, 400);
+  assert.equal(
+    (await c.send('/api/share/trace', { method: 'POST', body: { traces: Array.from({ length: 65 }, () => trace) } })).status,
+    400,
+  );
+
+  // 创建分享 → 三出口验证
+  const created = await c.send('/api/share/create', { method: 'POST', body: { sessionId: 's-trace' } });
+  const url = created.json.url;
+
+  // JSON：apiCalls 合并 + 标题推导（会话默认 title「测试会话」种子是有标题的——这里验证非默认标题优先）
+  const j = await c.send(`${url}/json`);
+  assert.equal(j.json.title, '测试会话'); // seed 有 title
+  assert.equal(j.json.apiCalls.length, 1);
+  const call = j.json.apiCalls[0];
+  assert.equal(call.model, 'gpt-test');
+  assert.equal(call.status, 200);
+  assert.equal(call.durMs, 1234);
+  assert.equal(call.sse.frames, 12);
+  assert.equal(call.sse.usage.prompt_tokens, 100);
+  assert.equal(call.sse.toolCalls[0].name, 'bash');
+  assert.match(call.reqBody, /帮我看看/);
+
+  // HTML：自包含页的渲染由浏览器 JS 完成，服务端断言内联数据与结构存在
+  const html = await c.send(url);
+  assert.match(html.text, /apiCalls/);
+  assert.match(html.text, /gpt-test/);
+  assert.match(html.text, /"durMs":1234/);
+  assert.match(html.text, /API 调用轨迹/); // 渲染函数字符串内联在页面脚本里
+  assert.match(html.text, /renderApiCalls/);
+
+  // Markdown：API 轨迹区
+  const md = await c.send(`${url}/markdown`);
+  assert.match(md.text, /## API 调用轨迹/);
+  assert.match(md.text, /#### API #1/);
+  assert.match(md.text, /tokens: 100→20/);
+});
+
+test('标题自动推导：默认「新会话」时取首条用户消息', async (t) => {
+  const env = tempRoot();
+  seedSession(env.dataDir, 's-title', {
+    id: 's-title',
+    title: '新会话', // chat-lite 默认标题（只有手动重命名才改）
+    createdAt: 1700000000000,
+    messages: [
+      { id: 'm1', role: 'assistant', content: '', createdAt: 1700000000000 },
+      { id: 'm2', role: 'user', content: '  帮我优化下这个函数的性能问题\n它很慢', createdAt: 1700000000001 },
+    ],
+  });
+  const c = await login(t, env);
+  const created = await c.send('/api/share/create', { method: 'POST', body: { sessionId: 's-title' } });
+  const j = await c.send(`${created.json.url}/json`);
+  assert.equal(j.json.title, '帮我优化下这个函数的性能问题 它很慢');
+});
+
+test('trace 上报未登录 401；未知会话丢弃', async (t) => {
+  const env = tempRoot();
+  const { client } = await startHost(t, env);
+  const anon = client();
+  assert.equal(
+    (await anon.send('/api/share/trace', { method: 'POST', body: { traces: [{ sessionId: 'x', at: 1 }] } })).status,
+    401,
+  );
+  // 已登录但 sessionId 为空 → 不落盘
+  const c = await login(t, env);
+  const r = await c.send('/api/share/trace', {
+    method: 'POST',
+    body: { traces: [{ id: 't1', sessionId: '', at: 1, durMs: 5, status: 200, reqBody: null }] },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.stored, 0);
+  assert.equal((await c.send('/api/share/list')).json.items.length, 0);
+});
 
 test('PLITE_SHARE=0 一键禁用', async (t) => {
   const env = tempRoot();

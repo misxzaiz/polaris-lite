@@ -28,11 +28,64 @@
  * - 脱敏 redact.mjs（字段名 + 密钥形态正则）对全部出口硬执行；
  * - token 落盘 <dataDir>/transcript-share/tokens.json（原子写；读取时惰性清理过期项）。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync, statSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { redactJson } from './redact.mjs';
 import { renderShareHtml, renderMarkdown, errorPage } from './render.mjs';
+
+// ---- API 调用轨迹存储（inline：arch 门禁只豁免 server.mjs 的 node:* 依赖） ----
+// 形态：每会话一个 JSONL <dataDir>/transcript-share/traces/<sessionId>.jsonl，追加写天然原子。
+// 护栏：单条 512KB / 单文件 16MB / 单会话保留 200 条（超丢最旧）。
+
+const TRACE_LINE_CAP = 512 * 1024;
+const TRACE_FILE_CAP = 16 * 1024 * 1024;
+const TRACE_MAX_PER_SESSION = 200;
+
+function createTraceStore(dataDir) {
+  const dir = resolve(dataDir, 'transcript-share', 'traces');
+  const fileOf = (sessionId) => join(dir, `${sessionId}.jsonl`);
+
+  function append(sessionId, rec) {
+    if (!ID_RE.test(sessionId) || sessionId === 'unknown') return false;
+    const line = JSON.stringify(rec);
+    if (!line || line.length > TRACE_LINE_CAP) return false;
+    try {
+      const f = fileOf(sessionId);
+      if (existsSync(f) && statSync(f).size > TRACE_FILE_CAP) return false;
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(f, `${line}\n`, 'utf8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function readAll(sessionId) {
+    if (!ID_RE.test(sessionId)) return [];
+    const f = fileOf(sessionId);
+    if (!existsSync(f)) return [];
+    let lines;
+    try {
+      lines = readFileSync(f, 'utf8').split('\n');
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const j = JSON.parse(t);
+        if (j && typeof j === 'object') out.push(j);
+      } catch { /* 损坏行跳过 */ }
+    }
+    if (out.length > TRACE_MAX_PER_SESSION) return out.slice(out.length - TRACE_MAX_PER_SESSION);
+    return out.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  }
+
+  return { append, readAll, dir };
+}
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,192}$/;
@@ -50,6 +103,7 @@ export function createServerPart(options = {}) {
   const chatStoreDir = resolve(dataDir, 'chat-store');
   const shareDir = resolve(dataDir, 'transcript-share');
   const tokensFile = join(shareDir, 'tokens.json');
+  const traces = createTraceStore(dataDir);
   const hardOff = process.env.PLITE_SHARE === '0';
 
   // ---------------- token 存取 ----------------
@@ -98,6 +152,21 @@ export function createServerPart(options = {}) {
     }
   }
 
+  /**
+   * 分享标题自动推导：会话标题若还是默认「新会话」（chat-lite 只有手动重命名），
+   * 从首条用户消息取前 40 字做标题——分享页/链接要有可辨识的名字。
+   */
+  function deriveTitle(session, messages) {
+    const raw = typeof session.title === 'string' ? session.title.trim() : '';
+    if (raw && raw !== '新会话') return raw;
+    const firstUser = messages.find((m) => m?.role === 'user' && typeof m.content === 'string' && m.content.trim());
+    if (firstUser) {
+      const t = firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (t) return t;
+    }
+    return raw || '未命名会话';
+  }
+
   /** 工具卡 → 分享条目（白名单字段，遮蔽未预期字段） */
   function toolEntry(c) {
     const e = {
@@ -116,16 +185,17 @@ export function createServerPart(options = {}) {
   }
 
   /** 会话 JSON → 结构化转录（服务端解释 blocks；分享面只读不回写） */
-  function buildTranscript(record) {
+  function buildTranscript(record, { apiCalls = [] } = {}) {
     const session = record?.session ?? {};
     const messages = Array.isArray(session.messages) ? session.messages : [];
     return {
-      title: typeof session.title === 'string' ? session.title : '未命名会话',
+      title: deriveTitle(session, messages),
       sessionId: String(session.id ?? ''),
       createdAt: Number(session.createdAt) || 0,
       lastActiveAt: Number(session.lastActiveAt) || Number(session.createdAt) || 0,
       version: Number(record?.version) || 0,
       capturedAt: Date.now(),
+      apiCalls,
       messages: messages.map((m, i) => {
         const role = String(m?.role ?? '');
         const item = {
@@ -203,6 +273,53 @@ export function createServerPart(options = {}) {
       if (pathname.startsWith('/api/share/')) {
         const session = getSession?.(req);
         if (!session) return sendJson(401, { error: 'unauthorized', code: 'SESSION_REQUIRED' });
+
+        // ---- API 调用轨迹批量上报（前端 traceTap；每会话 JSONL 追加） ----
+        if (pathname === '/api/share/trace' && req.method === 'POST') {
+          const { tooLarge, body: raw } = await readBody();
+          if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+          let body;
+          try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+          const list = Array.isArray(body?.traces) ? body.traces : [];
+          if (list.length === 0 || list.length > 64) {
+            return sendJson(400, { error: 'traces must be 1~64 items', code: 'BAD_REQUEST' });
+          }
+          let stored = 0;
+          for (const item of list) {
+            if (!item || typeof item !== 'object') continue;
+            const sid = String(item.sessionId ?? '');
+            if (!sid) continue;
+            // 白名单字段（遮蔽未预期字段；脱敏在出口统一做，这里保原便于出口裁剪）
+            const rec = {
+              id: String(item.id ?? '').slice(0, 64),
+              sessionId: sid,
+              at: Number(item.at) || Date.now(),
+              durMs: Number(item.durMs) || 0,
+              status: Number(item.status) || 0,
+              ...(item.model !== undefined ? { model: String(item.model).slice(0, 128) } : {}),
+              ...(item.providerId !== undefined ? { providerId: String(item.providerId).slice(0, 64) } : {}),
+              ...(item.reqBody !== undefined && item.reqBody !== null ? { reqBody: String(item.reqBody).slice(0, 512 * 1024) } : {}),
+              ...(item.reqTruncated ? { reqTruncated: true } : {}),
+              ...(item.sse && typeof item.sse === 'object' ? {
+                sse: {
+                  frames: Number(item.sse.frames) || 0,
+                  textLen: Number(item.sse.textLen) || 0,
+                  ...(item.sse.finishReason !== undefined ? { finishReason: String(item.sse.finishReason).slice(0, 32) } : {}),
+                  ...(item.sse.usage !== undefined ? { usage: item.sse.usage } : {}),
+                  toolCalls: Array.isArray(item.sse.toolCalls)
+                    ? item.sse.toolCalls.slice(0, 16).map((t) => ({ name: String(t?.name ?? '').slice(0, 128), args: String(t?.args ?? '').slice(0, 2000) }))
+                    : [],
+                  first: Array.isArray(item.sse.first) ? item.sse.first.slice(0, 6).map((s) => String(s).slice(0, 320)) : [],
+                  last: Array.isArray(item.sse.last) ? item.sse.last.slice(0, 4).map((s) => String(s).slice(0, 320)) : [],
+                },
+              } : {}),
+              ...(item.resBody !== undefined && item.resBody !== null ? { resBody: String(item.resBody).slice(0, 48 * 1024) } : {}),
+              ...(item.error !== undefined ? { error: String(item.error).slice(0, 500) } : {}),
+            };
+            if (traces.append(sid, rec)) stored += 1;
+          }
+          return sendJson(200, { ok: true, stored });
+        }
 
         if (pathname === '/api/share/create' && req.method === 'POST') {
           const { tooLarge, body: raw } = await readBody();
@@ -297,7 +414,9 @@ export function createServerPart(options = {}) {
       const rec = readChatRecord(entry.sessionId);
       if (!rec || rec.deletedAt) return sendHtml(404, errorPage('会话已删除或不可读'));
 
-      const transcript = redactJson(buildTranscript(rec));
+      // API 调用轨迹并入转录（脱敏在 redactJson 统一执行；reqBody 里可能有密钥形态文本）
+      const apiCalls = traces.readAll(entry.sessionId);
+      const transcript = redactJson(buildTranscript(rec, { apiCalls }));
 
       if (mHtml) return sendHtml(200, renderShareHtml(transcript, { live: !!entry.live }));
       if (mJson) return sendJson(200, transcript);

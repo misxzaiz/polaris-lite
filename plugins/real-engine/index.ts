@@ -184,10 +184,17 @@ async function directFetch(body: unknown, signal?: AbortSignal): Promise<Respons
   });
 }
 
-async function relayFetch(body: unknown, providerId: string, signal?: AbortSignal): Promise<Response> {
+/**
+ * 中继请求。sessionId 供浏览器层取证插件（transcript-share netTap）按会话归因
+ * API 调用轨迹——服务端不消费该 header，纯旁路标记，不改变请求行为。
+ */
+async function relayFetch(body: unknown, providerId: string, sessionId: string, signal?: AbortSignal): Promise<Response> {
   return fetch(RELAY_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(sessionId && sessionId !== 'unknown' ? { 'X-Plite-Session': sessionId } : {}),
+    },
     body: JSON.stringify({ providerId, body }),
     signal,
   });
@@ -596,7 +603,7 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
       // usage 帧主动索取（被动校准与用量归因依赖真实 usage；方言拒绝时拉黑本会话不再发）
       if (!streamOptionsBlocked.has(provider.id)) relayBody.stream_options = { include_usage: true };
 
-      const resp = await relayFetch(relayBody, provider.id, abort.signal);
+      const resp = await relayFetch(relayBody, provider.id, sessionId, abort.signal);
 
       if (!resp.ok) {
         const text = await resp.text().catch(() => '');

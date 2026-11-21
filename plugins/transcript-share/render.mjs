@@ -31,13 +31,52 @@ function toolMd(c) {
   return lines.join('\n');
 }
 
+/** API 调用轨迹条目 → Markdown 片段（模型请求级：请求体/usage/finish/工具分片） */
+function apiCallMd(call, idx) {
+  const lines = [];
+  const usage = call.sse?.usage;
+  const tok = usage && typeof usage === 'object'
+    ? ` · tokens: ${String(usage.prompt_tokens ?? usage.input_tokens ?? '?')}→${String(usage.completion_tokens ?? usage.output_tokens ?? '?')}`
+    : '';
+  const status = call.status ? `HTTP ${call.status}` : '网络失败';
+  lines.push(`#### API #${idx + 1} · ${call.model ?? call.providerId ?? '模型'} · ${status} · ${call.durMs}ms${tok}${call.sse?.finishReason ? ` · finish=${call.sse.finishReason}` : ''}`);
+  if (call.error) lines.push(`> 失败：${call.error}`);
+  if (call.sse) {
+    lines.push(`SSE ${call.sse.frames} 帧 · 文本 ${call.sse.textLen} 字`);
+    if (call.sse.toolCalls?.length) {
+      lines.push('', '模型请求的工具调用（分片拼接）：');
+      for (const t of call.sse.toolCalls) {
+        lines.push(`- \`${t.name}\`：${t.args}`);
+      }
+    }
+  }
+  if (call.reqBody) {
+    lines.push('', '请求体（messages/tools/参数）：', '', '```json', call.reqBody, '```');
+  }
+  if (call.sse?.first?.length) {
+    lines.push('', 'SSE 首帧：', '', '```', call.sse.first.join('\n'), '```');
+  }
+  return lines.join('\n');
+}
+
 /** 转录 JSON → Markdown（AI 可直接读） */
 export function renderMarkdown(t) {
   const lines = [];
   lines.push(`# ${t.title}`);
   lines.push('');
-  lines.push(`> 会话 ${t.sessionId} · ${t.messages.length} 条消息 · 转录于 ${fmtTime(t.capturedAt)} · 内容已脱敏`);
+  const apiCount = Array.isArray(t.apiCalls) ? t.apiCalls.length : 0;
+  lines.push(`> 会话 ${t.sessionId} · ${t.messages.length} 条消息 · ${apiCount} 次模型 API 调用 · 转录于 ${fmtTime(t.capturedAt)} · 内容已脱敏`);
   lines.push('');
+
+  // ---- API 调用轨迹（模型请求级复盘材料） ----
+  if (apiCount > 0) {
+    lines.push('## API 调用轨迹（发给模型的每个请求）');
+    lines.push('');
+    t.apiCalls.forEach((call, i) => {
+      lines.push(apiCallMd(call, i), '');
+    });
+  }
+
   for (const m of t.messages) {
     if (m.role === 'user') {
       lines.push(`## 用户 · ${fmtTime(m.createdAt)}`, '', m.content || '（空）', '');
@@ -97,6 +136,41 @@ function pageScript() {
     if (c.exitCode != null) html += '<div class="tool-out">exit=' + c.exitCode + (c.truncated ? ' &middot; 输出已截断' : '') + '</div>';
     return html + '</div>';
   }
+  function renderApiCall(call, idx) {
+    var u = call.sse && call.sse.usage;
+    var tok = u && typeof u === 'object'
+      ? ' · tokens ' + String(u.prompt_tokens != null ? u.prompt_tokens : (u.input_tokens != null ? u.input_tokens : '?'))
+        + '→' + String(u.completion_tokens != null ? u.completion_tokens : (u.output_tokens != null ? u.output_tokens : '?'))
+      : '';
+    var status = call.status ? 'HTTP ' + call.status : '网络失败';
+    var head = '<div class="apicall"><div class="tool-head"><span class="tool-name">API #' + (idx + 1) + '</span>' +
+      '<span class="tool-status ' + (call.status >= 200 && call.status < 300 ? 'done' : 'error') + '">' + status + '</span>' +
+      '<span class="dur">' + (call.durMs || 0) + 'ms</span>' +
+      '<span class="api-model">' + esc(call.model || call.providerId || '') + '</span>' +
+      (call.sse && call.sse.finishReason ? '<span class="dur">finish=' + esc(call.sse.finishReason) + '</span>' : '') +
+      (tok ? '<span class="dur">' + tok + '</span>' : '') + '</div>';
+    var body = '';
+    if (call.error) body += '<div class="tool-out err">' + esc(call.error) + '</div>';
+    if (call.sse) {
+      body += '<div class="tool-out">SSE ' + call.sse.frames + ' 帧 · 文本 ' + call.sse.textLen + ' 字' +
+        (call.sse.toolCalls && call.sse.toolCalls.length ? ' · 模型请求工具 ' + call.sse.toolCalls.length + ' 个' : '') + '</div>';
+      for (var i = 0; i < (call.sse.toolCalls || []).length; i++) {
+        var tc = call.sse.toolCalls[i];
+        body += '<div class="tool-out"><b>' + esc(tc.name) + '</b>(' + esc(tc.args) + ')</div>';
+      }
+    }
+    if (call.reqBody) body += '<details class="think"><summary>请求体（messages/tools）</summary><div class="body">' + esc(call.reqBody) + '</div></details>';
+    if (call.sse && call.sse.first && call.sse.first.length) {
+      body += '<details class="think"><summary>SSE 首帧样本</summary><div class="body">' + esc(call.sse.first.join('\\n')) + '</div></details>';
+    }
+    return head + body + '</div>';
+  }
+  function renderApiCalls(calls) {
+    if (!calls || !calls.length) return '';
+    var html = '<div class="api-section"><div class="section-title">API 调用轨迹 · ' + calls.length + ' 次模型请求</div>';
+    for (var i = 0; i < calls.length; i++) html += renderApiCall(calls[i], i);
+    return html + '</div>';
+  }
   function renderMsg(m) {
     var who = m.role === 'user' ? '用户' : m.role === 'assistant' ? 'AI' : '[工具] ' + (m.tool ? m.tool.name : m.role);
     var html = '<div class="msg ' + esc(m.role) + '"><div class="who">' + who + '<span class="time">' + fmtTime(m.createdAt) + '</span></div>';
@@ -118,12 +192,13 @@ function pageScript() {
   }
   function headHtml(d) {
     var live = META.live ? ' · <span class="live-dot"></span><b id="live-badge">实时中</b>' : '';
+    var apiCount = d.apiCalls ? d.apiCalls.length : 0;
     return '<header><h1>' + esc(d.title) + '</h1><div class="meta">' + d.messages.length +
-      ' 条消息 · 转录于 ' + fmtTime(d.capturedAt) + live +
+      ' 条消息 · ' + apiCount + ' 次模型 API 调用 · 转录于 ' + fmtTime(d.capturedAt) + live +
       '</div><div class="toolbar"><a href="./json">JSON</a><a href="./markdown">Markdown</a><button id="refresh-btn">刷新</button></div></header>';
   }
   function rerender(d) {
-    root.innerHTML = headHtml(d) + d.messages.map(renderMsg).join('') +
+    root.innerHTML = headHtml(d) + renderApiCalls(d.apiCalls) + d.messages.map(renderMsg).join('') +
       '<div class="foot">transcript-share · 只读分享 · 内容已脱敏</div>';
   }
   rerender(DATA);
@@ -131,14 +206,17 @@ function pageScript() {
   if (META.live) {
     var lastCount = DATA.messages.length;
     var lastVersion = DATA.version;
+    var lastApiCount = DATA.apiCalls ? DATA.apiCalls.length : 0;
     var timer = setInterval(function () {
       fetch(location.pathname + '/json', { cache: 'no-store' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) {
           if (!j) return;
-          if (j.messages.length !== lastCount || j.version !== lastVersion) {
+          var jc = j.apiCalls ? j.apiCalls.length : 0;
+          if (j.messages.length !== lastCount || j.version !== lastVersion || jc !== lastApiCount) {
             lastCount = j.messages.length;
             lastVersion = j.version;
+            lastApiCount = jc;
             rerender(j);
           }
         })
@@ -195,12 +273,19 @@ export function renderShareHtml(t, meta) {
   details.think summary { font-size: 12px; color: #888; cursor: pointer; }
   details.think .body { font-size: 13px; white-space: pre-wrap; margin: 8px 0; color: #555; }
   .notice { font-size: 12px; color: #999; margin: 6px 0; }
+  .api-section { margin: 4px 0 18px; }
+  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #888; margin: 10px 0 6px; }
+  .apicall { margin: 8px 0; border: 1px solid #d8d0e8; border-radius: 8px; background: #fbfaff; font-size: 13px; overflow: hidden; }
+  .api-model { font-family: ui-monospace, monospace; font-size: 11px; color: #6b4fa0; }
+  .tool-out b { color: #1a56b0; }
   .foot { margin-top: 30px; padding-top: 12px; border-top: 1px solid #e3e3e3; font-size: 11px; color: #aaa; text-align: center; }
   .toolbar { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
   .toolbar a, .toolbar button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid #ddd; background: #fff; color: #555; text-decoration: none; cursor: pointer; }
   @media (prefers-color-scheme: dark) {
     body { background: #141517; color: #e6e6e6; }
     header { border-color: #2c2c2c; }
+    .apicall { background: #1a181e; border-color: #36304a; }
+    .api-model { color: #a88fd4; }
     .user .bubble { background: #1d2b45; }
     .assistant .bubble { background: #1c1c1e; border-color: #2c2c2c; }
     .tool { background: #1c1c1e; border-color: #2c2c2c; }

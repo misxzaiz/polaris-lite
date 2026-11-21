@@ -11,6 +11,7 @@
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import { SharePanel } from './Panel';
+import { installTraceTap } from './traceTap';
 import './share.css';
 
 const DESCRIPTOR = {
@@ -121,6 +122,8 @@ export const transcriptSharePlugin: LitePlugin = {
     api.registerCapability.register('cap.tool.transcript', createTranscriptHandler());
     // 迟到广播兜底（loop 晚于本插件装配时也能发现工具）
     api.emit('tool-registered', { cap: 'cap.tool.transcript', name: 'transcript' });
+    // API 调用轨迹取证：拦截 /api/model-relay，按 sessionId 批量上报服务端（分享转录数据源）
+    installTraceTap();
   },
 };
 
