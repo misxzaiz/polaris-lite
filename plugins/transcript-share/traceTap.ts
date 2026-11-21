@@ -15,6 +15,7 @@
  * 2. 不阻塞主流程：旁路分支绝不 await 主分支，上报失败静默；
  * 3. 不存密钥：cookie/authorization 脱敏；请求体经 redact（与 server 半边同口径双保险）。
  */
+import { syncTurnsForSession } from './turnsBridge';
 
 /** 请求体留存量（messages 全文对复盘最有价值，给足；超长截断标记） */
 const REQ_LIMIT = 256 * 1024;
@@ -48,18 +49,39 @@ export interface TraceRecord {
     textLen: number;
     finishReason?: string;
     usage?: unknown;
+    /** 响应侧模型名（SSE 帧回传；与请求 body.model 可能不同——网关改写时可见） */
+    responseModel?: string;
+    /** SSE 中间 error 帧（UPSTREAM_DISCONNECTED 等，最多 4 条） */
+    errors?: string[];
+    /** 无 usage 但有帧 → 引擎侧按字符估算（estimated 标记的推断依据） */
+    estimated?: true;
     toolCalls: TraceToolCall[];
     first: string[];
     last: string[];
   };
+  /** 诊断相关响应头（x-ratelimit 系 / retry-after / content-type；诊断 429 与限流） */
+  resHeaders?: Record<string, string>;
   /** 非流式响应体（截断保留） */
   resBody?: string | null;
   error?: string;
 }
 
+/** 编排事件（live-event 镜像捕获；delta/reasoning 噪声已在前端过滤） */
+export interface TraceEvent {
+  sessionId: string;
+  kind: string;
+  payload: unknown;
+  at: number;
+}
+
 const queue: TraceRecord[] = [];
+const eventQueue: TraceEvent[] = [];
 let installed = false;
 let flushing = false;
+
+/** 编排事件噪声过滤：delta/reasoning 高频且内容已在转录消息里 */
+const EVENT_SKIP = new Set(['message.delta', 'message.reasoning']);
+const EVENT_QUEUE_MAX = 512;
 
 function genId(at: number): string {
   return `${at.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -67,6 +89,17 @@ function genId(at: number): string {
 
 function cap(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+/** 诊断相关响应头（脱敏思路：只挑白名单键，cookie/authorization 天然不入） */
+function pickResHeaders(headers: Headers): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  const wanted = ['content-type', 'retry-after'];
+  for (const [k, v] of headers.entries()) {
+    const lk = k.toLowerCase();
+    if (wanted.includes(lk) || lk.startsWith('x-ratelimit-')) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /* ---------------- SSE 边读边析（与 ai-events/netTap 同构，独立实现避免跨插件依赖） ---------------- */
@@ -81,6 +114,8 @@ async function collectSse(stream: ReadableStream<Uint8Array>) {
   let truncated = false;
   let finishReason = '';
   let usage: unknown;
+  let responseModel: string | undefined;
+  const errors: string[] = [];
   const first: string[] = [];
   const ring: string[] = [];
   const tools = new Map<number, { name: string; args: string }>();
@@ -99,9 +134,13 @@ async function collectSse(stream: ReadableStream<Uint8Array>) {
     if (ring.length > 4) ring.shift();
     try {
       const j = JSON.parse(data) as {
+        model?: unknown;
+        error?: unknown;
         choices?: { finish_reason?: string; delta?: { content?: string; tool_calls?: { index?: number; function?: { name?: string; arguments?: string } }[] } }[];
         usage?: unknown;
       };
+      if (typeof j.model === 'string' && j.model) responseModel = j.model;
+      if (j.error !== undefined && errors.length < 4) errors.push(cap(JSON.stringify(j.error), 320));
       const choice = j.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const delta = choice?.delta;
@@ -139,6 +178,9 @@ async function collectSse(stream: ReadableStream<Uint8Array>) {
       textLen,
       ...(finishReason ? { finishReason } : {}),
       ...(usage !== undefined ? { usage } : {}),
+      ...(responseModel ? { responseModel } : {}),
+      ...(errors.length ? { errors } : {}),
+      ...(usage === undefined && frames > 0 ? { estimated: true as const } : {}),
       toolCalls: [...tools.values()].map((t) => ({ name: t.name, args: cap(t.args, 2000) })),
       first,
       last: ring,
@@ -190,31 +232,60 @@ function enqueue(rec: TraceRecord): void {
   void flush();
 }
 
+function enqueueEvent(ev: TraceEvent): void {
+  if (EVENT_SKIP.has(ev.kind)) return;
+  eventQueue.push(ev);
+  if (eventQueue.length > EVENT_QUEUE_MAX) eventQueue.splice(0, eventQueue.length - EVENT_QUEUE_MAX);
+}
+
 async function flush(): Promise<void> {
-  if (flushing || queue.length === 0) return;
+  if (flushing || (queue.length === 0 && eventQueue.length === 0)) return;
   flushing = true;
   const batch = queue.splice(0, queue.length);
+  const eventsBySession = new Map<string, TraceEvent[]>();
+  for (const ev of eventQueue.splice(0, eventQueue.length)) {
+    const list = eventsBySession.get(ev.sessionId) ?? [];
+    list.push(ev);
+    eventsBySession.set(ev.sessionId, list);
+  }
   try {
-    const res = await fetch('/api/share/trace', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ traces: batch }),
-    });
-    if (!res.ok && (res.status === 401 || res.status === 403 || res.status === 404)) {
+    let dead = false;
+    if (batch.length > 0) {
+      const res = await fetch('/api/share/trace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ traces: batch }),
+      });
+      if (!res.ok && (res.status === 401 || res.status === 403 || res.status === 404)) dead = true;
+    }
+    for (const [sid, list] of eventsBySession) {
+      // 上限对齐 chat-store LIVE_EVENT_BATCH_MAX×4（分批语义由服务端护栏兜底）
+      for (let i = 0; i < list.length; i += 256) {
+        const res = await fetch('/api/share/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ sessionId: sid, events: list.slice(i, i + 256) }),
+        });
+        if (!res.ok && (res.status === 401 || res.status === 403 || res.status === 404)) dead = true;
+      }
+    }
+    if (dead) {
       // 未登录/插件禁用：停止取证上报（面板会话本身也要求登录，语义一致）
       installed = false;
       queue.length = 0;
+      eventQueue.length = 0;
     }
   } catch {
     /* 网络闪断：本批丢弃（不回灌，防重复）；后续请求会再触发 flush */
   } finally {
     flushing = false;
-    if (queue.length > 0) setTimeout(() => void flush(), FLUSH_MS);
+    if (queue.length > 0 || eventQueue.length > 0) setTimeout(() => void flush(), FLUSH_MS);
   }
 }
 
-/** 拦截器：只关心 /api/model-relay（模型请求轨迹）；其余原样放行 */
+/** 拦截器：/api/model-relay（模型请求轨迹）+ /api/chat/sessions/:id/live-event（编排事件）；其余原样放行 */
 export function installTraceTap(): void {
   if (installed || typeof window === 'undefined') return;
   installed = true;
@@ -237,6 +308,9 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
   } catch {
     return native(req);
   }
+  // 编排事件镜像捕获（agent-loop → chat-store 的批量 POST；服务端只扇出不落盘）
+  const mLive = url.pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/live-event$/);
+  if (mLive && req.method === 'POST') return tapLiveEvent(native, req, mLive[1]);
   if (url.pathname !== '/api/model-relay' || req.method !== 'POST') return native(req);
 
   const at = Date.now();
@@ -293,12 +367,14 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
   const durMs = Math.round(performance.now() - t0);
   const ct = res.headers.get('content-type') ?? '';
   const isStream = ct.includes('text/event-stream') && !!res.body;
+  const resHeaders = pickResHeaders(res.headers);
 
   const base = {
     id, sessionId, at, durMs,
     status: res.status,
     ...(providerId ? { providerId } : {}),
     ...(model ? { model } : {}),
+    ...(resHeaders ? { resHeaders } : {}),
     reqBody: upstreamBody !== undefined ? JSON.stringify(upstreamBody) : reqText,
     reqTruncated,
   };
@@ -328,4 +404,30 @@ async function tap(native: typeof window.fetch, input: RequestInfo | URL, init?:
     }
   })();
   return res;
+}
+
+/** 编排事件镜像捕获：读 live-event 批量 POST 的 body（clone 旁路），过滤 delta 噪声后入队上报。
+ *  服务端（chat-store）只扇出不落盘——这条旁路是编排时间线（tool.calls 完整入参/stream.retry/
+ *  审批决策/context 压缩摘要）进分享转录的唯一通道。绝不改变原请求行为。 */
+async function tapLiveEvent(native: typeof window.fetch, req: Request, sessionId: string): Promise<Response> {
+  // 该会话有活动：顺带把 ai-events 的逐跳轮次同步到服务端（60s 节流，失败静默）
+  void syncTurnsForSession(sessionId);
+  let clone: Request | null = null;
+  try { clone = req.clone(); } catch { clone = null; }
+  if (clone) {
+    void (async () => {
+      try {
+        const text = await clone!.text();
+        const j = JSON.parse(text) as { events?: { kind?: unknown; payload?: unknown }[] };
+        const list = Array.isArray(j.events) ? j.events : [];
+        const at = Date.now();
+        for (const e of list) {
+          if (!e || typeof e.kind !== 'string') continue;
+          enqueueEvent({ sessionId, kind: e.kind, payload: e.payload ?? {}, at });
+        }
+        if (list.length > 0) void flush();
+      } catch { /* 非 JSON/读失败：跳过，不阻断 */ }
+    })();
+  }
+  return native(req);
 }

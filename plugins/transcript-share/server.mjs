@@ -32,27 +32,23 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, appendF
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { redactJson } from './redact.mjs';
-import { renderShareHtml, renderMarkdown, errorPage } from './render.mjs';
+import { renderShareHtml, renderHumanMarkdown, buildAiAnalysis, errorPage } from './render.mjs';
 
-// ---- API 调用轨迹存储（inline：arch 门禁只豁免 server.mjs 的 node:* 依赖） ----
-// 形态：每会话一个 JSONL <dataDir>/transcript-share/traces/<sessionId>.jsonl，追加写天然原子。
-// 护栏：单条 512KB / 单文件 16MB / 单会话保留 200 条（超丢最旧）。
+// ---- 采集面存储（inline：arch 门禁只豁免 server.mjs 的 node:* 依赖） ----
+// 形态：每会话一个 JSONL <dataDir>/transcript-share/<dirName>/<sessionId>.jsonl，追加写天然原子。
+// 护栏按面分别设置（createTraceStore 参数）。
 
-const TRACE_LINE_CAP = 512 * 1024;
-const TRACE_FILE_CAP = 16 * 1024 * 1024;
-const TRACE_MAX_PER_SESSION = 200;
-
-function createTraceStore(dataDir) {
-  const dir = resolve(dataDir, 'transcript-share', 'traces');
+function createTraceStore(dataDir, { dirName, lineCap = 512 * 1024, fileCap = 16 * 1024 * 1024, maxPerSession = 200 } = {}) {
+  const dir = resolve(dataDir, 'transcript-share', dirName);
   const fileOf = (sessionId) => join(dir, `${sessionId}.jsonl`);
 
   function append(sessionId, rec) {
     if (!ID_RE.test(sessionId) || sessionId === 'unknown') return false;
     const line = JSON.stringify(rec);
-    if (!line || line.length > TRACE_LINE_CAP) return false;
+    if (!line || line.length > lineCap) return false;
     try {
       const f = fileOf(sessionId);
-      if (existsSync(f) && statSync(f).size > TRACE_FILE_CAP) return false;
+      if (existsSync(f) && statSync(f).size > fileCap) return false;
       mkdirSync(dir, { recursive: true });
       appendFileSync(f, `${line}\n`, 'utf8');
       return true;
@@ -80,7 +76,7 @@ function createTraceStore(dataDir) {
         if (j && typeof j === 'object') out.push(j);
       } catch { /* 损坏行跳过 */ }
     }
-    if (out.length > TRACE_MAX_PER_SESSION) return out.slice(out.length - TRACE_MAX_PER_SESSION);
+    if (out.length > maxPerSession) return out.slice(out.length - maxPerSession);
     return out.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   }
 
@@ -103,7 +99,10 @@ export function createServerPart(options = {}) {
   const chatStoreDir = resolve(dataDir, 'chat-store');
   const shareDir = resolve(dataDir, 'transcript-share');
   const tokensFile = join(shareDir, 'tokens.json');
-  const traces = createTraceStore(dataDir);
+  // 三个采集面：模型 API 轨迹 / 编排事件时间线（live-event 镜像）/ 逐跳轮次（ai-events TurnRecord）
+  const traces = createTraceStore(dataDir, { dirName: 'traces' });
+  const events = createTraceStore(dataDir, { dirName: 'events', lineCap: 256 * 1024, fileCap: 8 * 1024 * 1024, maxPerSession: 2000 });
+  const turns = createTraceStore(dataDir, { dirName: 'turns', lineCap: 256 * 1024, fileCap: 8 * 1024 * 1024, maxPerSession: 500 });
   const hardOff = process.env.PLITE_SHARE === '0';
 
   // ---------------- token 存取 ----------------
@@ -185,7 +184,7 @@ export function createServerPart(options = {}) {
   }
 
   /** 会话 JSON → 结构化转录（服务端解释 blocks；分享面只读不回写） */
-  function buildTranscript(record, { apiCalls = [] } = {}) {
+  function buildTranscript(record, { apiCalls = [], events = [], turns = [] } = {}) {
     const session = record?.session ?? {};
     const messages = Array.isArray(session.messages) ? session.messages : [];
     return {
@@ -196,6 +195,10 @@ export function createServerPart(options = {}) {
       version: Number(record?.version) || 0,
       capturedAt: Date.now(),
       apiCalls,
+      /** 编排事件时间线（live-event 镜像捕获；delta/reasoning 噪声已在前端过滤） */
+      events,
+      /** 逐跳轮次（ai-events TurnRecord：steps/approvalWaitedMs/outcome） */
+      turns,
       messages: messages.map((m, i) => {
         const role = String(m?.role ?? '');
         const item = {
@@ -306,6 +309,9 @@ export function createServerPart(options = {}) {
                   textLen: Number(item.sse.textLen) || 0,
                   ...(item.sse.finishReason !== undefined ? { finishReason: String(item.sse.finishReason).slice(0, 32) } : {}),
                   ...(item.sse.usage !== undefined ? { usage: item.sse.usage } : {}),
+                  ...(item.sse.responseModel !== undefined ? { responseModel: String(item.sse.responseModel).slice(0, 128) } : {}),
+                  ...(Array.isArray(item.sse.errors) ? { errors: item.sse.errors.slice(0, 4).map((s) => String(s).slice(0, 320)) } : {}),
+                  ...(item.sse.estimated === true ? { estimated: true } : {}),
                   toolCalls: Array.isArray(item.sse.toolCalls)
                     ? item.sse.toolCalls.slice(0, 16).map((t) => ({ name: String(t?.name ?? '').slice(0, 128), args: String(t?.args ?? '').slice(0, 2000) }))
                     : [],
@@ -313,12 +319,81 @@ export function createServerPart(options = {}) {
                   last: Array.isArray(item.sse.last) ? item.sse.last.slice(0, 4).map((s) => String(s).slice(0, 320)) : [],
                 },
               } : {}),
+              ...(item.resHeaders && typeof item.resHeaders === 'object' ? {
+                resHeaders: Object.fromEntries(Object.entries(item.resHeaders).slice(0, 16).map(([k, v]) => [String(k).slice(0, 64), String(v).slice(0, 256)])),
+              } : {}),
               ...(item.resBody !== undefined && item.resBody !== null ? { resBody: String(item.resBody).slice(0, 48 * 1024) } : {}),
               ...(item.error !== undefined ? { error: String(item.error).slice(0, 500) } : {}),
             };
             if (traces.append(sid, rec)) stored += 1;
           }
           return sendJson(200, { ok: true, stored });
+        }
+
+        // ---- 编排事件时间线上报（traceTap 从 live-event 镜像捕获；delta 噪声前端已滤） ----
+        if (pathname === '/api/share/events' && req.method === 'POST') {
+          const { tooLarge, body: raw } = await readBody();
+          if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+          let body;
+          try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+          const sessionId = String(body?.sessionId ?? '');
+          const list = Array.isArray(body?.events) ? body.events : [];
+          if (!sessionId) return sendJson(400, { error: 'sessionId required', code: 'BAD_REQUEST' });
+          if (list.length === 0 || list.length > 256) {
+            return sendJson(400, { error: 'events must be 1~256 items', code: 'BAD_REQUEST' });
+          }
+          let stored = 0;
+          for (const e of list) {
+            if (!e || typeof e.kind !== 'string') continue;
+            const rec = {
+              kind: e.kind.slice(0, 64),
+              payload: e.payload ?? {},
+              at: Number(e.at) || Date.now(),
+            };
+            if (events.append(sessionId, rec)) stored += 1;
+          }
+          return sendJson(200, { ok: true, stored });
+        }
+
+        // ---- 逐跳轮次上报（ai-events TurnRecord，浏览器 IndexedDB → 服务端） ----
+        if (pathname === '/api/share/turns' && req.method === 'POST') {
+          const { tooLarge, body: raw } = await readBody();
+          if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+          let body;
+          try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+          const sessionId = String(body?.sessionId ?? '');
+          const list = Array.isArray(body?.turns) ? body.turns : [];
+          if (!sessionId) return sendJson(400, { error: 'sessionId required', code: 'BAD_REQUEST' });
+          if (list.length === 0 || list.length > 64) {
+            return sendJson(400, { error: 'turns must be 1~64 items', code: 'BAD_REQUEST' });
+          }
+          let stored = 0;
+          for (const turn of list) {
+            if (!turn || typeof turn !== 'object') continue;
+            const rec = { kind: 'turn', turnId: String(turn.turnId ?? '').slice(0, 80), payload: turn, at: Number(turn.startedAt) || Date.now() };
+            if (turns.append(sessionId, rec)) stored += 1;
+          }
+          return sendJson(200, { ok: true, stored });
+        }
+
+        // ---- 本地导出（不创建分享链接；会话门禁）----
+        if (pathname === '/api/share/export' && req.method === 'GET') {
+          const url = new URL(req.url, 'http://x');
+          const sessionId = String(url.searchParams.get('sessionId') ?? '');
+          const format = String(url.searchParams.get('format') ?? 'human');
+          if (!ID_RE.test(sessionId)) return sendJson(400, { error: 'invalid sessionId', code: 'BAD_REQUEST' });
+          const rec = readChatRecord(sessionId);
+          if (!rec || rec.deletedAt) return sendJson(404, { error: 'session not found', code: 'SESSION_NOT_FOUND' });
+          const transcript = redactJson(buildTranscript(rec, {
+            apiCalls: traces.readAll(sessionId),
+            events: events.readAll(sessionId),
+            turns: turns.readAll(sessionId).map((t) => t.payload ?? t),
+          }));
+          if (format === 'ai') {
+            return sendJson(200, buildAiAnalysis(transcript));
+          }
+          res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' });
+          return res.end(renderHumanMarkdown(transcript));
         }
 
         if (pathname === '/api/share/create' && req.method === 'POST') {
@@ -399,7 +474,8 @@ export function createServerPart(options = {}) {
       const mHtml = pathname.match(/^\/share\/([A-Za-z0-9_-]{16,192})$/);
       const mJson = pathname.match(/^\/share\/([A-Za-z0-9_-]{16,192})\/json$/);
       const mMd = pathname.match(/^\/share\/([A-Za-z0-9_-]{16,192})\/markdown$/);
-      const token = mHtml?.[1] ?? mJson?.[1] ?? mMd?.[1];
+      const mAi = pathname.match(/^\/share\/([A-Za-z0-9_-]{16,192})\/ai$/);
+      const token = mHtml?.[1] ?? mJson?.[1] ?? mMd?.[1] ?? mAi?.[1];
       if (!token) return sendJson(404, { error: 'not found' });
 
       // 只读面不过 sweep：过期判定要先行（410），删留在判定之后
@@ -414,15 +490,24 @@ export function createServerPart(options = {}) {
       const rec = readChatRecord(entry.sessionId);
       if (!rec || rec.deletedAt) return sendHtml(404, errorPage('会话已删除或不可读'));
 
-      // API 调用轨迹并入转录（脱敏在 redactJson 统一执行；reqBody 里可能有密钥形态文本）
-      const apiCalls = traces.readAll(entry.sessionId);
-      const transcript = redactJson(buildTranscript(rec, { apiCalls }));
+      // 三个采集面并入转录（脱敏在 redactJson 统一执行；reqBody 里可能有密钥形态文本）
+      const sid = entry.sessionId;
+      const transcript = redactJson(buildTranscript(rec, {
+        apiCalls: traces.readAll(sid),
+        events: events.readAll(sid),
+        turns: turns.readAll(sid).map((t) => t.payload ?? t),
+      }));
 
       if (mHtml) return sendHtml(200, renderShareHtml(transcript, { live: !!entry.live }));
       if (mJson) return sendJson(200, transcript);
       if (mMd) {
+        // 个人阅读版（做减法：叙事流 + 一行式工具 + API 一览表）
         res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(renderMarkdown(transcript));
+        return res.end(renderHumanMarkdown(transcript));
+      }
+      if (mAi) {
+        // AI 分析版（结构化 + 分析任务书 + 派生指标）
+        return sendJson(200, buildAiAnalysis(transcript));
       }
       return sendJson(404, { error: 'not found' });
     } catch (e) {

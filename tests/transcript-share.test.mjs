@@ -197,9 +197,109 @@ test('三出口：HTML 自包含 / JSON 结构化 / Markdown', async (t) => {
 
   const md = await c.send(`${url}/markdown`);
   assert.equal(md.status, 200);
+  // 个人阅读版：叙事流 + 工具一行式 + API 一览表（无 JSON 代码块/无 stdout 全文）
   assert.match(md.text, /# 测试会话/);
-  assert.match(md.text, /```sh\nls -la\n```/);
-  assert.match(md.text, /file1\.txt/);
+  assert.match(md.text, /\[工具\] bash `ls -la` \[完成\] 120ms/);
+  assert.doesNotMatch(md.text, /```sh/);
+  assert.doesNotMatch(md.text, /file1\.txt/);
+
+  // AI 分析版（/ai）：结构化 schema + 任务书 + 派生 stats
+  const ai = await c.send(`${url}/ai`);
+  assert.equal(ai.status, 200);
+  assert.equal(ai.json.schema, 'plite-transcript-ai-v1');
+  assert.ok(ai.json.analysisGuide?.checklist?.length > 0);
+  assert.equal(ai.json.stats.messages, 2);
+  assert.equal(ai.json.stats.toolCalls, 1);
+  assert.ok(Array.isArray(ai.json.messages) && Array.isArray(ai.json.apiCalls));
+  assert.ok(Array.isArray(ai.json.events) && Array.isArray(ai.json.turns));
+});
+
+// ---------------------------------------------------------------- 本地导出端点
+
+test('本地导出 /api/share/export：human/ai 双形式，会话门禁', async (t) => {
+  const env = tempRoot();
+  seedSession(env.dataDir, 's-export', mkSession('s-export', [
+    { id: 'm1', role: 'user', content: '第一条消息内容', createdAt: 1700000000000 },
+    { id: 'm2', role: 'assistant', content: '好的', createdAt: 1700000000001 },
+  ]));
+  const { client } = await startHost(t, env);
+  const anon = client();
+  assert.equal((await anon.send('/api/share/export?sessionId=s-export&format=human')).status, 401);
+
+  const c = await login(t, env);
+  const human = await c.send('/api/share/export?sessionId=s-export&format=human');
+  assert.equal(human.status, 200);
+  assert.match(human.text, /# 测试会话/);
+  assert.match(human.text, /\*\*用户\*\*/);
+  assert.match(human.text, /第一条消息内容/);
+
+  const ai = await c.send('/api/share/export?sessionId=s-export&format=ai');
+  assert.equal(ai.status, 200);
+  assert.equal(ai.json.schema, 'plite-transcript-ai-v1');
+  assert.equal(ai.json.stats.messages, 2);
+
+  // 未知会话 404 / 非法 sessionId 400
+  assert.equal((await c.send('/api/share/export?sessionId=nope&format=human')).status, 404);
+  assert.equal((await c.send('/api/share/export?sessionId=..%2F..%2Fetc&format=human')).status, 400);
+});
+
+// ---------------------------------------------------------------- events / turns 上报
+
+test('events/turns 上报 → 并入转录 events/turns', async (t) => {
+  const env = tempRoot();
+  seedSession(env.dataDir, 's-ev', mkSession('s-ev', [
+    { id: 'm1', role: 'user', content: '跑个命令', createdAt: 1700000000000 },
+    { id: 'm2', role: 'assistant', content: '', createdAt: 1700000000001 },
+  ]));
+  const c = await login(t, env);
+
+  // events：tool.calls 完整入参 / 审批决策 / loop.done
+  const r1 = await c.send('/api/share/events', {
+    method: 'POST',
+    body: {
+      sessionId: 's-ev',
+      events: [
+        { kind: 'tool.calls', payload: { turn: 1, toolCalls: [{ id: 'c1', name: 'bash', arguments: '{"command":"ls"}' }] }, at: 1700000000100 },
+        { kind: 'tool.approval.resolved', payload: { callId: 'c1', decision: 'once' }, at: 1700000000200 },
+        { kind: 'stream.retry', payload: { attempt: 1, maxAttempts: 3, chars: 12 }, at: 1700000000300 },
+        { kind: 'loop.done', payload: { turns: 2 }, at: 1700000000400 },
+      ],
+    },
+  });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.json.stored, 4);
+
+  // turns：TurnRecord 摘要
+  const r2 = await c.send('/api/share/turns', {
+    method: 'POST',
+    body: {
+      sessionId: 's-ev',
+      turns: [{ turnId: 't1', sessionId: 's-ev', startedAt: 1700000000000, endedAt: 1700000000500, outcome: 'done', steps: [{ index: 1, ms: 500, finishReason: 'tool_calls', textLen: 4 }], tools: [{ callId: 'c1', name: 'bash', args: { command: 'ls' } }] }],
+    },
+  });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.json.stored, 1);
+
+  // 空数组/超上限 400
+  assert.equal((await c.send('/api/share/events', { method: 'POST', body: { sessionId: 's-ev', events: [] } })).status, 400);
+  assert.equal((await c.send('/api/share/turns', { method: 'POST', body: { sessionId: 's-ev', turns: Array.from({ length: 65 }, (_, i) => ({ turnId: `t${i}` })) } })).status, 400);
+
+  // 转录（/json）并入 events/turns；AI 版 stats 派生生效
+  const created = await c.send('/api/share/create', { method: 'POST', body: { sessionId: 's-ev' } });
+  const j = await c.send(`${created.json.url}/json`);
+  assert.equal(j.json.events.length, 4);
+  assert.equal(j.json.turns.length, 1);
+  assert.equal(j.json.events.find((e) => e.kind === 'tool.calls').payload.toolCalls[0].arguments, '{"command":"ls"}');
+
+  const ai = await c.send(`${created.json.url}/ai`);
+  assert.equal(ai.json.stats.retries, 1);
+  assert.equal(ai.json.stats.compactions, 0);
+  assert.equal(ai.json.stats.approvals.once, 1);
+  assert.equal(ai.json.turns.length, 1);
+
+  // human 版：重试与轮次进头部摘要
+  const md = await c.send(`${created.json.url}/markdown`);
+  assert.match(md.text, /1 次流重试/);
 });
 
 // ---------------------------------------------------------------- 脱敏
@@ -340,11 +440,13 @@ test('trace 上报 → 分享三出口含 apiCalls；标题自动推导', async 
   assert.match(html.text, /API 调用轨迹/); // 渲染函数字符串内联在页面脚本里
   assert.match(html.text, /renderApiCalls/);
 
-  // Markdown：API 轨迹区
+  // Markdown：个人版一览表行（tokens 汇总）；AI 版含完整请求体
   const md = await c.send(`${url}/markdown`);
-  assert.match(md.text, /## API 调用轨迹/);
-  assert.match(md.text, /#### API #1/);
-  assert.match(md.text, /tokens: 100→20/);
+  assert.match(md.text, /\| 1 \| .* \| gpt-test \| 1234ms \| 100→20 \| stop \|/);
+  const aiFull = await c.send(`${url}/ai`);
+  assert.equal(aiFull.json.apiCalls.length, 1);
+  assert.match(aiFull.json.apiCalls[0].reqBody, /帮我看看/);
+  assert.equal(aiFull.json.apiCalls[0].sse.toolCalls[0].name, 'bash');
 });
 
 test('标题自动推导：默认「新会话」时取首条用户消息', async (t) => {

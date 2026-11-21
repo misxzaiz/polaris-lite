@@ -20,87 +20,200 @@ function fmtTime(ts) {
 const ST_ICONS = { done: '[完成]', error: '[失败]', denied: '[拒绝]' };
 const stIcon = (st) => ST_ICONS[st] ?? '[进行中]';
 
-/** 工具条目 → Markdown 片段 */
-function toolMd(c) {
-  const lines = [];
-  lines.push(`### [工具] ${c.name} ${stIcon(c.status)}${c.durationMs !== undefined ? ` (${c.durationMs}ms)` : ''}`);
-  if (c.command) lines.push('```sh', c.command, '```');
-  if (c.exitCode !== undefined) lines.push(`exit=${c.exitCode}${c.truncated ? ' · 输出已截断' : ''}`);
-  if (c.stdout) lines.push('```', c.stdout, '```');
-  if (c.stderr) lines.push('```', c.stderr, '```');
-  return lines.join('\n');
+/** 工具卡一行式（个人阅读版）：名称/命令摘要/状态/耗时 */
+function toolOneLine(c) {
+  const parts = [`[工具] ${c.name}`];
+  if (c.command) parts.push(`\`${String(c.command).replace(/\n+/g, ' ').slice(0, 60)}\``);
+  parts.push(stIcon(c.status));
+  if (c.durationMs !== undefined) parts.push(`${c.durationMs}ms`);
+  if (c.exitCode !== undefined && c.exitCode !== 0) parts.push(`exit=${c.exitCode}`);
+  return `  ${parts.join(' ')}`;
 }
 
-/** API 调用轨迹条目 → Markdown 片段（模型请求级：请求体/usage/finish/工具分片） */
-function apiCallMd(call, idx) {
-  const lines = [];
-  const usage = call.sse?.usage;
-  const tok = usage && typeof usage === 'object'
-    ? ` · tokens: ${String(usage.prompt_tokens ?? usage.input_tokens ?? '?')}→${String(usage.completion_tokens ?? usage.output_tokens ?? '?')}`
-    : '';
-  const status = call.status ? `HTTP ${call.status}` : '网络失败';
-  lines.push(`#### API #${idx + 1} · ${call.model ?? call.providerId ?? '模型'} · ${status} · ${call.durMs}ms${tok}${call.sse?.finishReason ? ` · finish=${call.sse.finishReason}` : ''}`);
-  if (call.error) lines.push(`> 失败：${call.error}`);
-  if (call.sse) {
-    lines.push(`SSE ${call.sse.frames} 帧 · 文本 ${call.sse.textLen} 字`);
-    if (call.sse.toolCalls?.length) {
-      lines.push('', '模型请求的工具调用（分片拼接）：');
-      for (const t of call.sse.toolCalls) {
-        lines.push(`- \`${t.name}\`：${t.args}`);
+/** 交互卡一行式（个人阅读版）：问题 + 作答摘要 */
+function interactiveOneLine(b) {
+  const ans = b.answer !== undefined ? capOne(JSON.stringify(b.answer), 80) : '（未作答）';
+  return `  [${b.kind}] ${b.title} → ${ans}`;
+}
+
+function capOne(s, n) {
+  return String(s).length > n ? `${String(s).slice(0, n)}…` : String(s);
+}
+
+function kFmt(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** 从转录派生统计（免费指标：tokens 汇总/缓存命中/重试/压缩/审批决策分布） */
+export function deriveStats(t) {
+  const calls = Array.isArray(t.apiCalls) ? t.apiCalls : [];
+  const events = Array.isArray(t.events) ? t.events : [];
+  const turns = Array.isArray(t.turns) ? t.turns : [];
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let cachedTokens = 0;
+  let hasCacheData = false;
+  let totalApiMs = 0;
+  let failed = 0;
+  for (const c of calls) {
+    totalApiMs += c.durMs || 0;
+    if (c.status === 0 || (c.status >= 400 && c.status < 600)) failed += 1;
+    const u = c.sse?.usage;
+    if (u && typeof u === 'object') {
+      const p = Number(u.prompt_tokens ?? u.input_tokens ?? 0);
+      const cmp = Number(u.completion_tokens ?? u.output_tokens ?? 0);
+      promptTokens += p;
+      completionTokens += cmp;
+      const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0);
+      if (u.prompt_tokens_details?.cached_tokens !== undefined || u.prompt_cache_hit_tokens !== undefined || u.cached_tokens !== undefined) {
+        hasCacheData = true;
+        cachedTokens += cached;
       }
     }
   }
-  if (call.reqBody) {
-    lines.push('', '请求体（messages/tools/参数）：', '', '```json', call.reqBody, '```');
+  const approvals = { once: 0, always: 0, trust: 0, deny: 0, autoRejected: 0 };
+  let retries = 0;
+  let compactions = 0;
+  let toolCallEvents = 0;
+  for (const e of events) {
+    if (e.kind === 'stream.retry') retries += 1;
+    else if (e.kind === 'context.compacted') compactions += 1;
+    else if (e.kind === 'tool.calls') toolCallEvents += 1;
+    else if (e.kind === 'tool.approval.resolved' && e.payload && typeof e.payload === 'object') {
+      const d = String(e.payload.decision ?? '');
+      if (d in approvals) approvals[d] += 1;
+      if (e.payload.autoRejected === true) approvals.autoRejected += 1;
+    }
   }
-  if (call.sse?.first?.length) {
-    lines.push('', 'SSE 首帧：', '', '```', call.sse.first.join('\n'), '```');
+  let toolBlocks = 0;
+  for (const m of t.messages ?? []) {
+    if (Array.isArray(m.blocks)) for (const b of m.blocks) if (b.type === 'tool') toolBlocks += 1;
+    if (m.role === 'tool') toolBlocks += 1;
   }
-  return lines.join('\n');
+  return {
+    messages: (t.messages ?? []).length,
+    turns: turns.length,
+    apiCalls: calls.length,
+    toolCalls: toolBlocks,
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    cacheHitRate: hasCacheData && promptTokens > 0 ? Number((cachedTokens / promptTokens).toFixed(3)) : null,
+    totalApiMs,
+    failedCalls: failed,
+    retries,
+    compactions,
+    toolCallEvents,
+    approvals,
+  };
 }
 
-/** 转录 JSON → Markdown（AI 可直接读） */
-export function renderMarkdown(t) {
+/** AI 分析版（结构化 + 分析任务书 + 派生指标）：schema plite-transcript-ai-v1 */
+export function buildAiAnalysis(t) {
+  return {
+    schema: 'plite-transcript-ai-v1',
+    generatedAt: new Date().toISOString(),
+    analysisGuide: {
+      goal: '复盘本对话的引擎行为：定位工具选择/参数错误/循环重试/上下文管理/成本延迟问题，产出可执行的引擎优化建议',
+      checklist: [
+        '工具选择与参数是否合理：对照 events 里 tool.calls 的完整 arguments 与工具卡结果（stdout/stderr/exitCode）',
+        '是否存在循环重试或同参数重复调用：stream.retry 事件、apiCalls 里相似 reqBody 的连续请求',
+        '上下文管理：context.compacted 的 summary 是否丢失关键信息、压缩前后 tokens 变化、压缩后行为是否退化',
+        '成本与延迟异常：apiCalls 的 usage 递增链、cacheHitRate、慢跳（durMs 离群）、finishReason 分布',
+        '失败与中断根因：sse.errors 帧、resHeaders 限流头（429/retry-after）、status=0 网络失败、审批 deny',
+        '交互卡行为：interactive 块的 payload 与 answer，是否重复追问/超时',
+      ],
+      knownLimits: [
+        'reqBody 上限 256KB（超长截断）',
+        '工具卡 stdout/stderr 上限 16KB（引擎落库即截断）',
+        '轨迹由发起对话的浏览器采集：其它设备发起的轮次可能缺 apiCalls/events',
+        'events 过滤了 message.delta/message.reasoning 高频噪声（正文已在 messages 里）',
+      ],
+    },
+    meta: {
+      sessionId: t.sessionId,
+      title: t.title,
+      createdAt: t.createdAt,
+      lastActiveAt: t.lastActiveAt,
+      version: t.version,
+      capturedAt: t.capturedAt,
+    },
+    stats: deriveStats(t),
+    messages: t.messages ?? [],
+    apiCalls: t.apiCalls ?? [],
+    events: t.events ?? [],
+    turns: t.turns ?? [],
+  };
+}
+
+/** 个人阅读版 Markdown（做减法：叙事流 + 一行式工具 + API 一览表；无 JSON/帧） */
+export function renderHumanMarkdown(t) {
   const lines = [];
+  const st = deriveStats(t);
   lines.push(`# ${t.title}`);
   lines.push('');
-  const apiCount = Array.isArray(t.apiCalls) ? t.apiCalls.length : 0;
-  lines.push(`> 会话 ${t.sessionId} · ${t.messages.length} 条消息 · ${apiCount} 次模型 API 调用 · 转录于 ${fmtTime(t.capturedAt)} · 内容已脱敏`);
+  const headParts = [
+    `${st.messages} 条消息`,
+    st.turns ? `${st.turns} 轮` : '',
+    st.toolCalls ? `${st.toolCalls} 次工具` : '',
+    st.totalTokens ? `${kFmt(st.totalTokens)} tokens` : '',
+    st.compactions ? `${st.compactions} 次上下文压缩` : '',
+    `转录于 ${fmtTime(t.capturedAt)}`,
+  ].filter(Boolean);
+  lines.push(`> ${headParts.join(' · ')} · 内容已脱敏`);
   lines.push('');
 
-  // ---- API 调用轨迹（模型请求级复盘材料） ----
-  if (apiCount > 0) {
-    lines.push('## API 调用轨迹（发给模型的每个请求）');
-    lines.push('');
-    t.apiCalls.forEach((call, i) => {
-      lines.push(apiCallMd(call, i), '');
-    });
-  }
-
-  for (const m of t.messages) {
+  lines.push('## 对话');
+  lines.push('');
+  for (const m of t.messages ?? []) {
     if (m.role === 'user') {
-      lines.push(`## 用户 · ${fmtTime(m.createdAt)}`, '', m.content || '（空）', '');
+      lines.push(`**用户** · ${fmtTime(m.createdAt)}`, '', m.content || '（空）', '');
     } else if (m.role === 'assistant') {
-      lines.push(`## AI · ${fmtTime(m.createdAt)}`, '');
+      lines.push(`**AI** · ${fmtTime(m.createdAt)}`, '');
       if (m.blocks) {
         for (const b of m.blocks) {
-          if (b.type === 'tool') lines.push(toolMd(b.tool), '');
-          else if (b.type === 'thinking') lines.push('<details><summary>思考</summary>', '', b.text, '', '</details>', '');
-          else if (b.type === 'interactive') {
-            lines.push(`**[${b.kind}] ${b.title}**`);
-            if (b.answer !== undefined) lines.push('', '作答：', '```json', JSON.stringify(b.answer, null, 2), '```');
-            lines.push('');
-          } else if (b.type === 'artifact') lines.push(`**产物：${b.title}**（${b.rendererType}）`, '');
-          else if (b.type === 'text') lines.push(b.text, '');
-          else lines.push(`> ${b.text}`, ''); // notice / truncated
+          if (b.type === 'tool') lines.push(toolOneLine(b.tool));
+          else if (b.type === 'interactive') lines.push(interactiveOneLine(b));
+          else if (b.type === 'artifact') lines.push(`  [产物] ${b.title}（${b.rendererType}）`);
+          else if (b.type === 'thinking') lines.push(`  （思考 ${b.text.length} 字，已省略）`);
+          else if (b.type === 'text') lines.push('', b.text, '');
+          else lines.push(`  （${b.text}）`); // notice / truncated
         }
+        lines.push('');
       } else {
-        lines.push(m.content || '（空）', '');
+        lines.push('', m.content || '（空）', '');
       }
     } else if (m.role === 'tool' && m.tool) {
-      lines.push(toolMd(m.tool), '');
+      lines.push(toolOneLine(m.tool), '');
     }
   }
+
+  const calls = Array.isArray(t.apiCalls) ? t.apiCalls : [];
+  if (calls.length > 0) {
+    lines.push('---', '', '## 模型调用一览', '');
+    lines.push('| # | 时间 | 模型 | 耗时 | tokens | 结果 |');
+    lines.push('|---|---|---|---|---|---|');
+    calls.forEach((c, i) => {
+      const u = c.sse?.usage;
+      const tok = u && typeof u === 'object'
+        ? `${kFmt(Number(u.prompt_tokens ?? u.input_tokens ?? 0))}→${kFmt(Number(u.completion_tokens ?? u.output_tokens ?? 0))}`
+        : '-';
+      const result = c.status === 0 ? '网络失败' : (c.sse?.finishReason ?? `HTTP ${c.status}`);
+      const flag = c.error || c.status !== 200 ? ' [异常]' : '';
+      lines.push(`| ${i + 1} | ${fmtTime(c.at)} | ${c.model ?? c.providerId ?? '-'} | ${c.durMs}ms | ${tok} | ${result}${flag} |`);
+    });
+    lines.push('');
+  }
+
+  if (st.retries > 0 || st.compactions > 0 || st.failedCalls > 0) {
+    const notes = [];
+    if (st.failedCalls > 0) notes.push(`${st.failedCalls} 次请求失败`);
+    if (st.retries > 0) notes.push(`${st.retries} 次流重试`);
+    if (st.compactions > 0) notes.push(`${st.compactions} 次上下文压缩（详情见网页版 AI 轨迹）`);
+    lines.push(`> 注意：${notes.join('；')}`, '');
+  }
+  lines.push('---', '', '> transcript-share · 个人阅读版 · 完整 API 轨迹与编排事件见网页版或 AI 分析版');
   return maskByPattern(lines.join('\n'));
 }
 
@@ -178,8 +291,16 @@ function pageScript() {
       m.blocks.forEach(function (b) {
         if (b.type === 'tool') html += renderTool(b.tool);
         else if (b.type === 'thinking') html += '<details class="think"><summary>思考</summary><div class="body">' + esc(b.text) + '</div></details>';
-        else if (b.type === 'interactive') html += '<div class="tool"><div class="tool-head"><span class="tool-name">[' + esc(b.kind) + '] ' + esc(b.title) + '</span>' + (b.answer !== undefined ? '<span class="tool-status done">已作答</span>' : '') + '</div></div>';
-        else if (b.type === 'artifact') html += '<div class="notice">产物：' + esc(b.title) + '（' + esc(b.rendererType) + '）</div>';
+        else if (b.type === 'interactive') {
+          var ansText = b.answer !== undefined ? esc(JSON.stringify(b.answer).slice(0, 200)) : '';
+          html += '<div class="tool"><div class="tool-head"><span class="tool-name">[' + esc(b.kind) + '] ' + esc(b.title) + '</span>' + (b.answer !== undefined ? '<span class="tool-status done">已作答</span>' : '<span class="tool-status awaiting">待作答</span>') + '</div>' +
+            (b.payload ? '<details class="think"><summary>问题内容</summary><div class="body">' + esc(JSON.stringify(b.payload, null, 1)) + '</div></details>' : '') +
+            (ansText ? '<div class="tool-out">作答：' + ansText + '</div>' : '') + '</div>';
+        }
+        else if (b.type === 'artifact') {
+          var dataKeys = b.data ? Object.keys(b.data).map(function (k) { return k + '=' + esc(String(b.data[k]).slice(0, 60)); }).join(' · ') : '';
+          html += '<div class="tool"><div class="tool-head"><span class="tool-name">[产物] ' + esc(b.title) + '</span><span class="tool-status ' + (b.status === 'ready' ? 'done' : 'error') + '">' + esc(b.rendererType) + '</span></div>' + (dataKeys ? '<div class="tool-out">' + dataKeys + '</div>' : '') + '</div>';
+        }
         else if (b.type === 'text') html += '<div class="bubble">' + esc(b.text) + '</div>';
         else html += '<div class="notice">' + esc(b.text) + '</div>';
       });
@@ -195,7 +316,7 @@ function pageScript() {
     var apiCount = d.apiCalls ? d.apiCalls.length : 0;
     return '<header><h1>' + esc(d.title) + '</h1><div class="meta">' + d.messages.length +
       ' 条消息 · ' + apiCount + ' 次模型 API 调用 · 转录于 ' + fmtTime(d.capturedAt) + live +
-      '</div><div class="toolbar"><a href="./json">JSON</a><a href="./markdown">Markdown</a><button id="refresh-btn">刷新</button></div></header>';
+      '</div><div class="toolbar"><a href="./markdown">个人版 MD</a><a href="./ai">AI 分析版</a><a href="./json">JSON</a><button id="refresh-btn">刷新</button></div></header>';
   }
   function rerender(d) {
     root.innerHTML = headHtml(d) + renderApiCalls(d.apiCalls) + d.messages.map(renderMsg).join('') +

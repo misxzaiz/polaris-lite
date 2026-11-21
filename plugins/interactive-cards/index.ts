@@ -94,6 +94,14 @@ function createHandler(): CapabilityHandler {
           setTimeout(() => {
             if (pendingAnswers.has(callId)) {
               pendingAnswers.delete(callId);
+              // 超时也补 answered 回执：否则分享转录/取证里这张卡永远 status=awaiting，
+              // 复盘「AI 为什么自问自答」时看不到用户侧超时这一事实。
+              const desc = pending.get(callId);
+              hostApi?.emit('interactive.answered', {
+                callId,
+                answer: { __timeout: true },
+                ...(desc ? { kind: desc.kind, title: desc.title, ...desc.replyCtx } : {}),
+              });
               resolve({ __timeout: true });
             }
           }, ASK_TIMEOUT_MS);

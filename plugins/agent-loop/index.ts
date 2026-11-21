@@ -125,9 +125,12 @@ function flushLive(sessionId: string): void {
   }).catch(() => undefined);
 }
 
-/** 编排事件镜像：只镜像查看端关心的流式语义事件；done 类事件即时刷出 */
+/** 编排事件镜像：只镜像查看端关心的流式语义事件；done 类事件即时刷出。
+ *  context.*（压缩摘要/水位快照）v3 起加入镜像——transcript-share 事件时间线的
+ *  「AI 遗忘/答非所问」分析依赖压缩摘要全文与 tokens 水位，SSE 查看端忽略即可。 */
 function mirrorLive(sessionId: string, kind: string, payload: unknown): void {
-  if (!kind.startsWith('message.') && !kind.startsWith('tool.') && kind !== 'loop.done' && kind !== 'stream.error') return;
+  if (!kind.startsWith('message.') && !kind.startsWith('tool.') && !kind.startsWith('context.')
+    && kind !== 'loop.done' && kind !== 'stream.error') return;
   const buf = liveBuffers.get(sessionId) ?? [];
   buf.push({ kind, payload });
   liveBuffers.set(sessionId, buf);
