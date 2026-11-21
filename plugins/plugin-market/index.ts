@@ -107,7 +107,7 @@ export const pluginMarketPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: ['cap.meta'],
     provides: ['cap.market.tool'],
-    events: [],
+    events: ['tool-registered'],
     contributes: {
       // 面板 order 21-23 已占（MCP/技能/钩子），本插件取 24；tab 名 ≤4 字
       slots: [{ slot: 'panel', component: 'MarketPanel', order: 24, title: '商城' }],

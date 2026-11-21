@@ -1,5 +1,5 @@
 {
-  "version": "14",
+  "version": "15",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -314,7 +314,9 @@
       "provides": [
         "cap.market.tool"
       ],
-      "events": []
+      "events": [
+        "tool-registered"
+      ]
     }
   }
 }
