@@ -249,6 +249,15 @@ test('本地导出 /api/share/export：human/ai 双形式，会话门禁', async
   assert.match(htmlPreview.text, /测试会话/);
   assert.match(htmlPreview.text, /"live":false/); // 预览是静态快照（无 live 轮询）
   assert.equal((await c.send('/api/share/list')).json.items.length, 0); // 预览不落 token
+
+  // human-html = 个人版渲染预览（点开即见排版，而非 .md 原文）
+  const humanHtml = await c.send('/api/share/export?sessionId=s-export&format=human-html');
+  assert.equal(humanHtml.status, 200);
+  assert.match(humanHtml.text, /个人版预览/);
+  assert.match(humanHtml.text, /class="bubble"/); // 气泡已渲染（非原文）
+  assert.match(humanHtml.text, /第一条消息内容/);
+  assert.match(humanHtml.text, /下载 \.md/); // 工具栏下载链接
+  assert.equal((await c.send('/api/share/list')).json.items.length, 0); // 预览不落 token
 });
 
 // ---------------------------------------------------------------- events / turns 上报

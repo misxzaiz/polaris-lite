@@ -189,9 +189,15 @@ export function ShareDrawerRows() {
           <button
             className="chat-share-chip"
             disabled={!activeId}
+            onClick={() => { window.open(`/api/share/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=human-html`, '_blank'); }}
+            title="新开标签页预览个人阅读版排版（渲染后的效果，页面内可下载 .md）"
+          >个人版效果</button>
+          <button
+            className="chat-share-chip"
+            disabled={!activeId}
             onClick={() => { window.open(`/api/share/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=html`, '_blank'); }}
-            title="新开标签页预览分享页效果（会话门禁快照，不创建链接、对方看到的排版即此）"
-          >网页版效果</button>
+            title="新开标签页预览分享页完整效果（含 API 轨迹与编排事件；会话门禁快照，不创建链接）"
+          >网页完整版</button>
         </span>
       </div>
       {shares.length > 0 && (

@@ -217,6 +217,131 @@ export function renderHumanMarkdown(t) {
   return maskByPattern(lines.join('\n'));
 }
 
+/** 个人版 HTML 预览（服务端直渲染，无 JS）：点开即见排版效果，而非 .md 原文。
+ *  工具栏提供「下载 .md / AI 分析版」——下载意图与预览意图分离。 */
+export function renderHumanHtml(t) {
+  const sid = encodeURIComponent(t.sessionId);
+  const st = deriveStats(t);
+  const headParts = [
+    `${st.messages} 条消息`,
+    st.turns ? `${st.turns} 轮` : '',
+    st.toolCalls ? `${st.toolCalls} 次工具` : '',
+    st.totalTokens ? `${kFmt(st.totalTokens)} tokens` : '',
+    st.compactions ? `${st.compactions} 次上下文压缩` : '',
+  ].filter(Boolean);
+
+  const msgHtml = (t.messages ?? []).map((m) => {
+    const who = m.role === 'user' ? '用户' : m.role === 'assistant' ? 'AI' : `[工具] ${m.tool?.name ?? m.role}`;
+    let body = '';
+    if (m.blocks) {
+      for (const b of m.blocks) {
+        if (b.type === 'tool') {
+          const c = b.tool;
+          body += `<div class="t1l">[工具] ${esc(c.name)}${c.command ? ` <code>${esc(String(c.command).replace(/\n+/g, ' ').slice(0, 60))}</code>` : ''} ${esc(stIcon(c.status))}${c.durationMs !== undefined ? ` ${c.durationMs}ms` : ''}${c.exitCode !== undefined && c.exitCode !== 0 ? ` exit=${c.exitCode}` : ''}</div>`;
+        } else if (b.type === 'interactive') {
+          body += `<div class="t1l">[${esc(b.kind)}] ${esc(b.title)} → ${esc(b.answer !== undefined ? capOne(JSON.stringify(b.answer), 80) : '（未作答）')}</div>`;
+        } else if (b.type === 'artifact') {
+          body += `<div class="t1l">[产物] ${esc(b.title)}（${esc(b.rendererType)}）</div>`;
+        } else if (b.type === 'thinking') {
+          body += `<div class="t1l dim">（思考 ${b.text.length} 字，已省略）</div>`;
+        } else if (b.type === 'text') {
+          body += `<div class="bubble">${esc(b.text)}</div>`;
+        } else {
+          body += `<div class="t1l dim">（${esc(b.text)}）</div>`;
+        }
+      }
+    } else if (m.tool) {
+      const c = m.tool;
+      body += `<div class="t1l">[工具] ${esc(c.name)}${c.command ? ` <code>${esc(c.command)}</code>` : ''} ${esc(stIcon(c.status))}</div>`;
+    } else {
+      body += `<div class="bubble">${esc(m.content || '（空）')}</div>`;
+    }
+    return `<div class="msg ${esc(m.role)}"><div class="who">${who}<span class="time">${fmtTime(m.createdAt)}</span></div>${body}</div>`;
+  }).join('');
+
+  const callRows = (t.apiCalls ?? []).map((c, i) => {
+    const u = c.sse?.usage;
+    const tok = u && typeof u === 'object'
+      ? `${kFmt(Number(u.prompt_tokens ?? u.input_tokens ?? 0))}→${kFmt(Number(u.completion_tokens ?? u.output_tokens ?? 0))}`
+      : '-';
+    const result = c.status === 0 ? '网络失败' : (c.sse?.finishReason ?? `HTTP ${c.status}`);
+    const flag = c.error || c.status !== 200 ? ' <b class="bad">[异常]</b>' : '';
+    return `<tr><td>${i + 1}</td><td>${fmtTime(c.at)}</td><td>${esc(c.model ?? c.providerId ?? '-')}</td><td>${c.durMs}ms</td><td>${tok}</td><td>${esc(result)}${flag}</td></tr>`;
+  }).join('');
+  const apiTable = callRows
+    ? `<h2>模型调用一览</h2><table class="apitbl"><tr><th>#</th><th>时间</th><th>模型</th><th>耗时</th><th>tokens</th><th>结果</th></tr>${callRows}</table>`
+    : '';
+  const warnParts = [];
+  if (st.failedCalls > 0) warnParts.push(`${st.failedCalls} 次请求失败`);
+  if (st.retries > 0) warnParts.push(`${st.retries} 次流重试`);
+  if (st.compactions > 0) warnParts.push(`${st.compactions} 次上下文压缩`);
+  const warnHtml = warnParts.length ? `<div class="warn">注意：${esc(warnParts.join('；'))}</div>` : '';
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>个人版预览：${esc(t.title)}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f7f7f8; color: #1a1a1a; }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { border-bottom: 1px solid #e3e3e3; padding: 12px 0 14px; margin-bottom: 16px; }
+  h1 { font-size: 19px; margin: 0 0 6px; }
+  .meta { font-size: 12px; color: #777; }
+  .toolbar { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .toolbar a { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid #ddd; background: #fff; color: #555; text-decoration: none; }
+  .msg { margin: 16px 0; }
+  .who { font-size: 12px; font-weight: 600; color: #666; margin-bottom: 6px; display: flex; gap: 6px; }
+  .who .time { font-weight: 400; color: #999; }
+  .bubble { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; }
+  .user .bubble { background: #e8f0fe; border-radius: 10px 10px 10px 2px; }
+  .assistant .bubble { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px 10px 2px 10px; }
+  .t1l { font-size: 12.5px; color: #555; margin: 6px 0 6px 4px; }
+  .t1l code { font-family: ui-monospace, monospace; background: #f0f0f0; padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+  .t1l.dim { color: #999; }
+  h2 { font-size: 15px; margin: 26px 0 8px; }
+  .apitbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .apitbl th, .apitbl td { border: 1px solid #e3e3e3; padding: 5px 8px; text-align: left; }
+  .apitbl th { background: #f2f2f4; }
+  .warn { margin-top: 10px; font-size: 12px; color: #b06000; background: #fef7e0; border-radius: 8px; padding: 8px 12px; }
+  .bad { color: #c5221f; }
+  .foot { margin-top: 30px; padding-top: 12px; border-top: 1px solid #e3e3e3; font-size: 11px; color: #aaa; text-align: center; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #141517; color: #e6e6e6; }
+    header { border-color: #2c2c2c; }
+    .user .bubble { background: #1d2b45; }
+    .assistant .bubble { background: #1c1c1e; border-color: #2c2c2c; }
+    .t1l code { background: #111; }
+    .apitbl th, .apitbl td { border-color: #2c2c2c; }
+    .apitbl th { background: #1a1a1c; }
+    .warn { background: #2a2312; color: #d8a348; }
+    .toolbar a { background: #222; border-color: #333; color: #aaa; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>${esc(t.title)}</h1>
+    <div class="meta">${esc(headParts.join(' · '))} · 转录于 ${fmtTime(t.capturedAt)} · 内容已脱敏</div>
+    <div class="toolbar">
+      <a href="/api/share/export?sessionId=${sid}&format=human">下载 .md</a>
+      <a href="/api/share/export?sessionId=${sid}&format=ai">下载 AI 分析版</a>
+      <a href="/api/share/export?sessionId=${sid}&format=html">网页完整版预览</a>
+    </div>
+  </header>
+  <h2>对话</h2>
+  ${msgHtml}
+  ${apiTable}
+  ${warnHtml}
+  <div class="foot">transcript-share · 个人阅读版预览 · 完整 API 轨迹与编排事件见网页完整版</div>
+</div>
+</body>
+</html>`;
+}
+
 /** 页面脚本：渲染 + live 轮询（内联在 HTML 里；保持 ES5 以兼容老 WebView） */
 function pageScript() {
   return `

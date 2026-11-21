@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, appendF
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { redactJson } from './redact.mjs';
-import { renderShareHtml, renderHumanMarkdown, buildAiAnalysis, errorPage } from './render.mjs';
+import { renderShareHtml, renderHumanMarkdown, renderHumanHtml, buildAiAnalysis, errorPage } from './render.mjs';
 
 // ---- 采集面存储（inline：arch 门禁只豁免 server.mjs 的 node:* 依赖） ----
 // 形态：每会话一个 JSONL <dataDir>/transcript-share/<dirName>/<sessionId>.jsonl，追加写天然原子。
@@ -391,6 +391,11 @@ export function createServerPart(options = {}) {
           }));
           if (format === 'ai') {
             return sendJson(200, buildAiAnalysis(transcript));
+          }
+          // human-html = 个人版渲染预览：点开即见排版效果（.md 原文对人不友好），
+          // 工具栏内含「下载 .md / AI 分析版」——下载意图与预览意图分离
+          if (format === 'human-html') {
+            return sendHtml(200, renderHumanHtml(transcript));
           }
           // html = 分享前预览：与正式分享页同一渲染器（静态快照，无 live 轮询），
           // 会话门禁、不创建 token、不落任何状态——看到什么分享出去就是什么
