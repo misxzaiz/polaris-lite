@@ -561,6 +561,16 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           : ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
       }
     } catch { /* roots 不可用：保持默认提示 */ }
+    // 会话工作区上报：钩子目录与本会话 bash/files 工作区对齐（此前 hook-bridge 用全局
+    // activeRoot 解析，会话绑定非默认工作区时 settings.json 定位错位→钩子静默丢失）。
+    if (execCwd) {
+      void fetch('/api/hooks/session-ws', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, workspace: execCwd }),
+      }).catch(() => undefined);
+    }
     let shadow = shadows.get(sessionId);
     if (!shadow) {
       shadow = [

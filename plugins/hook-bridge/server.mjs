@@ -45,7 +45,8 @@ export function createServerPart(options = {}) {
   const auditPath = join(dataDir, 'hooks-audit.log');
   const hooksTrustPath = join(dataDir, 'hooks-trust.json');
 
-  let cache = { key: '', rules: null, warns: [] };
+  // 多工作区缓存：按 ws 分桶，key 含源路径与文件指纹（跨会话不同工作区互不错命中）
+  const ruleCache = new Map();
 
   function readJsonSafe(path) {
     try {
@@ -54,6 +55,20 @@ export function createServerPart(options = {}) {
     } catch {
       return null;
     }
+  }
+
+  /** 会话→工作区映射（agent-loop 派发钩子时上报；解决钩子路径与会话工作区不一致：
+   *  会话绑定非默认工作区时，AI 把 settings.json 写进会话工作区，而此前的
+   *  activeWorkspace() 只看全局/登记表——钩子静默丢失。 */
+  const sessionWs = new Map();
+
+  function sessionWsFor(sessionId) {
+    return (sessionId && sessionWs.get(sessionId)) || null;
+  }
+
+  /** 当前应使用的钩子目录定位：会话绑定优先，其次全局解析，最后内建工作区 */
+  function hooksWorkspaceDir(sessionId) {
+    return sessionWsFor(sessionId) ?? workspaceDir();
   }
 
   function workspaceDir() {
@@ -132,20 +147,23 @@ export function createServerPart(options = {}) {
     }
   }
 
-  function loadRules() {
-    const ws = workspaceDir();
+  function loadRules(wsOverride) {
+    const ws = wsOverride ?? workspaceDir();
     const home = homedir();
     const sources = [
       ['user:~/.claude/settings.json', join(home, '.claude', 'settings.json'), 'user'],
       ['workspace:.claude/settings.json', ws ? join(ws, '.claude', 'settings.json') : '', 'workspace'],
       ['workspace:.claude/settings.local.json', ws ? join(ws, '.claude', 'settings.local.json') : '', 'workspace'],
+      // 全局通用钩子源（不依赖任何工作区；用户诉求：默认全局路径）
+      ['global:<dataDir>/hooks/settings.json', join(dataDir, 'hooks', 'settings.json'), 'user'],
       ['user:~/.zcode/cli/config.json', join(home, '.zcode', 'cli', 'config.json'), 'user'],
       ['workspace:.zcode/config.json', ws ? join(ws, '.zcode', 'config.json') : '', 'workspace'],
       // zcode-compat 导入产物（{events:{...}} 同构形态）：CC/ZC hooks 经固化导入后在此生效
       ['import:hooks-import.json', join(dataDir, 'hooks-import.json'), 'workspace'],
     ];
     const key = JSON.stringify(sources.map(([p]) => p)) + '|' + sources.map(([p]) => { try { return existsSync(p) ? statMtime(p) : ''; } catch { return ''; } }).join(',');
-    if (cache.key === key && cache.rules) return cache;
+    const cached = ruleCache.get(ws ?? '__default__');
+    if (cached && cached.key === key && cached.rules) return cached;
 
     const warns = [];
     const rules = [];
@@ -157,8 +175,9 @@ export function createServerPart(options = {}) {
       const hooksObj = source.startsWith('import:') ? j : (j.hooks ?? (source.includes('zcode') ? j : null));
       normalizeHooksObject(hooksObj, source, scope, warns, rules);
     }
-    cache = { key, rules, warns };
-    return cache;
+    const entry = { key, rules, warns };
+    ruleCache.set(ws ?? '__default__', entry);
+    return entry;
   }
 
   function statMtime(p) {
@@ -281,7 +300,8 @@ export function createServerPart(options = {}) {
   }
 
   async function runEvent(eventName, input, res, sendJson) {
-    const { rules, warns } = loadRules();
+    const ws = hooksWorkspaceDir(input.session_id);
+    const { rules, warns } = loadRules(ws);
     const matched = rules.filter((r) => r.event === eventName && matcherMatches(r.matcher, input.tool_name ?? ''));
     if (!matched.length) {
       return sendJson(200, { decision: 'allow', warns: warns.length ? warns : undefined });
@@ -301,7 +321,7 @@ export function createServerPart(options = {}) {
     }
     const hookInput = {
       session_id: input.session_id ?? '',
-      cwd: input.cwd ?? workspaceDir(),
+      cwd: input.cwd ?? ws,
       hook_event_name: eventName,
       permission_mode: 'default',
     };
@@ -368,14 +388,28 @@ export function createServerPart(options = {}) {
         return await runEvent('Stop', { session_id: body.sessionId }, res, sendJson);
       }
       if (pathname === '/api/hooks/list' && req.method === 'GET') {
-        const { rules, warns } = loadRules();
+        const url = new URL(req.url, 'http://x');
+        const sid = url.searchParams.get('sessionId') ?? '';
+        const ws = hooksWorkspaceDir(sid);
+        const { rules, warns } = loadRules(ws);
         const trust = checkWorkspaceTrust(rules);
         return sendJson(200, {
           rules: rules.map(({ event, matcher, scope, source, handler }) => ({ event, matcher, scope, source, type: handler.type, command: handler.command, timeoutMs: handler.timeoutMs })),
           warns,
           // 确认闸状态：pending=workspace 规则集有未确认变更（执行被跳过）
           trust: { trusted: trust.trusted, pending: trust.changed },
+          hooksWs: ws,
+          globalHooksPath: join(dataDir, 'hooks', 'settings.json'),
         });
+      }
+      if (pathname === '/api/hooks/session-ws' && req.method === 'POST') {
+        // 会话工作区上报（agent-loop 每次 loop start 传来）：钩子目录与该会话的
+        // files/bash 工作区保持一致（此前两套解析，会话绑定非默认工作区时钩子静默丢失）
+        const body = JSON.parse((await readBody()) || '{}');
+        if (body.sessionId && body.workspace && existsSync(String(body.workspace))) {
+          sessionWs.set(String(body.sessionId), resolve(String(body.workspace)));
+        }
+        return sendJson(200, { ok: true });
       }
       if (pathname === '/api/hooks/confirm' && req.method === 'POST') {
         // 用户在面板点「确认」：把当前 workspace 规则集指纹写入信任记录

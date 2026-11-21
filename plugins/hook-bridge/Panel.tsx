@@ -40,14 +40,16 @@ export function HookPanel() {
   const [importLog, setImportLog] = useState<string[] | null>(null);
   const [hasCompat, setHasCompat] = useState<boolean | null>(null);
   const [trustPending, setTrustPending] = useState(false);
+  const [globalPath, setGlobalPath] = useState('');
 
   const refresh = useCallback(async () => {
     try {
       const resp = await fetch('/api/hooks/list', { credentials: 'include' });
-      const j = (await resp.json().catch(() => null)) as { rules?: HookRule[]; warns?: string[]; trust?: { trusted?: boolean; pending?: boolean } } | null;
+      const j = (await resp.json().catch(() => null)) as { rules?: HookRule[]; warns?: string[]; trust?: { trusted?: boolean; pending?: boolean }; globalHooksPath?: string } | null;
       setRules(j?.rules ?? []);
       setWarns(j?.warns ?? []);
       setTrustPending(Boolean(j?.trust?.pending));
+      setGlobalPath(j?.globalHooksPath ?? '');
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -129,6 +131,12 @@ export function HookPanel() {
           尚未配置任何钩子。可在 <code>.claude/settings.json</code> / <code>.zcode/config.json</code> 的
           <code>hooks</code> 键下定义，或点上方「从 CC/ZC 导入」。
           支持事件：SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop。
+        </div>
+      )}
+      {globalPath && (
+        <div className="hk-globalpath">
+          全局钩子（所有工作区通用）：<code>{globalPath}</code>
+          ——写入该文件即可对全部会话生效；工作区级钩子跟随各会话绑定的工作区目录。
         </div>
       )}
       {rules.map((r, i) => (
