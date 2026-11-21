@@ -68,7 +68,13 @@ export function createProdServer({ dist = resolve(process.cwd(), 'dist'), dataDi
     }
     const { file, fallback } = resolveStatic(req.url, dist);
     const ext = extname(file);
-    const noCache = fallback || ext === '.html' || file.includes(`${sep}plugins${sep}`);
+    // 动态清单与外部插件产物禁缓存——真机 E2E 发现：grants/registry/ext-plugins 被按
+    // immutable 强缓存一年，手机端永远拉旧版，新旧 manifest/grants 错配致插件加载失败。
+    const isDynamicList =
+      req.url === '/grants.json' ||
+      req.url.startsWith('/plugins/registry.json') ||
+      req.url.startsWith('/ext-plugins/');
+    const noCache = fallback || ext === '.html' || file.includes(`${sep}plugins${sep}`) || isDynamicList;
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Cache-Control': noCache ? 'no-cache' : 'public, max-age=31536000, immutable',
