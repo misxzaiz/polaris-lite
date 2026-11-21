@@ -392,6 +392,11 @@ export function createServerPart(options = {}) {
           if (format === 'ai') {
             return sendJson(200, buildAiAnalysis(transcript));
           }
+          // html = 分享前预览：与正式分享页同一渲染器（静态快照，无 live 轮询），
+          // 会话门禁、不创建 token、不落任何状态——看到什么分享出去就是什么
+          if (format === 'html') {
+            return sendHtml(200, renderShareHtml(transcript, { live: false }));
+          }
           res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' });
           return res.end(renderHumanMarkdown(transcript));
         }

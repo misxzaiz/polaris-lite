@@ -183,6 +183,17 @@ export function ShareDrawerRows() {
           <button className="chat-share-chip" disabled={busy || !activeId} onClick={() => void exportAs('ai')} title="本地下载 AI 分析版 JSON（含 API 轨迹/编排事件/逐跳轮次 + 分析任务书）">AI 分析版</button>
         </span>
       </div>
+      <div className="chat-assistant-row">
+        <span className="chat-assistant-key">预览</span>
+        <span className="chat-share-acts">
+          <button
+            className="chat-share-chip"
+            disabled={!activeId}
+            onClick={() => { window.open(`/api/share/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=html`, '_blank'); }}
+            title="新开标签页预览分享页效果（会话门禁快照，不创建链接、对方看到的排版即此）"
+          >网页版效果</button>
+        </span>
+      </div>
       {shares.length > 0 && (
         <div className="chat-assistant-row">
           <span className="chat-assistant-key">活动链接（{shares.length}）</span>

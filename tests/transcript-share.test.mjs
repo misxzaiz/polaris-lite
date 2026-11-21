@@ -241,6 +241,14 @@ test('本地导出 /api/share/export：human/ai 双形式，会话门禁', async
   // 未知会话 404 / 非法 sessionId 400
   assert.equal((await c.send('/api/share/export?sessionId=nope&format=human')).status, 404);
   assert.equal((await c.send('/api/share/export?sessionId=..%2F..%2Fetc&format=human')).status, 400);
+
+  // html = 分享前预览：同一渲染器、会话门禁、不创建 token
+  const htmlPreview = await c.send('/api/share/export?sessionId=s-export&format=html');
+  assert.equal(htmlPreview.status, 200);
+  assert.match(htmlPreview.text, /__SHARE__/);
+  assert.match(htmlPreview.text, /测试会话/);
+  assert.match(htmlPreview.text, /"live":false/); // 预览是静态快照（无 live 轮询）
+  assert.equal((await c.send('/api/share/list')).json.items.length, 0); // 预览不落 token
 });
 
 // ---------------------------------------------------------------- events / turns 上报
