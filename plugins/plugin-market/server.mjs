@@ -32,6 +32,7 @@ const MIME = {
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_MARKET === '0';
   const extPluginsDir = join(dataDir, 'plugins');
@@ -40,7 +41,7 @@ export function createServerPart(options = {}) {
   // 必须 fileURLToPath：Windows 下 URL.pathname 是 /D:/... 形态，且 dirname() 对带尾斜杠
   // 路径会多吃一层——实测 dirname(pathname,'..','..') 推到 D:\ 导致 registry 写入静默丢失。
   const here = fileURLToPath(new URL('.', import.meta.url));
-  const repoRoot = resolve(here, '..', '..');
+  const repoRoot = options.repoRoot ?? resolve(here, '..', '..');
   const publicRegistry = join(repoRoot, 'public', 'plugins', 'registry.json');
   const distRegistry = join(repoRoot, 'dist', 'plugins', 'registry.json');
 
@@ -209,8 +210,11 @@ export function createServerPart(options = {}) {
 
     if (!pathname.startsWith('/api/market/')) return next?.();
 
+    // 门禁：会话 cookie 或 本地回环 Bearer 临时凭证（同 agent-files 双认证惯例）
     const session = getSession?.(req);
-    if (!session) {
+    const bearer = String(req.headers.authorization ?? '');
+    const bearerOk = bearer.startsWith('Bearer ') && verifyTempToken(bearer.slice(7));
+    if (!session && !bearerOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }

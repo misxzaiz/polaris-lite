@@ -101,6 +101,8 @@ const plugins = [
   { id: 'mcp-bridge', config: 'mcp-bridge/vite.config.ts', dist: 'mcp-bridge/dist', order: 26 },
   // zcode-compat = CC/ZC 扩展文件扫描与固化导入（纯导入器，能力由上面三个插件承载）
   { id: 'zcode-compat', config: 'zcode-compat/vite.config.ts', dist: 'zcode-compat/dist', order: 27 },
+  // plugin-market = 外部插件商城与运行时安装器（plans/runtime-extensions-and-market-final.md P2）
+  { id: 'plugin-market', config: 'plugin-market/vite.config.ts', dist: 'plugin-market/dist', order: 28 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

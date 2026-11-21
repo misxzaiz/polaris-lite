@@ -32,7 +32,7 @@ function tempEnv(t) {
   // 因此本测试**只测不落 registry 的路径**？不行——install 必然写。
   // 折中：install 用「id 与已注册冲突」分支验证拒绝；正常 install 的 registry 断言改验
   // dataDir/plugins 落盘 + 二次 install 冲突。真实 registry 双写由 E2E 冒烟覆盖。
-  const mw = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir });
+  const mw = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir, repoRoot: root });
   const call = async (path, body) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
     const res = { code: 0, body: '', writeHead(c) { this.code = c; return this; }, end(b) { this.body = b ?? ''; } };
@@ -58,7 +58,7 @@ function writePackage(marketDir, id, { manifest, js, css }) {
 }
 
 test('market: 添加源 → 列清单 → 安装（sha256 校验 + 落盘）→ 冲突拒绝', async (t) => {
-  const { dataDir, marketDir, call } = tempEnv(t);
+  const { dataDir, marketDir, repoRoot, call } = tempEnv(t);
   const entry = writePackage(marketDir, 'hello-tool', {
     manifest: { id: 'hello-tool', name: 'Hello 工具', version: '0.1.0', capabilities: [], provides: [], events: [], contributes: { slots: [] } },
     js: 'export default { manifest: { id: "hello-tool" } };',
@@ -84,6 +84,8 @@ test('market: 添加源 → 列清单 → 安装（sha256 校验 + 落盘）→ 
   assert.ok(existsSync(join(dataDir, 'plugins', 'hello-tool', 'plugin.json')));
 
   // 二次安装：与已注册 id（真实 repo registry 现在 hello-tool 已写入）冲突 → 拒绝
+  const regNow = JSON.parse(readFileSync(join(repoRoot, 'public', 'plugins', 'registry.json'), 'utf8'));
+  console.log('DEBUG registry ids:', regNow.plugins.map(p=>p.id).join(','));
   const again = await call('/api/market/install', { source: 'test-src', id: 'hello-tool' });
   assert.equal(again.status, 400, 'id 冲突应拒绝');
   // 清理真实 registry 的测试条目（防污染真实仓库）
@@ -100,7 +102,7 @@ test('market: 添加源 → 列清单 → 安装（sha256 校验 + 落盘）→ 
 });
 
 test('market: sha256 不符拒绝 / 缺 manifest 拒绝 / /ext-plugins 穿越拒绝', async (t) => {
-  const { dataDir, marketDir, call } = tempEnv(t);
+  const { root, dataDir, marketDir, call } = tempEnv(t);
   const entry = writePackage(marketDir, 'bad-hash', {
     manifest: { id: 'bad-hash', name: 'x', version: '0.1.0' },
     js: 'export default 1;',
@@ -127,7 +129,7 @@ test('market: sha256 不符拒绝 / 缺 manifest 拒绝 / /ext-plugins 穿越拒
     await mw2({ url, method: 'GET', headers: {}, on() { return this; } }, res, () => {});
     return res.code;
   };
-  const mw2 = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir });
+  const mw2 = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir, repoRoot: root });
   assert.equal(await callRaw('/ext-plugins/../market-sources.json'), 400, '路径穿越应拒绝');
   assert.equal(await callRaw('/ext-plugins/hello/..%5C..%5Cx.js'), 400);
   assert.equal(await callRaw('/ext-plugins/ghost/plugin.js'), 404, '不存在应 404');

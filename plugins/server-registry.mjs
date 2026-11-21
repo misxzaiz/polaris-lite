@@ -33,6 +33,7 @@ export const SERVER_PLUGINS = [
   { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
   { id: 'zcode-compat', entry: './zcode-compat/server.mjs' },
+  { id: 'plugin-market', entry: './plugin-market/server.mjs' },
 ];
 
 /**

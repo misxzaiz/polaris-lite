@@ -30,6 +30,7 @@ const AUDIT_PREVIEW = 400;
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_MCP === '0';
   const configPath = join(dataDir, 'mcp-servers.json');
@@ -167,8 +168,11 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/mcp/')) return next?.();
 
+    // 门禁：会话 cookie 或 本地回环 Bearer 临时凭证（同 agent-files 双认证惯例）
     const session = getSession?.(req);
-    if (!session) {
+    const bearer = String(req.headers.authorization ?? '');
+    const bearerOk = bearer.startsWith('Bearer ') && verifyTempToken(bearer.slice(7));
+    if (!session && !bearerOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }
@@ -217,8 +221,9 @@ export function createServerPart(options = {}) {
 
       if (pathname === '/api/mcp/servers' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
-        const name = String(body.name ?? '').trim();
-        if (!name || /[^a-zA-Z0-9_-]/.test(name)) return sendJson(400, { error: 'server 名不合法（仅字母数字_-）' });
+        let name = String(body.name ?? '').trim();
+        if (!name) name = 'mcp-' + Date.now().toString(36); // 模型常漏 name：自动补名并在结果中回显
+        if (/[^a-zA-Z0-9_-]/.test(name)) return sendJson(400, { error: 'server 名不合法（仅字母数字_-），收到: ' + name });
         if (typeof body.command !== 'string' || !body.command.trim()) return sendJson(400, { error: 'command 必须为非空字符串' });
         const cfg = loadConfig();
         cfg.servers[name] = {

@@ -27,6 +27,7 @@ const MAX_DOC_BYTES = 32 * 1024;
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_SKILLS === '0';
 
@@ -134,7 +135,9 @@ export function createServerPart(options = {}) {
     const ws = activeWorkspace();
     const dirs = [
       ['native', join(dataDir, 'skills')],
-      ['workspace', ws ? join(ws, '.polaris-lite', 'skills') : ''],
+      // 内建工作区（始终扫描；agent-bash 的 bash cwd 兜底也是它）
+      ['builtin-ws', join(dataDir, 'workspace', '.claude', 'skills')],
+      ['workspace', ws && ws !== join(dataDir, 'workspace') ? join(ws, '.polaris-lite', 'skills') : ''],
       ['claude', ws ? join(ws, '.claude', 'skills') : ''],
       ['zcode', ws ? join(ws, '.zcode', 'skills') : ''],
       ['agents', ws ? join(ws, '.agents', 'skills') : ''],
@@ -178,8 +181,11 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/skills/')) return next?.();
 
+    // 门禁：会话 cookie 或 本地回环 Bearer 临时凭证（同 agent-files 双认证惯例）
     const session = getSession?.(req);
-    if (!session) {
+    const bearer = String(req.headers.authorization ?? '');
+    const bearerOk = bearer.startsWith('Bearer ') && verifyTempToken(bearer.slice(7));
+    if (!session && !bearerOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }

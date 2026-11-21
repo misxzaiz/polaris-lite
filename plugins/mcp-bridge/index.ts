@@ -37,7 +37,8 @@ const MCP_OPS_DESCRIPTORS: McpToolDescriptor[] = [
     name: 'mcp_server_add',
     description:
       '登记一个 MCP server（stdio）。写入后立即生效：下一轮对话其工具（mcp__<server>__<tool>）即可用。' +
-      '危险操作需用户审批。command 须为可执行命令（如 node），args 为字符串数组。',
+      '危险操作需用户审批。command 须为可执行命令（如 node），args 为字符串数组。' +
+      '调用示例：{"name":"my-server","command":"node","args":["D:/path/to/server.cjs"]}——name 必填且只能字母数字_-；args 必须含脚本绝对路径。',
     parameters: {
       type: 'object',
       properties: {
