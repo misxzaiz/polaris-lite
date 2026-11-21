@@ -706,42 +706,24 @@
   .chat-input-bar::before, .chat-send.stop:disabled { animation: none !important; }
 }
 
-/* ── 分享浮层（needs #069 v3 P1）：portal 到 body，贴输入条上方 ── */
-.chat-share-pop {
-  position: absolute;
-  width: 336px;
-  max-height: 420px;
-  overflow-y: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
-  z-index: 90;
-}
-.chat-share-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 7px; }
-.chat-share-label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); margin-top: 2px; }
+/* ── 分享行组（needs #069 v3 P1）：调谐抽屉内联行，与工作目录/执行模式/待发队列并排 ── */
 .chat-share-ttls { display: flex; gap: 5px; flex-wrap: wrap; }
 .chat-share-ttl {
-  height: 24px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
-  background: transparent; color: var(--text-dim); cursor: pointer; font-size: 11px;
+  height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: transparent; color: var(--text-dim); cursor: pointer; font-size: 10.5px;
 }
 .chat-share-ttl.on { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
-.chat-share-action {
-  height: 30px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
-  background: var(--accent-soft); color: var(--accent-bright); font-size: var(--plite-fs-sm, 12px);
-  font-weight: 600; cursor: pointer;
+.chat-share-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.chat-share-chip {
+  height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm);
+  background: var(--accent-soft); color: var(--accent-bright); font-size: 11px; font-weight: 600; cursor: pointer;
 }
-.chat-share-action:disabled { opacity: 0.5; cursor: default; }
-.chat-share-action.half { flex: 1; background: transparent; color: var(--text-dim); }
-.chat-share-row { display: flex; gap: 6px; }
-.chat-share-url {
-  font-size: 11px; color: var(--accent-bright); text-decoration: none;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding: 5px 8px; border: 1px dashed var(--border); border-radius: var(--plite-radius-sm);
-}
-.chat-share-list { display: flex; flex-direction: column; gap: 4px; }
-.chat-share-item { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.chat-share-chip:disabled { opacity: 0.5; cursor: default; }
+.chat-share-url { font-size: 10.5px; color: var(--accent-bright); text-decoration: none; padding: 2px 7px; border: 1px dashed var(--border); border-radius: var(--plite-radius-sm); }
+.chat-share-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-share-item { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; border: 1px solid var(--border); border-radius: var(--plite-radius-sm); padding: 1px 6px; }
 .chat-share-item .mono { font-family: ui-monospace, monospace; color: var(--text-soft); }
-.chat-share-item .left { color: var(--text-faint); flex: 1; }
-.chat-share-item .revoke { border: 1px solid var(--border); border-radius: var(--plite-radius-sm); background: transparent; color: var(--plite-danger); font-size: 10px; padding: 1px 7px; cursor: pointer; }
-.chat-share-note { font-size: 11px; color: var(--text-faint); }
+.chat-share-item .left { color: var(--text-faint); }
+.chat-share-revoke { border: none; background: transparent; color: var(--plite-danger); font-size: 10px; padding: 0 2px; cursor: pointer; }
+.chat-share-note { font-size: 10.5px; }
+

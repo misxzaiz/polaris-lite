@@ -24,7 +24,7 @@ import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, FolderIcon, ChevronRightI
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
 import { ContextMeter } from './ContextMeter';
-import { ShareEntry } from './ShareEntry';
+import { ShareDrawerRows } from './ShareDrawer';
 import './chat-input.css';
 
 const MAX_CHARS = 200_000;
@@ -588,6 +588,9 @@ export function ChatInput() {
                   ))}
                 </div>
               )}
+              {/* 分享（needs #069 v3）：网页链接（token+有效期）+ 本地导出（个人版 md / AI 分析版）。
+                  同源 HTTP 直连 transcript-share server 半边，无跨插件 cap 授权面。 */}
+              <ShareDrawerRows />
             </div>
         </div>
         <div className="chat-input-btns">
@@ -629,9 +632,6 @@ export function ChatInput() {
             <span className="chat-ws-btn-label">{sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}</span>
             {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
           </button>
-          {/* 分享当前对话（needs #069 v3 P1）：链接/token+有效期 + 本地导出（个人版 md / AI 分析版）。
-              同源 HTTP 直连 transcript-share server 半边，无跨插件 cap 授权面。 */}
-          <ShareEntry />
           <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
           {/* 新增对话：输入框旁一键开新会话（与左侧栏「新会话」等效；空会话防重复） */}
           <button
