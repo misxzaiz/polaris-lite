@@ -16,7 +16,8 @@
     "sync:dist": "node scripts/sync-dist.mjs",
     "deploy:9826": "node scripts/deploy-9826.mjs",
     "status:9826": "node scripts/deploy-9826.mjs status",
-    "soft:9826": "node scripts/soft-deploy-9826.mjs"
+    "soft:9826": "node scripts/soft-deploy-9826.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -13,6 +13,30 @@
 | 9825 | 生产 | `D:\space\base\polaris-lite`（随仓库走） | `.polaris-lite/` | pm2（cwd=仓库本体） |
 | 9826 | **钉住的分析实例** | `D:\space\base\polaris-lite-9826`（独立 clone） | `D:\space\base\polaris-lite\.polaris-lite-pm2\`（绝对路径） | **只在显式发布时更新** |
 
+## 版本戳与 app-updater（重要：发布前先 commit）
+
+app-updater 插件（应用更新面板）展示的「服务器版本」来自 9826 数据目录里的
+`.polaris-lite-pm2/app-updater-version.json`，**由 deploy-9826.mjs 在部署成功末尾写入当时发布的
+commit sha**（`stamp()`，同时 append 一行到 `polaris-lite-9826/logs/deploy-9826.log`）。
+前端拿它与 origin/master 最新 commit 比对，提示「有新版本可用」。
+
+三个坑，按时间线容易踩：
+
+1. **发布的是 commit，不是工作树**。deploy 脚本从 origin/master 拉代码；工作树里未提交的改动
+   **不进部署**，但会进本仓库 `npm run build` 的产物（9825 随仓库走）。结果：9825 跑着新功能，
+   9826 的版本戳却停在旧 commit——app-updater 误报「有新版本」。**规矩：先 `git commit` + push，
+   再 deploy:9826，最后才 build/restart 9825**，三个环境对齐同一 commit。
+2. **stamp 在 restart 之后**。脚本顺序是 build → restart → stamp。若 deploy 中途被打断
+   （终端断开、工具超时），会出现「代码已是新的、版本戳还是旧的」——9826 实际已更新但面板
+   仍提示更新。核实方法：`npx pm2 jlist` 看重启时间 vs `type logs\deploy-9826.log` 最后一行。
+   修复：直接改 `.polaris-lite-pm2/app-updater-version.json` 的 sha/subject 为实际运行 commit。
+3. **9825 没有版本戳**。stamp 只有 deploy-9826 写；9825 的数据目录（默认 `.polaris-lite/`）里
+   没有这个文件，app-updater 在 9825 上显示 `sha: null`（视为「不提供版本信息」，不提示更新）。
+   若希望 9825 也参与版本提示，需要另行在 9825 的发布流程里写同样的戳文件。
+
+排查速查：更新面板显示「服务器版本」与预期不符时，先 `type .polaris-lite-pm2\app-updater-version.json`
+（9826），再对照 `git log -1 origin/master`——不一致就按第 2 条修。
+
 - clone 的 `origin` 指向本地仓库本体，发布不依赖 GitHub。
 - pm2 配置在 `ecosystem.config.cjs`：`cwd` 指向 clone，`PLITE_DATA_DIR` 是**绝对路径**
   （改相对路径会解析到 clone 下变成空目录，数据看起来「丢了」）。
