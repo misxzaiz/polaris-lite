@@ -13,9 +13,40 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE } from '@sdk';
 import { type PendingSend } from './store';
 import { ShareDrawerRows } from './ShareDrawer';
 import { ChevronRightIcon } from './icons';
+
+// ---- 抽屉状态桥（与 workspace-layout/stateBridge 同纪律，chat-lite 就地轻量实现）----
+// 通道名经 @sdk 登记；防环纪律：监听方只同步本地订阅者，**不得**再派发。
+type Drawer = 'none' | 'sidebar' | 'panel';
+
+function readDrawer(): Drawer {
+  if (typeof window === 'undefined') return 'none';
+  const w = window as unknown as Record<string, unknown>;
+  const d = w[CHANNEL_DRAWER_STATE] as Drawer | undefined;
+  return d && ['none', 'sidebar', 'panel'].includes(d) ? d : 'none';
+}
+
+/** 订阅抽屉变化（宿主顶栏按钮 / 本面板按钮 / workspace-layout 布局树共享同一状态） */
+function subscribeDrawer(fn: (d: Drawer) => void): () => void {
+  const onEv = (e: Event): void => {
+    const d = (e as CustomEvent<Drawer>).detail;
+    if (d && ['none', 'sidebar', 'panel'].includes(d)) fn(d);
+  };
+  window.addEventListener(CHANNEL_DRAWER_EVENT, onEv);
+  return () => window.removeEventListener(CHANNEL_DRAWER_EVENT, onEv);
+}
+
+/** 切换抽屉：写通道 + 派发事件（宿主 shellState 监听同步，不再二次派发） */
+function toggleDrawer(target: 'sidebar' | 'panel'): void {
+  const cur = readDrawer();
+  const next: Drawer = cur === target ? 'none' : target;
+  const w = window as unknown as Record<string, unknown>;
+  w[CHANNEL_DRAWER_STATE] = next;
+  window.dispatchEvent(new CustomEvent(CHANNEL_DRAWER_EVENT, { detail: next }));
+}
 
 /** /api/providers/list 的 masked 供应商行（面板只取需要的字段） */
 interface ProviderEntry {
@@ -32,6 +63,8 @@ interface ProviderEntry {
 interface PopupPos { left: number; width: number; bottom: number; maxHeight: number }
 
 interface SessionSettingsPanelProps {
+  // ---- 会话标题（头部展示；未设置=「新会话」时回退用户第一句）----
+  sessionTitle: string;
   // ---- 模型（会话级覆盖；undefined=跟随全局默认）----
   providerId: string | undefined;
   modelId: string | undefined;
@@ -68,6 +101,7 @@ interface SessionSettingsPanelProps {
 
 export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const {
+    sessionTitle,
     providerId, modelId, onSetSessionModel,
     workspaceId, wsLabel, wsMissing, linkedCount, onOpenWorkspacePicker,
     trustMode, trustTitle, trustLabel, onToggleTrust,
@@ -136,6 +170,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     };
   };
 
+  // ---- 抽屉状态（头部左右展开按钮的高亮源）----
+  const [drawer, setDrawerState] = useState<Drawer>(readDrawer);
+  useEffect(() => subscribeDrawer(setDrawerState), []);
+
   const openModelPop = (kind: 'provider' | 'model') => {
     setModelPos(computeModelPos());
     setModelPop(kind);
@@ -202,6 +240,38 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
       >
         <div className="chat-picker-head">
           <span className="chat-picker-title">会话设置</span>
+          {/* 会话标题展示：未设置（「新会话」）时回退用户第一句（SessionSidebar displayTitle 同款口径） */}
+          <span className="chat-pop-title" title={sessionTitle}>{sessionTitle}</span>
+          {/* 左右侧栏展开按钮（小屏顶栏被系统 UI 遮挡时的底部可达入口）：
+              经 window 抽屉通道与宿主顶栏按钮/布局树共享同一状态；点已展开侧再点即收起 */}
+          <button
+            type="button"
+            className={`side-toggle ${drawer === 'sidebar' ? 'on' : ''}`}
+            onClick={() => toggleDrawer('sidebar')}
+            title={drawer === 'sidebar' ? '收起左侧边栏' : '展开左侧边栏'}
+            aria-label={drawer === 'sidebar' ? '收起左侧边栏' : '展开左侧边栏'}
+            aria-pressed={drawer === 'sidebar'}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" aria-hidden="true">
+              <rect x="3" y="4" width="7" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+              <line x1="13" y1="12" x2="21" y2="12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <path d="M18.2 8.6 L21.6 12 L18.2 15.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`side-toggle ${drawer === 'panel' ? 'on' : ''}`}
+            onClick={() => toggleDrawer('panel')}
+            title={drawer === 'panel' ? '收起右侧边栏' : '展开右侧边栏'}
+            aria-label={drawer === 'panel' ? '收起右侧边栏' : '展开右侧边栏'}
+            aria-pressed={drawer === 'panel'}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" aria-hidden="true">
+              <rect x="14" y="4" width="7" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+              <line x1="11" y1="12" x2="3" y2="12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <path d="M5.8 8.6 L2.4 12 L5.8 15.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </svg>
+          </button>
           <button className="chat-picker-done" onClick={onDone}>完成</button>
         </div>
         <div className="chat-settings-body">

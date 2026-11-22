@@ -526,6 +526,39 @@
   border-bottom: 1px solid var(--border);
 }
 .chat-picker-title { font-size: 11px; color: var(--text-dim); letter-spacing: 0.06em; }
+
+/* ===== 会话设置面板头部：标题展示 + 左右侧栏展开小按钮 ===== */
+/* 标题：「会话设置」右侧同行展示，弱化灰、超长省略——不新增行高 */
+.chat-pop-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-left: 1px solid var(--border-strong);
+  padding-left: 8px;
+  margin-left: 2px;
+}
+/* 左右展开按钮：24px 小尺寸（与头部 34px 行高协调，不挤占面板空间） */
+.side-toggle {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.side-toggle:hover { border-color: var(--accent); color: var(--accent-bright); }
+.side-toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-bright); }
+
 .chat-picker-done {
   margin-left: auto;
   padding: 2px 6px;

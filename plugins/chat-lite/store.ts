@@ -91,6 +91,8 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。
    *  缺省回退 createdAt（旧快照兼容）。随会话 JSON 一并上云，多端排序一致。 */
   lastActiveAt?: number;
+  /** 置顶标记（置顶组常驻列表顶部；随会话 JSON 上云，多端一致） */
+  pinned?: boolean;
 };
 
 /** 会话列表排序口径（唯一权威）：按创建时间倒序（最新创建在前）。
@@ -127,6 +129,8 @@ interface SessionState {
   createSession: (title?: string) => string;
   setActive: (id: string) => void;
   renameSession: (id: string, title: string) => void;
+  /** 置顶/取消置顶（置顶组常驻列表顶部；随会话 JSON 上云，多端一致） */
+  togglePinSession: (id: string) => void;
   /** 设置/清除会话绑定的文件工作区根 id（undefined=跟随全局默认） */
   setSessionWorkspace: (id: string, workspaceId: string | undefined) => void;
   /** 设置会话的关联只读目录（最多 3 个；主目录自动排除） */
@@ -313,6 +317,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   renameSession: (id, title) => {
     set((st) => ({ sessions: sortSessions(st.sessions.map((s) => (s.id === id ? touch({ ...s, title }) : s))) }));
+    dirty.add(id);
+    scheduleSync();
+  },
+
+  togglePinSession: (id) => {
+    set((st) => ({ sessions: sortSessions(st.sessions.map((s) => (s.id === id ? touch({ ...s, pinned: !s.pinned }) : s))) }));
     dirty.add(id);
     scheduleSync();
   },

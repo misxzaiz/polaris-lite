@@ -136,6 +136,12 @@ export function ChatInput() {
   const sessionProviderId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.providerId);
   const sessionModelId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelId);
   const setSessionModel = useSessionStore((s) => s.setSessionModel);
+  /** 会话标题（会话设置面板头部展示）：未设置（「新会话」）时回退用户第一句，与侧栏 displayTitle 同口径 */
+  const sessionTitle = useSessionStore((s) => {
+    const cur = s.sessions.find((x) => x.id === s.activeId);
+    if (!cur) return '会话设置';
+    return cur.title !== '新会话' ? cur.title : (cur.messages[0]?.content?.slice(0, 18) ?? '新会话');
+  });
   const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
   const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
   const createSession = useSessionStore((s) => s.createSession);
@@ -559,6 +565,7 @@ export function ChatInput() {
             模型 / 执行（工作目录+模式）/ 待发队列 / 分享；关闭通道=完成/点外/Esc。 */}
         {assistantOpen && (
           <SessionSettingsPanel
+            sessionTitle={sessionTitle}
             providerId={sessionProviderId}
             modelId={sessionModelId}
             onSetSessionModel={(pid, mid) => setSessionModel(activeId ?? createSession(), pid, mid)}
