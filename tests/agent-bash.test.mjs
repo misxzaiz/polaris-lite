@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerPart, detectCommandSubstitution } from '../plugins/agent-bash/server.mjs';
+import { createServerPart, detectCommandSubstitution, resolveBashExe } from '../plugins/agent-bash/server.mjs';
 
 /** 构造临时数据目录 + 中间件调用器（默认带登录会话，yolo 模式免审批） */
 function tempEnv(t, { config } = {}) {
@@ -267,6 +267,51 @@ test('exec: 审计日志记录每次执行', async (t) => {
   assert.match(log, /s-audit/);
   assert.match(log, /"verdict":"ok"/);
 });
+
+// ── bash 执行环境（2026-11-23 修复回归）──────────────────────────────
+// 背景：shell:true 在 win32 走 cmd /c，模型写的 POSIX 语法（2>/dev/null、; 分隔）
+// 全部报错——`2>/dev/null` → 不存在的 \dev\null → exit 255「系统找不到指定的路径」；
+// `;` 被当参数（head: invalid trailing option -- ;）。单轮转录 182 条失败里约 80 条
+// 是这个根因。修复：win32 优先经 Git Bash 执行，无 bash 才回退 cmd。
+
+test('resolveBashExe: PLITE_BASH 显式指定优先；无效值落到候选路径；非 win32 为空', () => {
+  const realBash = resolveBashExe(); // 本机（win32 + Git）应能解析到
+  if (process.platform !== 'win32') {
+    assert.equal(realBash, '');
+    return;
+  }
+  // 显式指定有效路径 → 用它
+  const withOverride = resolveBashExe({ PLITE_BASH: realBash || 'C:\\Program Files\\Git\\bin\\bash.exe' });
+  assert.ok(withOverride.endsWith('bash.exe'), `应返回 bash 路径: ${withOverride}`);
+  // 显式指定无效路径 → 回落到候选路径（仍能找到本机 Git Bash）
+  const fallback = resolveBashExe({ PLITE_BASH: 'C:\\nope\\bash.exe' });
+  if (realBash) assert.equal(fallback, realBash);
+  // 候选路径必须真实存在（防止指向 WSL 的 WindowsApps\bash.exe）
+  assert.ok(!/WindowsApps/i.test(realBash), '不得解析到 WSL bash');
+});
+
+test('exec: POSIX bash 语法可用（2>/dev/null、; 分隔、管道——历史 exit=255 回归）', async (t) => {
+  if (process.platform !== 'win32' || !resolveBashExe()) t.skip('仅 win32 + Git Bash 环境验证');
+  const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
+  // 当年连续失败的原样命令形态
+  const r = await env.call('/api/tool/exec', {
+    command: 'cat package.json 2>/dev/null | head -3; echo ===; ls *.json | head -2',
+    sessionId: 's1',
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.exitCode, 0, `POSIX 命令应成功: ${JSON.stringify(r.json).slice(0, 300)}`);
+  assert.match(r.json.stdout, /===/);
+});
+
+test('exec: config GET 带 shell 字段（bash 或 cmd，供 describe 写对语法）', async (t) => {
+  const env = tempEnv(t);
+  const r = await env.call('/api/tool/config');
+  assert.equal(r.status, 200);
+  if (process.platform === 'win32') {
+    assert.ok(['bash', 'cmd'].includes(r.json.shell), `shell 应为 bash|cmd: ${r.json.shell}`);
+  }
+});
+
 
 // ── denylist 便捷断言 ────────────────────────────────────────────────
 // 与 server.mjs 同源校验放在「探测校验」测试里（走真实 exec 403）；这里的

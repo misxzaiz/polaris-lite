@@ -25,14 +25,27 @@ export interface ToolDescriptor {
   danger: 'read' | 'write' | 'execute';
 }
 
+const DESC_BASE =
+  '在工作区执行 shell 命令并返回 stdout/stderr/exitCode。' +
+  '可用于读写文件、运行脚本、安装依赖、调用任意 CLI——需要衍生新能力时先想 bash。' +
+  '限制：cwd 锁定工作区目录；单条超时默认 30s（最长 300s）；输出上限 64KB；' +
+  '危险命令（rm -rf、curl|sh、改配置存储等）会被无条件拒绝。';
+
+/** 按 server 实际执行环境给模型写对语法（config.shell 由 server.mjs 提供）。
+ *  历史教训：固定写「Windows（cmd 语法）」，模型仍写 bash（2>/dev/null 等），
+ *  cmd 下这些全报错；现在 server 有 Git Bash 就明说 bash 语法，反之明说 cmd。 */
+function getDescriptor(): ToolDescriptor {
+  const shell = serverConfig?.shell;
+  const syntax = shell === 'cmd'
+    ? '当前宿主为 Windows cmd：不支持 2>/dev/null、; 分隔与 $VAR——请用 cmd 等价写法（2>nul、& 分隔）。'
+    : '当前宿主经 Git Bash 执行：写 POSIX bash 语法（2>/dev/null、管道、&&/; 分隔、$VAR 均可用）；Windows 路径 D:/x/y 与 /d/x/y 都接受。';
+  return { ...DESCRIPTOR, description: DESC_BASE + syntax };
+}
+
 const DESCRIPTOR: ToolDescriptor = {
   cap: 'cap.tool.bash',
   name: 'bash',
-  description:
-    '在工作区执行 shell 命令并返回 stdout/stderr/exitCode。' +
-    '可用于读写文件、运行脚本、安装依赖、调用任意 CLI——需要衍生新能力时先想 bash。' +
-    '限制：cwd 锁定工作区目录；单条超时默认 30s（最长 300s）；输出上限 64KB；' +
-    '危险命令（rm -rf、curl|sh、改配置存储等）会被无条件拒绝。当前宿主为 Windows（cmd 语法）。',
+  description: DESC_BASE,
   parameters: {
     type: 'object',
     properties: {
@@ -44,8 +57,8 @@ const DESCRIPTOR: ToolDescriptor = {
   danger: 'execute',
 };
 
-/** 服务端工具配置（模式/白名单）缓存；exec 前刷新 */
-let serverConfig: { enabled: boolean; mode: string; allowPrefixes: string[]; hardOff?: boolean } | null = null;
+/** 服务端工具配置（模式/白名单/实际 shell）缓存；exec 前刷新 */
+let serverConfig: { enabled: boolean; mode: string; allowPrefixes: string[]; hardOff?: boolean; shell?: 'bash' | 'cmd' } | null = null;
 
 async function fetchConfig(): Promise<typeof serverConfig> {
   try {
@@ -105,7 +118,9 @@ function createBashHandler(): CapabilityHandler {
     const payload = (req.payload ?? {}) as { command?: string; timeoutMs?: number; approved?: boolean; sessionId?: string };
     switch (req.action) {
       case 'describe':
-        return { descriptor: DESCRIPTOR };
+        // shell 信息决定给模型的语法指导；缓存未就绪（首回合竞态）就补拉一次
+        if (!serverConfig) serverConfig = await fetchConfig();
+        return { descriptor: getDescriptor() };
       case 'exec':
         return await execCommand(payload);
       case 'getConfig':

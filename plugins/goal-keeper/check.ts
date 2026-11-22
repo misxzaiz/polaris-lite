@@ -56,13 +56,17 @@ export async function runGoalCheck(api: SlotHostApi, input: CheckInput): Promise
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
-          max_tokens: 500,
+          max_tokens: 2000,  // 推理模型思考也吃预算：500 曾被思考耗尽导致 content 为空
         },
       }),
     });
     if (!resp.ok) return { outcome: 'unknown', evidence: `模型调用失败 ${resp.status}`, gap: '', at: now };
     const data = (await resp.json()) as { choices?: { message?: { content?: string } }[] };
     const text = data.choices?.[0]?.message?.content ?? '';
+    if (!text.trim()) {
+      // content 为空：多半是 max_tokens 被思考耗尽（推理模型），给可诊断的证据而不是空串
+      return { outcome: 'unknown', evidence: '模型返回为空（思考可能耗尽输出预算）', gap: '', at: now };
+    }
     const parsed = parseVerdict(text);
     outcome = parsed.outcome;
     evidence = parsed.evidence;

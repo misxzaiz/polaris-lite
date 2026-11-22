@@ -12,11 +12,11 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const OUTCOME_LABEL: Record<string, string> = {
-  achieved: '✅ 已达成',
-  partial: '⏳ 进行中',
-  not_started: '◻ 尚未开始',
-  interrupted: '⛔ 被中断',
-  unknown: '❓ 无法判定',
+  achieved: '已达成',
+  partial: '进行中',
+  not_started: '尚未开始',
+  interrupted: '被中断',
+  unknown: '无法判定',
 };
 
 export function GoalKeeperPanel() {
@@ -66,6 +66,7 @@ export function GoalKeeperPanel() {
 
   return (
     <div className="gk-panel" data-testid="goal-keeper">
+      <div className="gk-hint">提示：对话里输入 /goal 目标内容 也可设定目标</div>
       {!goal || goal.status === 'abandoned' ? (
         <div className="gk-create">
           <div className="gk-title">为当前会话设定目标</div>

@@ -125,8 +125,13 @@ export const chatLitePlugin: LitePlugin = {
       if (!sid || !aid || !callId) return; // 无定位信息：无法归块，丢弃
       const st = useSessionStore.getState();
       const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === aid);
-      if (!msg || !hasBlocks(msg)) return;
-      const exists = msg.blocks.some((b) => b.type === 'interactive' && b.card.callId === callId);
+      // 块消息挂卡：assistant 流式消息 blocks:[] 已初始化，首轮事件（先于任何
+      // thinking/delta 落块）就可能带卡——曾用 hasBlocks（要求已有块）把关，
+      // 结果「开场即发卡」的插件卡被静默丢弃（goal-keeper /goal 登记卡实测丢失）。
+      // 这里放宽为「有 blocks 数组即可挂」；纯文本消息（无 blocks 字段）仍丢弃。
+      const blocks = (msg as { blocks?: { type: string; card?: { callId: string } }[] }).blocks;
+      if (!msg || !Array.isArray(blocks)) return;
+      const exists = blocks.some((b) => b.type === 'interactive' && b.card?.callId === callId);
       if (created || !exists) {
         if (exists) return; // created 重复：幂等跳过
         st.appendAssistantBlock(sid, aid, {

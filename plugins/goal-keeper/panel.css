@@ -22,3 +22,4 @@
 .gk-verdict-time { color: var(--plite-text-dim, #aaa); font-size: 11px; }
 .gk-verdict-none { color: var(--plite-text-dim, #888); }
 .gk-actions { display: flex; gap: 8px; margin-top: 10px; }
+.gk-hint { color: var(--plite-text-dim, #888); font-size: 12px; margin-bottom: 8px; }

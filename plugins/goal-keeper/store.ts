@@ -61,13 +61,31 @@ export function currentSessionId(): string {
   return '';
 }
 
-/** 会话尾部消息（给检查 agent 的证据材料）。返回 [{role, text}]，超长截断。 */
+/** 会话尾部消息（给检查 agent 的证据材料）。返回 [{role, text}]，超长截断。
+ *
+ * 时序坑：chat-lite 的会话是「流式中不 push，settle 后 800ms 防抖统一落」
+ * （chat-lite/sync.ts），而检查在 message.done 即触发——第一次读大概率撞上
+ * 服务端还没落盘（空消息/404），所以这里做有界重试：空结果隔 2s 再读，
+ * 最多 4 次（覆盖防抖窗口 + 慢机余量），全程 ~8s 上限。 */
 export async function fetchSessionTail(
   sessionId: string,
   maxMessages = 20,
   maxCharsPer = 400,
 ): Promise<{ role: string; text: string }[]> {
   if (!sessionId) return [];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+    const tail = await fetchSessionTailOnce(sessionId, maxMessages, maxCharsPer);
+    if (tail.length > 0) return tail;
+  }
+  return [];
+}
+
+async function fetchSessionTailOnce(
+  sessionId: string,
+  maxMessages: number,
+  maxCharsPer: number,
+): Promise<{ role: string; text: string }[]> {
   try {
     const resp = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { credentials: 'include' });
     if (!resp.ok) return [];

@@ -1,5 +1,5 @@
 {
-  "version": "16",
+  "version": "17",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -116,7 +116,8 @@
         "cap.tool.mcp",
         "cap.tool.mcp-ops",
         "cap.market.tool",
-        "cap.tool.transcript"
+        "cap.tool.transcript",
+        "cap.tool.goal"
       ],
       "provides": [
         "cap.agent.loop"
@@ -190,10 +191,14 @@
         "cap.interactive",
         "cap.agent.loop"
       ],
-      "provides": [],
+      "provides": [
+        "cap.tool.goal"
+      ],
       "events": [
         "cap.agent.loop:event",
-        "interactive.answered"
+        "interactive.answered",
+        "user.prompt",
+        "tool-registered"
       ]
     },
     "browser-lite": {

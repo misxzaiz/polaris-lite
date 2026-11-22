@@ -17,6 +17,8 @@
  * - cwd 锁定 <dataDir>/workspace 内；timeout 默认 30s 上限 300s；
  * - 输出 64KB 上限（头尾保留 + truncated 标记）；并发 1（BUSY 拒绝）；
  * - win32 杀进程树 taskkill /T /F（Node kill 只杀直接子进程）；客户端断开 → abort → 杀树；
+ * - win32 优先经 Git Bash 执行（模型写 POSIX 语法，cmd /c 会把 2>/dev/null、;
+ *   当成错误重定向/参数——见 resolveBashExe 注释）；无 bash 回退 cmd；
  * - 全量审计落 <dataDir>/tool-exec-audit.log。
  */
 import { spawn } from 'node:child_process';
@@ -76,6 +78,28 @@ export function detectCommandSubstitution(command) {
     if (ch === '@' && command[i + 1] === '(') return true;                     // PowerShell @()
   }
   return false;
+}
+
+/** win32 下解析可用的 bash（Git Bash），找不到返回 ''（回退 cmd）。
+ *  为什么必须有它：模型写的是 POSIX bash 命令（2>/dev/null、; 分隔、引号转义），
+ *  而 shell:true 在 win32 走 cmd /c——`2>/dev/null` 会重定向到不存在的 \dev\null
+ *  （exit 255「系统找不到指定的路径」）、`;` 会被当成参数传给 head 等程序。
+ *  历史事故：2026-11-23 转录复盘，182 条失败工具调用里约 80 条是这个根因。
+ *  顺序：PLITE_BASH 显式指定 > Git for Windows 常见安装路径；绝不采用 PATH 里
+ *  搜到的 WindowsApps\bash.exe（那是 WSL，文件系统视图完全不同）。 */
+const BASH_CANDIDATES = [
+  'C:\\Program Files\\Git\\bin\\bash.exe',
+  'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+];
+export function resolveBashExe(env = process.env) {
+  if (process.platform !== 'win32') return '';
+  const override = String(env.PLITE_BASH ?? '').trim();
+  if (override) { try { if (existsSync(override)) return override; } catch { /* 忽略 */ } }
+  for (const p of BASH_CANDIDATES) {
+    try { if (existsSync(p)) return p; } catch { /* 忽略 */ }
+  }
+  return '';
 }
 
 /** 解码子进程输出：win32 上 cmd 默认 GBK、PowerShell 默认跟随控制台代码页，
@@ -176,13 +200,21 @@ export function createServerPart(options = {}) {
     return new Promise((resolveExec) => {
       const started = Date.now();
       const isWin = process.platform === 'win32';
-      const child = spawn(command, {
-        shell: true, // win32 → cmd /c；unix → /bin/sh -c
-        cwd,
-        windowsHide: true,
-        env: { ...process.env, PLITE_TOOL: '1', NO_COLOR: '1' },
-        detached: !isWin, // posix 下独立进程组，便于整组杀
-      });
+      // win32 优先 Git Bash（模型写 POSIX 语法）；无 bash 才回退 cmd /c
+      const bashExe = resolveBashExe();
+      const child = bashExe
+        ? spawn(bashExe, ['-c', command], {
+            cwd,
+            windowsHide: true,
+            env: { ...process.env, PLITE_TOOL: '1', NO_COLOR: '1' },
+          })
+        : spawn(command, {
+            shell: true, // win32 → cmd /c；unix → /bin/sh -c
+            cwd,
+            windowsHide: true,
+            env: { ...process.env, PLITE_TOOL: '1', NO_COLOR: '1' },
+            detached: !isWin, // posix 下独立进程组，便于整组杀
+          });
 
       let stdoutHead = '';
       let stdoutTail = '';
@@ -277,7 +309,8 @@ export function createServerPart(options = {}) {
     if (pathname === '/api/tool/config') {
       if (req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        return res.end(JSON.stringify({ ...readConfig(), hardOff }));
+        // shell 告诉前端实际执行环境（bash/cmd），describe 描述据此给模型写对语法
+        return res.end(JSON.stringify({ ...readConfig(), hardOff, shell: resolveBashExe() ? 'bash' : 'cmd' }));
       }
       if (req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
