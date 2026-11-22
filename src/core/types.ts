@@ -205,6 +205,10 @@ export interface ChatMessage {
   content: string;
   createdAt: number;
   streaming?: boolean;
+  /** 本轮回复收敛时刻（message.done / stream.error / 用户停止三路统一，由 settle() 落）。
+   *  可选字段：旧快照无此值（UI 显示降级），durationMs = endedAt - createdAt。
+   *  被中断的流同样有值（语义 = 「跑了多久被停」）。服务端/IndexedDB 均整对象透传。 */
+  endedAt?: number;
 }
 
 // ---------- 对话消息模型（2026-11-21 自 chat-lite/store.ts 上移,host-slimming-report §2.6/P1-3） ----------

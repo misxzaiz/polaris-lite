@@ -78,6 +78,35 @@ const mkSession = (id, extra = {}) => ({
 
 // ---------------------------------------------------------------- 门禁
 
+test('endedAt 消息字段透传：PUT 带 endedAt → GET 原样保留（含多设备二次写回不丢）', async (t) => {
+  const c = await login(t, tempRoot());
+  const sess = mkSession('s-endedat');
+  sess.messages[1].endedAt = 1700000005321; // assistant 收敛时刻（settle 落）
+  const put = await c.send('/api/chat/sessions/s-endedat', { method: 'PUT', body: { session: sess, baseVersion: 0 } });
+  assert.equal(put.status, 200);
+
+  const get = await c.send('/api/chat/sessions/s-endedat');
+  assert.equal(get.status, 200);
+  // 服务端整对象透传：新字段不剥落（旧快照兼容的前提——读到多余字段原样回写）
+  assert.equal(get.json.session.messages[1].endedAt, 1700000005321);
+  assert.equal(get.json.session.messages[0].endedAt, undefined); // user 消息不带，也透传为无
+
+  // 模拟另一设备读→改标题→写回：endedAt 不丢（旧客户端整对象回写场景）
+  const sess2 = get.json.session;
+  sess2.title = '另一设备改名';
+  const put2 = await c.send('/api/chat/sessions/s-endedat', { method: 'PUT', body: { session: sess2, baseVersion: 1 } });
+  assert.equal(put2.status, 200);
+  const get2 = await c.send('/api/chat/sessions/s-endedat');
+  assert.equal(get2.json.session.messages[1].endedAt, 1700000005321);
+
+  // 旧快照（无 endedAt）：正常读写不炸
+  const sessOld = mkSession('s-legacy');
+  const put3 = await c.send('/api/chat/sessions/s-legacy', { method: 'PUT', body: { session: sessOld, baseVersion: 0 } });
+  assert.equal(put3.status, 200);
+  const get3 = await c.send('/api/chat/sessions/s-legacy');
+  assert.equal(get3.json.session.messages[1].endedAt, undefined);
+});
+
 test('未登录访问 chat-store 一律 401', async (t) => {
   const { client } = await startHost(t, tempRoot());
   const c = client();

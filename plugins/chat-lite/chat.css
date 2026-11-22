@@ -19,6 +19,9 @@
   text-transform: uppercase;
 }
 .chat-sessions-head span:last-child { font-family: var(--plite-font-mono); letter-spacing: 0.06em; }
+/* 无限滚动哨兵：零高度占位，仅作 IntersectionObserver 触底探测 */
+.chat-session-sentinel { height: 1px; }
+
 
 .chat-session-new {
   width: 100%;
@@ -1350,9 +1353,36 @@
 .tc-copy:hover { background: var(--bg-hover); color: var(--accent); }
 .tc-copy.done { color: var(--plite-success); }
 
+/* ===== 消息 meta 行：时间点（createdAt）+ 轮耗时（endedAt - createdAt） =====
+   桌面 hover 显示（与 msg-actions 同一触发器 .chat-msg:hover）；流式中常显（live-timer
+   是活跃信号）；手机端常显弱化（触屏无 hover，与操作条常显同一断点口径）。 */
+.msg-meta {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+  opacity: 0; transition: opacity var(--plite-dur);
+}
+.chat-msg:hover .msg-meta, .msg-meta:focus-within { opacity: 1; }
+.chat-msg.streaming .msg-meta { opacity: 1; }
+.msg-meta .sep { color: var(--border-strong); }
+.msg-meta .dur { color: var(--text-dim); }
+.msg-meta .dur.long { color: var(--plite-warn, #ffb86b); }
+.live-timer {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.live-timer .live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: msg-meta-pulse 1.2s ease-in-out infinite;
+}
+@keyframes msg-meta-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
 /* ===== 手机端（≤768px）：触屏无 hover → 操作条常显图标化；编辑框占满行宽 ===== */
 @media (max-width: 768px) {
   .msg-actions { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+  .msg-meta { opacity: .75; font-size: 10.5px; }
   .msg-act { padding: 3px 7px; position: relative; }
   /* 命中区外扩 ≥44px（伪元素不占布局、视觉不变）：视觉 ~28×19 → 命中 ~40×45。
      原 28×19px 是全站最大误触源（复制/编辑/重发挤在一起）。 */

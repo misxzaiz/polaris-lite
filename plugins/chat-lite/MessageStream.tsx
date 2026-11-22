@@ -10,6 +10,7 @@ import { ToolCard } from './ToolCard';
 import { PolarisMark, UserIcon, CopyIcon, CheckIcon, EditIcon, ResendIcon, RegenIcon, JumpIcon, BackfillIcon } from './icons';
 import { onStreamRetry, resumeTruncated, requestCompose, resendMessage, editResendLast, regenerateLast, assistantVisibleText } from './index';
 import { renderBlocks } from './BlockGroup';
+import { fmtMsgTime, fmtDur } from './time-fmt';
 
 /** 编辑态：一次只编辑一条；draft 进状态（确认条重建 DOM 不丢稿） */
 interface EditState { msgId: string; draft: string; confirm: boolean }
@@ -69,6 +70,39 @@ function overlayRoot(): HTMLElement | null {
  *  编辑仅最后一轮且非流式；重新生成仅末条 AI 且非流式；流式中重发转排队。
  *  手机端（≤768px）图标标签隐藏、命中区外扩 ≥44px，另加 ⋮ 打开全文案动作单
  *  （不用气泡长按：会和 iOS 原生文本选择冲突，消息正文选择/复制是高频操作）。 */
+/* __MSMETA_INJECTED__ */
+/** 流式中的实时计时器：Date.now() - createdAt 每 200ms 刷新。
+ *  随 streaming 消失而卸载（MsgMeta 门控），不落盘不进 store。 */
+function LiveTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 200);
+    return () => clearInterval(t);
+  }, []);
+  return <span className='live-timer'><i className='live-dot' />{fmtDur(now - since)}</span>;
+}
+
+/** 消息 meta 行：时间点（createdAt）+ 轮耗时（assistant：endedAt - createdAt）。
+ *  - 桌面 hover 显示（与 msg-actions 同一触发器）；手机端常显弱化（chat.css 断点）；
+ *  - 流式中 live-timer 常显（活跃信号）；旧快照无 endedAt → 只显示时间点，不显示占位。 */
+function MsgMeta({ m }: { m: StoreMessage }) {
+  if (isToolCard(m)) return null;
+  const isAsst = m.role === 'assistant';
+  const dur = isAsst && !m.streaming && typeof m.endedAt === 'number' ? m.endedAt - m.createdAt : null;
+  return (
+    <div className='msg-meta' data-testid='msg-meta'>
+      <span className='ts'>{fmtMsgTime(m.createdAt)}</span>
+      {isAsst && m.streaming && <LiveTimer since={m.createdAt} />}
+      {dur !== null && (
+        <>
+          <span className='sep'>·</span>
+          <span className={`dur${dur > 60_000 ? ' long' : ''}`}>{fmtDur(dur)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, editing, setEditing, onConfirm }: {
   m: StoreMessage;
   sid: string;
@@ -173,6 +207,7 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
             {m.streaming && !hasBlocks(m) && <span className="cursor" />}
           </div>
         )}
+        {!isEditing && <MsgMeta m={m} />}
         {!isEditing && (
           <div className="msg-actions">
             {specs.map((sp) => (

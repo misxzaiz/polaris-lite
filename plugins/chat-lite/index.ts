@@ -411,9 +411,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     if (hp.data?.decision === 'deny') {
       const reason = hp.data.reason ? '（原因：' + hp.data.reason + '）' : '';
       // 拦截原因落会话（user 原文 + assistant notice 块），用户能看到为什么没发出去
-      store.appendMessage(sessionId, { id: 'u-' + Date.now(), role: 'user', content: text, ts: Date.now() } as never);
+      store.appendMessage(sessionId, { id: 'u-' + Date.now(), role: 'user', content: text, createdAt: Date.now() } as never);
       const nid = 'a-' + Date.now();
-      store.appendMessage(sessionId, { id: nid, role: 'assistant', streaming: false, blocks: [], ts: Date.now() } as never);
+      store.appendMessage(sessionId, { id: nid, role: 'assistant', streaming: false, blocks: [], createdAt: Date.now(), endedAt: Date.now() } as never);
       store.appendAssistantBlock(sessionId, nid, { type: 'notice', text: '[生命周期钩子] 本轮输入已被 UserPromptSubmit 钩子拦截' + reason + '。输入未发送给 AI。' });
       return;
     }
@@ -550,7 +550,11 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     clearWatchdogs();
     flushDelta();
     flushReasoning();
-    useSessionStore.getState().updateMessage(sid, assistantId, { streaming: false });
+    useSessionStore.getState().updateMessage(sid, assistantId, {
+      streaming: false,
+      // 收敛时刻：done/error/停止三路统一落，UI 据此显示本轮耗时（endedAt - createdAt）
+      endedAt: Date.now(),
+    });
     unbind?.();
     sendNextPending(); // 流结束：自动派发队列下一条（若有）
   };
