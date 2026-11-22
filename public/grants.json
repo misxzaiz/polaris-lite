@@ -234,13 +234,13 @@
       "events": []
     },
     "app-updater": {
-      "capabilities": [
-        "cap.ai.chat:event"
-      ],
+      "capabilities": [],
       "provides": [
         "cap.app.updater"
       ],
-      "events": []
+      "events": [
+        "cap.ai.chat:event"
+      ]
     },
     "phone-agent": {
       "capabilities": [

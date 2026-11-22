@@ -291,7 +291,7 @@ export const appUpdaterPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: [],
     provides: ['cap.app.updater'],
-    events: [],
+    events: ['cap.ai.chat:event'],
     contributes: {
       slots: [{ slot: 'panel', component: 'AppUpdaterPanel', order: 15, title: '更新' }],
     },
