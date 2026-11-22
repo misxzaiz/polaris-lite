@@ -194,3 +194,17 @@
 ## 八、个人版「点开显示不对」修复（commit 后续追加）
 
 根因：个人版按钮直接下载 .md 文件，点开是未渲染的 markdown 原文。修复：新增 `renderHumanHtml`（个人版投影的服务端直渲染 HTML，无 JS、暗色自适应）+ `format=human-html`；ShareDrawer「预览」行拆双 chip（个人版效果 / 网页完整版）；human-html 页面工具栏内含「下载 .md / AI 分析版」——**下载意图与预览意图分离**：想看效果点预览，要文件点下载。
+
+## 九、分享页工具栏 404（commit 809e1f9 + 后续）
+
+用户实测报告：分享页「个人版 MD / AI 分析版 / JSON」点开都是 {"error":"not found"}。
+
+**根因**：工具栏链接是相对路径 `./json`——页面 URL `/share/<token>`（无尾斜杠）的基准目录是 `/share/`，浏览器解析成 `/share/json` → 不匹配任何路由 → 404。此前 E2E 全部用带 token 的完整路径 curl，从未点过页面内链接，漏网。
+
+**修复**：headHtml 用 `location.pathname` 拼绝对子路径。
+
+**二次踩坑**：修复初版在模板字符串里写 `replace(/\/+$/,'')`——模板字面量吃掉 `\/` 转义，产出 `replace(//+$,'')`，`//` 注释掉整行 → 页面脚本语法错误白屏。改用 charAt/slice 无转义写法；测试新增「内联脚本 node --check 语法断言」。
+
+**方法学假阳性修复**：排查中发现生产验证 "human-html → 200" 是假阳性——export 对未知名 format 静默回落 human md 也 200，新旧进程验证结果无法判别。改为 format 白名单（human/ai/human-html/html），未知名一律 400。
+
+**附带发现**：生产登录 boss/1234 失效（AUTH_INVALID_CREDENTIALS）——AGENTS.md 生产凭据描述过期。

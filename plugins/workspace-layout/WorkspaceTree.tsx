@@ -230,13 +230,70 @@ function AnchorView({ node }: { node: AnchorNode }) {
     first?.focus({ preventScroll: true });
   }, [narrow, open]);
 
+  // 手机端滑动关闭（P2-10）：sidebar 左滑 / panel 右滑 ≥64px（横向明显占优才触发，
+  // 不干扰纵向滚动）。与点遮罩等价——面板全宽 87% 时遮罩只剩一条边，滑动是主要出口。
+  useEffect(() => {
+    const el = asideRef.current;
+    if (!el || !narrow || !open) return;
+    let sx = 0;
+    let sy = 0;
+    let tracking = false;
+    const onStart = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      sx = t.clientX;
+      sy = t.clientY;
+      tracking = true;
+    };
+    const onMove = (e: TouchEvent): void => {
+      if (!tracking) return;
+      const t = e.touches[0];
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+      tracking = false;
+      if (isSidebar && dx < 0) setDrawer('none');
+      else if (isPanel && dx > 0) setDrawer('none');
+    };
+    const onEnd = (): void => {
+      tracking = false;
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: true });
+    el.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+    };
+  }, [narrow, open, isSidebar, isPanel]);
+
   const body = isSidebar ? (
     <>
       {layoutRenderBrand()}
       {content}
     </>
   ) : (
-    content
+    <>
+      {/* 能力面板关闭栏（P0-3）：面板窄屏占 87% 屏宽、顶栏按钮被自身盖住，
+          此前没有任何可见关闭入口，只能盲点左侧遮罩。侧栏不加速条——
+          汉堡按钮/遮罩/左滑三个出口已够，再放一条纯占空间的 bar 反而挤。 */}
+      {isPanel && narrow && (
+        <div className="shell-drawer-head">
+          <span className="shell-drawer-head-title">能力面板</span>
+          <button
+            type="button"
+            className="shell-drawer-close"
+            aria-label="关闭能力面板"
+            onClick={() => setDrawer('none')}
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {content}
+    </>
   );
 
   if (isSidebar || isPanel) {

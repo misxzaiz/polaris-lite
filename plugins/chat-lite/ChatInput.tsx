@@ -20,11 +20,11 @@ import {
 import { AttachmentStrip } from './AttachmentStrip';
 import { useSessionSwipe } from './useSessionSwipe';
 import { SwipeIndicator } from './SwipeIndicator';
-import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, FolderIcon, ChevronRightIcon, PlusIcon } from './icons';
+import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, PlusIcon } from './icons';
+import { SessionSettingsPanel } from './SessionSettingsPanel';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
 import { ContextMeter } from './ContextMeter';
-import { ShareDrawerRows } from './ShareDrawer';
 import './chat-input.css';
 
 const MAX_CHARS = 200_000;
@@ -111,6 +111,10 @@ export function ChatInput() {
   const [pickerPos, setPickerPos] = useState<{ left: number; width: number; bottom: number; maxHeight: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  /** 会话设置面板浮层根（面板是 portal 浮层；工作目录浮层锚定它、点外协作判定它） */
+  const panelPopRef = useRef<HTMLDivElement>(null);
+  /** 会话设置面板内浮层（模型选择）的 Esc 消费柄：Esc 链里先于「关面板」调用 */
+  const panelEscRef = useRef<() => boolean>(() => false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -128,6 +132,10 @@ export function ChatInput() {
   const sessionLinkedIds = useSessionStore(
     (s) => s.sessions.find((x) => x.id === s.activeId)?.linkedWorkspaceIds ?? [],
   );
+  /** 会话级模型覆盖（会话设置面板写入；undefined=跟随全局默认供应商/模型） */
+  const sessionProviderId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.providerId);
+  const sessionModelId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelId);
+  const setSessionModel = useSessionStore((s) => s.setSessionModel);
   const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
   const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
   const createSession = useSessionStore((s) => s.createSession);
@@ -142,8 +150,9 @@ export function ChatInput() {
   // 隐形滑切：输入条内非 textarea 区域横向滑动切上一个/下一个会话（零常驻 UI）
   const { swipeProps, feedback } = useSessionSwipe();
 
-  /** 浮层定位：用 bottom 贴住输入条上方（高度由内容决定，避免内容少时留一大片空白）；
-      空间不足时用 max-height 收紧，列表在内部滚动，绝不越过视口顶部 */
+  /** 浮层定位：锚定输入条（与面板/模型浮层同位槽——覆盖在面板上层）。
+      此前锚面板顶边之上，面板已占大半视口时剩余空间不足，浮层被 180px 下限顶出视口顶
+      （2026-11-22 用户实测「越界导致看不到」）。输入条顶以上永远是消息区全空间，不会越界。 */
   const computePickerPos = useCallback(() => {
     const el = barRef.current;
     if (!el) return null;
@@ -158,7 +167,8 @@ export function ChatInput() {
   }, []);
 
   const openPicker = useCallback(() => {
-    setAssistantOpen(false); // 抽屉与浮层不同时出现，避免两个面板抢焦点
+    // 工作目录浮层（portal）挂在会话设置面板之上，两者不互斥：面板保持展开，
+    // 浮层关闭（完成 / 点外面 / Esc）即回到面板继续调其余设置
     setPickerPos(computePickerPos());
   }, [computePickerPos]);
 
@@ -180,12 +190,12 @@ export function ChatInput() {
     };
   }, [pickerOpen, computePickerPos]);
 
-  // 点空白关闭（不设遮罩：遮罩会挡住消息流滚动）
+  // 点空白关闭（不设遮罩：遮罩会挡住消息流滚动）；会话设置面板内的点击不算外
   useEffect(() => {
     if (!pickerOpen) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (popRef.current?.contains(t) || barRef.current?.contains(t)) return;
+      if (popRef.current?.contains(t) || panelPopRef.current?.contains(t) || barRef.current?.contains(t)) return;
       setPickerPos(null);
     };
     document.addEventListener('pointerdown', onDown, true);
@@ -288,6 +298,17 @@ export function ChatInput() {
     draftTimer.current = setTimeout(() => saveDraft(activeId, val), 300);
   }, [activeId]);
 
+  /** 草稿写通（单写者纪律）：任何显式写入/清空都先取消在途防抖再落盘。
+   *  没有这一步，「发送时清空草稿」会被 300ms 前排下的防抖写回已发送文本，
+   *  重载/切回会话时输入框被回填（2026-11-22 实测缺陷根因）。 */
+  const writeDraftNow = useCallback((val: string) => {
+    if (draftTimer.current) {
+      clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
+    if (activeId) saveDraft(activeId, val);
+  }, [activeId]);
+
   // 会话切换：取消在途防抖写入（防 A 会话草稿写进 B），并载入新会话草稿
   useEffect(() => {
     if (draftTimer.current) {
@@ -306,14 +327,14 @@ export function ChatInput() {
   useEffect(() => onCompose((suggested) => {
     setText(suggested);
     setHistoryIndex(null);
-    if (activeId) saveDraft(activeId, suggested);
+    writeDraftNow(suggested);
     requestAnimationFrame(() => {
       const ta = taRef.current;
       if (!ta) return;
       ta.focus();
       ta.setSelectionRange(suggested.length, suggested.length);
     });
-  }), [activeId]);
+  }), [activeId, writeDraftNow]);
 
   // 自适应增高：现代内核走 CSS field-sizing:content（见 chat-input.css）；
   // 旧内核 JS 兜底——高度上/下限读计算样式（CSS 用 dvh，浏览器解析成 px），
@@ -350,14 +371,14 @@ export function ChatInput() {
       setText('');
       setAttachments([]);
       setHistoryIndex(null);
-      if (activeId) saveDraft(activeId, '');
+      writeDraftNow('');
       return;
     }
     if (t) appendHistory(t);
     setText('');
     setAttachments([]);
     setHistoryIndex(null);
-    if (activeId) saveDraft(activeId, '');
+    writeDraftNow('');
     void sendUserMessage(t, carryAttachments);
     void refreshTrust(); // 会话内配置可能被审批卡/面板改动：发送时同步徽标
   };
@@ -466,9 +487,10 @@ export function ChatInput() {
     if (e.key === 'Escape') {
       if (native.isComposing) return; // IME 组词中的 Esc 是取消候选，不清空
       if (pickerOpen) {
-        setPickerPos(null); // Esc 先关选择浮层
+        setPickerPos(null); // Esc 先关工作目录浮层
         return;
       }
+      if (panelEscRef.current()) return; // 再收会话设置面板内的模型选择浮层
       if (assistantOpen) {
         setAssistantOpen(false);
         return;
@@ -480,7 +502,7 @@ export function ChatInput() {
       }
       if (text.length > 0) {
         setText('');
-        if (activeId) saveDraft(activeId, '');
+        writeDraftNow('');
         return;
       }
       if (streaming) {
@@ -531,69 +553,62 @@ export function ChatInput() {
           style={{ display: 'none' }}
           onChange={handleFilePicker}
         />
-        {/* 助手面板：操作行调谐图标触发，内联展开在按钮行上方（不用浮层，避免被 shell-input 裁剪） */}
-        <div
-          className={`chat-assistant-drawer ${assistantOpen ? 'open' : ''}`}
-          aria-hidden={!assistantOpen}
-        >
-            <div className="chat-assistant-inner">
-              <button
-                className="chat-assistant-row chat-row-btn"
-                onClick={openPicker}
-                title="选择本对话的工作目录（AI 命令在此执行）"
-              >
-                <span className="chat-assistant-key">工作目录</span>
-                <span className={`chat-ws-chip ${sessionWorkspaceId ? 'pinned' : ''} ${wsMissing ? 'invalid' : ''}`}>
-                  {sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}
-                </span>
-                {sessionLinkedIds.length > 0 && (
-                  <span className="chat-row-aux" title="关联只读目录">+{sessionLinkedIds.length}</span>
-                )}
-                <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
-              </button>
-              {trustMode !== null && (
-                <div className="chat-assistant-row">
-                  <span className="chat-assistant-key">执行模式</span>
-                  <button
-                    className={`chat-trust-chip ${trustMode ? 'trusted' : ''}`}
-                    onClick={() => void toggleTrust()}
-                    title={trustTitle}
-                    aria-pressed={trustMode}
-                  >
-                    {trustLabel}
-                  </button>
-                </div>
-              )}
-              {queueLen === 0 ? (
-                <div className="chat-assistant-row">
-                  <span className="chat-assistant-key">待发队列</span>
-                  <span className="chat-assistant-val">无</span>
-                </div>
-              ) : (
-                <div className="chat-queue-list">
-                  <div className="chat-assistant-row">
-                    <span className="chat-assistant-key">待发队列（{queueLen}）</span>
-                    <span className="chat-assistant-val" />
-                    <button className="chat-queue-clear" onClick={clearPending} title="清空待发队列">清空</button>
-                  </div>
-                  {queueItems.map((it) => (
-                    <div key={it.id} className="chat-queue-item">
-                      <span className="chat-queue-text" title={it.text}>{it.text}</span>
-                      <span className="chat-queue-acts">
-                        <button className="chat-queue-act" onClick={() => sendPendingNow(it.id)} title="立即发送（跳过排队顺序）">立即发</button>
-                        <button className="chat-queue-act" onClick={() => editPending(it.id)} title="取回输入框编辑">编辑</button>
-                        <button className="chat-queue-act danger" onClick={() => removePendingItem(it.id)} title="删除">删除</button>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* 分享（needs #069 v3）：网页链接（token+有效期）+ 本地导出（个人版 md / AI 分析版）。
-                  同源 HTTP 直连 transcript-share server 半边，无跨插件 cap 授权面。 */}
-              <ShareDrawerRows />
-            </div>
-        </div>
+        {/* 会话设置面板（浮层形态，方案提交 2/4）：portal 到 body、锚在输入条上方，用消息区
+            空间完整展示——内联抽屉会被 .shell-input 42dvh 上限 + overflow:hidden 裁剪
+            （2026-11-22 冒烟实测盖住发送按钮/压成内滚小窗）。内容在 SessionSettingsPanel：
+            模型 / 执行（工作目录+模式）/ 待发队列 / 分享；关闭通道=完成/点外/Esc。 */}
+        {assistantOpen && (
+          <SessionSettingsPanel
+            providerId={sessionProviderId}
+            modelId={sessionModelId}
+            onSetSessionModel={(pid, mid) => setSessionModel(activeId ?? createSession(), pid, mid)}
+            workspaceId={sessionWorkspaceId}
+            wsLabel={wsLabel}
+            wsMissing={wsMissing}
+            linkedCount={sessionLinkedIds.length}
+            onOpenWorkspacePicker={openPicker}
+            trustMode={trustMode}
+            trustTitle={trustTitle}
+            trustLabel={trustLabel}
+            onToggleTrust={() => void toggleTrust()}
+            queueLen={queueLen}
+            queueItems={queueItems}
+            onClearPending={clearPending}
+            onSendPendingNow={sendPendingNow}
+            onEditPending={editPending}
+            onRemovePendingItem={removePendingItem}
+            barRef={barRef}
+            popRef={panelPopRef}
+            wsPopRef={popRef}
+            onDone={() => setAssistantOpen(false)}
+            escRef={panelEscRef}
+          />
+        )}
         <div className="chat-input-btns">
+          {/* 会话设置（原「调谐」+「工作目录」合并）：sliders 图标 + 常显工作区名。
+              低频配置全收进上拉面板（模型/工作目录/执行模式/队列/分享），按钮条保持精简；
+              工作区失效态仍以红字常显在按钮上，不展开也能看见。 */}
+          <button
+            className={`chat-send session-settings ${assistantOpen ? 'on' : ''} ${trustMode ? 'trusted' : ''}`}
+            onClick={() => { setPickerPos(null); setAssistantOpen((v) => !v); }}
+            title="会话设置：模型 · 工作目录 · 执行模式 · 队列 · 分享"
+            aria-label="会话设置"
+            aria-expanded={assistantOpen}
+          >
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16" aria-hidden="true">
+              <path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              <circle cx="15" cy="7" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+              <circle cx="9" cy="17" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+            </svg>
+            <span className={`chat-session-ws ${wsMissing ? 'invalid' : ''}`}>
+              {sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}
+            </span>
+            {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
+            {trustMode === true && <span className="chat-session-badge" title="信任模式已开启" aria-hidden="true" />}
+            {/* 待发队列徽标上移到会话设置按钮（原调谐 badge 位）：不展开面板也能看见 */}
+            {queueLen > 0 && <span className="chat-queue-badge">{queueLen}</span>}
+          </button>
+          {/* 附件留在按钮条（v2 结论：高频即时操作，与面板里的低频配置分开） */}
           <button
             className="chat-send attach"
             onClick={() => fileRef.current?.click()}
@@ -602,35 +617,6 @@ export function ChatInput() {
             aria-label="添加附件"
           >
             <PaperclipIcon />
-          </button>
-          <button
-            className={`chat-send tune ${assistantOpen ? 'on' : ''} ${trustMode ? 'trusted' : ''}`}
-            onClick={() => { setAssistantOpen((v) => !v); }}
-            title={trustMode ? '信任模式已开启：AI 可直接执行命令 · 点击管理' : '工作目录 · 执行模式 · 队列'}
-            aria-label="工作目录、执行模式与队列设置"
-            aria-expanded={assistantOpen}
-          >
-            <svg viewBox="0 0 24 24" fill="none" width="16" height="16" aria-hidden="true">
-              <path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-              <circle cx="15" cy="7" r="2.2" stroke="currentColor" strokeWidth="1.7" />
-              <circle cx="9" cy="17" r="2.2" stroke="currentColor" strokeWidth="1.7" />
-            </svg>
-            {trustMode === true && <span className="chat-tune-badge" title="信任模式已开启" aria-hidden="true" />}
-          </button>
-          {/* 当前目录：始终可见，点一下直接选（不必先找到调谐） */}
-          <button
-            className={`chat-ws-btn ${sessionWorkspaceId ? 'pinned' : ''} ${wsMissing ? 'invalid' : ''}`}
-            onClick={openPicker}
-            title={
-              wsMissing
-                ? `绑定的目录已失效，当前回退到默认目录 — 点击重新选择`
-                : `工作目录：${wsLabel ?? '默认目录'}（AI 命令在此执行）— 点击切换`
-            }
-            aria-label="切换工作目录"
-          >
-            <FolderIcon />
-            <span className="chat-ws-btn-label">{sessionWorkspaceId ? (wsMissing ? '已失效' : (wsLabel ?? '…')) : '默认目录'}</span>
-            {sessionLinkedIds.length > 0 && <span className="chat-ws-btn-aux">+{sessionLinkedIds.length}</span>}
           </button>
           <span className="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
           {/* 新增对话：输入框旁一键开新会话（与左侧栏「新会话」等效；空会话防重复） */}
@@ -678,6 +664,8 @@ export function ChatInput() {
             <span className="chat-picker-title">工作目录</span>
             <button className="chat-picker-done" onClick={closePicker}>完成</button>
           </div>
+          {/* 选中不自动关（对齐侧栏入口）：点外面 / 点完成 / Esc 三通道关闭。
+              此前裸属性 closeOnPickMain（=true）导致输入区入口选完即关、无法继续调整关联目录。 */}
           <WorkspacePickerBody
             workspaceId={sessionWorkspaceId ?? undefined}
             linkedWorkspaceIds={sessionLinkedIds}
@@ -693,7 +681,7 @@ export function ChatInput() {
               const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(0, 3);
               setSessionLinkedWorkspaces(sid, next);
             }}
-            closeOnPickMain
+            closeOnPickMain={false}
             onRequestClose={closePicker}
             locked={!!streaming}
           />

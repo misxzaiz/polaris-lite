@@ -1,17 +1,21 @@
 /**
- * 会话服务端同步层（chat-lite 私有；spec：docs/chat-multi-device-sync-plan.md）。
+ * 会话服务端同步层（chat-lite 私有；spec：docs/chat-multi-device-sync-plan.md v0.2）。
  *
  * 职责（单写者仍是 store.ts 的动作方法；本模块只做「状态 → 服务端/缓存」的搬运）：
  * - pullIndex / pullSession：服务端拉索引与会话全文（/api/chat/sessions*）；
  * - pushSession：整会话 PUT（带 baseVersion；409 返回服务端版本由 store 决策）；
  * - deleteSessionRemote：软删除墓碑；
- * - cache 镜像（IndexedDB）：秒开 + 离线兜底；
- * - 轮询器：30s / visibilitychange 回前台 / 页面隐藏前 flush。
+ * - cache 镜像（IndexedDB）：秒开 + activeId 恢复 + 离线兜底——**在线模式写通**
+ *   （pull 合并后 / push 成功后 / 删除后同步镜像；spec v0.1 的 offline-only 写入是断层，
+ *   导致每次刷新都是冷启动）；
+ * - 变更感知：**索引 SSE 推送为主（index-changed 事件即时 pull 对账）+ 30s 轮询兜底**
+ *   （spec v0.2：轮询-only 的多端可感知性实测不足；SSE 只推索引变更 ids，不做打字级推送）；
+ * - 冷启动有界并发拉全文（CONCURRENCY=6）：串行逐个 await 在数百会话时填列表分钟级。
  *
  * 设计约束：
  * - 不用 cap 总线：会话存取是 chat-lite 私有数据面（同源 fetch，与 ChatInput 调
  *   /api/tool/config 同模式），不构成跨插件能力；
- * - 流式中的会话不 push（等 settle 后的防抖窗口统一落），轮询对它也跳过覆盖；
+ * - 流式中的会话不 push（等 settle 后的防抖窗口统一落），轮询/推送对它也跳过覆盖；
  * - 服务端不可达：静默降级为 IndexedDB + 内存（offline 标记由 store 消费）。
  */
 
@@ -129,16 +133,20 @@ function openDb(): Promise<IDBDatabase | null> {
   });
 }
 
-/** 全量镜像写（启动/合并后调用；量级 ≤ 数百会话，一次事务） */
+/** 全量镜像写（启动/合并后调用；量级 ≤ 数百会话，一次事务）。
+ *  objectStore keyPath 是 'id'，而快照形状顶层只有 session/version/updatedAt——
+ *  写入时补上 id（=session.id），否则 put 抛 DataError 且被静默吞掉
+ *  （v0.1 的镜像从未写成功过：这是「每次刷新都冷启动」的真正根因）。 */
 export async function cachePutAll(entries: (SessionSnapshot & { active?: boolean })[]): Promise<void> {
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(STORE, 'readwrite');
     const st = tx.objectStore(STORE);
-    for (const e of entries) st.put(e);
+    for (const e of entries) st.put({ ...e, id: e.session.id });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
+    tx.onerror = () => { console.warn('[chat-lite] mirror write failed:', tx.error); resolve(); };
+    tx.onabort = () => resolve();
   });
   db.close();
 }
@@ -156,6 +164,19 @@ export async function cacheGetAll(): Promise<(SessionSnapshot & { active?: boole
   return out;
 }
 
+/** 镜像单条删除（软删除同步；镜像里也不留墓碑——下次冷启动不再见到已删会话） */
+export async function cacheDelete(id: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+  db.close();
+}
+
 // ---------------------------------------------------------------- 同步编排
 
 export interface SyncCallbacks {
@@ -169,6 +190,8 @@ export interface SyncCallbacks {
   onRunning: (running: Record<string, LoopRunState>) => void;
   /** 冲突上报（409；store 弹「另一台设备已更新」） */
   onConflict: (info: ConflictInfo) => void;
+  /** 冷启动引导进度（侧栏 x/y 与「正在同步」空态消费；结束传 null） */
+  onBootProgress?: (progress: { done: number; total: number } | null) => void;
   /** 取当前状态（读取会话/版本/流式标记/activeId） */
   getState: () => {
     sessions: (ChatSessionShape & { messages: StoreMessage[] })[];
@@ -203,6 +226,26 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
   let pulling = false;
   let started = false;
   let offlineMode = false;
+  /** pull 在途期间又收到 index-changed：收尾后补一轮（防「变更落在索引快照之后」被 pulling 丢弃） */
+  let pullAgain = false;
+  /** 索引 SSE（断线由浏览器自动重连；offline 档主动关闭） */
+  let indexEs: EventSource | null = null;
+
+  /** 有界并发执行（冷启动并行拉全文；CONCURRENCY 控制对服务端的瞬时压力） */
+  const CONCURRENCY = 6;
+  async function mapLimited<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+    const out: R[] = new Array(items.length);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]);
+      }
+    });
+    await Promise.all(workers);
+    return out;
+  }
 
   /** 把「服务端索引 + 本地状态」对齐：新会话拉全文、版本变高拉全文、墓碑删除 */
   const pull = async (): Promise<void> => {
@@ -221,21 +264,46 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       if (running) cb.onRunning(running);
       for (const tb of tombstones) cb.applyTombstone(tb.id);
 
-      for (const entry of sessions) {
-        const localVersion = st.versions[entry.id] ?? 0;
+      const stale = st.versions;
+      const toFetch = sessions.filter((entry) => {
+        const localVersion = stale[entry.id] ?? 0;
         const local = st.sessions.find((s) => s.id === entry.id);
         // 本地有且版本更新（未推送的脏会话）→ 不被服务端旧态覆盖
-        if (local && localVersion > entry.version) continue;
+        if (local && localVersion > entry.version) return false;
         // 本地有且版本一致 → 无需拉
-        if (local && localVersion === entry.version) continue;
+        if (local && localVersion === entry.version) return false;
         // 正在流式中的会话：等 settle 后的 push 收敛，本轮跳过
-        if (cb.isStreaming(entry.id)) continue;
+        return !cb.isStreaming(entry.id);
+      });
+      const booting = toFetch.length > 3;
+      if (booting) cb.onBootProgress?.({ done: 0, total: toFetch.length });
+      let done = 0;
+      const snaps = await mapLimited(toFetch, async (entry) => {
         const snap = await pullSession(entry.id);
-        if (snap.ok) cb.applyServerSnapshot(snap.data);
+        done += 1;
+        if (booting) cb.onBootProgress?.({ done, total: toFetch.length });
+        return snap;
+      });
+      if (booting) cb.onBootProgress?.(null);
+      const mirrored: (SessionSnapshot & { active?: boolean })[] = [];
+      for (let i = 0; i < snaps.length; i++) {
+        const snap = snaps[i];
+        if (!snap.ok) continue;
+        cb.applyServerSnapshot(snap.data);
+        mirrored.push(snap.data);
+      }
+      // 镜像写通（spec v0.2）：在线模式的 pull 结果也落 IndexedDB——刷新秒开 + 会话不重拉
+      if (mirrored.length > 0) {
+        void cachePutAll(mirrored).catch(() => undefined);
       }
       cb.setStatus('idle');
     } finally {
       pulling = false;
+      // pull 期间又有变更到达（事件被 pulling 丢弃）：补一轮，保证推送不漏
+      if (pullAgain) {
+        pullAgain = false;
+        setTimeout(() => { void pull(); }, 50);
+      }
     }
   };
 
@@ -260,6 +328,7 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
     }
     cb.setStatus('syncing');
     let anyFail = false;
+    const mirrored: (SessionSnapshot & { active?: boolean })[] = [];
     for (const id of dirtyIds) {
       const session = st.sessions.find((s) => s.id === id);
       if (!session) { st.dirty.delete(id); continue; }
@@ -269,18 +338,49 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       if (res.ok) {
         st.dirty.delete(id);
         st.versions[id] = res.data.version;
+        // 镜像写通（spec v0.2）：推成功即落本地镜像（version 与服务端一致）
+        mirrored.push({ session, version: res.data.version, updatedAt: res.data.updatedAt });
       } else if (res.status === 409) {
         // 服务端有更新：默认以服务端为准（拉取覆盖）；本地确有更多消息时交由 UI 决策
         st.dirty.delete(id);
         cb.onConflict({ sessionId: id, serverVersion: res.currentVersion ?? 0, serverUpdatedAt: Date.now() });
         const snap = await pullSession(id);
-        if (snap.ok && !cb.isStreaming(id)) cb.applyServerSnapshot(snap.data);
+        if (snap.ok && !cb.isStreaming(id)) {
+          cb.applyServerSnapshot(snap.data);
+          mirrored.push(snap.data);
+        }
       } else {
         anyFail = true; // 网络失败：保留 dirty，下一轮重试
       }
     }
+    if (mirrored.length > 0) {
+      void cachePutAll(mirrored).catch(() => undefined);
+    }
     cb.setStatus(anyFail ? 'offline' : 'idle');
   };
+
+  /** 索引 SSE 事件 → 对账（版本比对幂等；事件只当「有变更」的信号用） */
+  const onIndexEvent = (): void => {
+    if (pulling) { pullAgain = true; return; }
+    void pull();
+  };
+
+  function openIndexEs(): void {
+    if (indexEs || offlineMode || typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+    try {
+      indexEs = new EventSource(`${BASE}/index-events`);
+      // 服务端把 ids 放进 data，但客户端统一走全索引对账（索引轻量、版本比对天然幂等）
+      indexEs.addEventListener('index-changed', onIndexEvent);
+      indexEs.onopen = () => { void pull(); }; // 重连成功补对账断线期间漏掉的变更
+      indexEs.onerror = () => { /* 浏览器自动重连；离线兜底由 30s 轮询承担 */ };
+    } catch { /* EventSource 不可用：轮询兜底 */ }
+  }
+
+  function closeIndexEs(): void {
+    if (!indexEs) return;
+    try { indexEs.close(); } catch { /* 已断 */ }
+    indexEs = null;
+  }
 
   const handle: SyncHandle = {
     start: () => {
@@ -289,10 +389,12 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       timer = setInterval(() => { void pull(); }, POLL_MS);
       document.addEventListener('visibilitychange', onVis);
       window.addEventListener('pagehide', onHide);
+      openIndexEs(); // v0.2：推送为主、轮询兜底
       void pull();
     },
     stop: () => {
       if (timer) { clearInterval(timer); timer = null; }
+      closeIndexEs();
       if (typeof window !== 'undefined') {
         document.removeEventListener('visibilitychange', onVis);
         window.removeEventListener('pagehide', onHide);
@@ -305,6 +407,8 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       if (offlineMode === on) return;
       offlineMode = on;
       cb.setStatus(on ? 'offline' : 'syncing');
+      if (on) closeIndexEs(); // 独立档：宿主不可达，SSE 连接只会产出失败请求
+      else openIndexEs();
       if (!on) {
         // 回到连接档：立即对账 + 补偿上传独立期间积攒的 dirty（相遇升级语义）
         void pull();

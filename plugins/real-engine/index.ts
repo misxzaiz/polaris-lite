@@ -58,6 +58,19 @@ interface ActiveProvider {
 
 const running = new Map<string, () => void>();
 let currentProvider: ActiveProvider | null = null;
+/** cap.model.admin/list 的 masked 供应商行（会话级模型覆盖解析用） */
+interface ProviderListEntry {
+  id: string;
+  name: string;
+  baseURL: string;
+  hasKey: boolean;
+  enabled: boolean;
+  isDefault: boolean;
+  activeModel: string;
+  models: { id: string; capabilities?: ModelCaps }[];
+}
+/** 会话级覆盖要按 id 找任意供应商（resolveActive 只给默认那个）：setup 装配，模块级桥接同 refreshProvider */
+let listProviderConfigs: () => Promise<{ configs: ProviderListEntry[] } | null> = async () => null;
 /** 刷新供应商配置的函数引用（setup 时注入，流式调用前兜底重试） */
 let refreshProvider: () => Promise<void> = async () => {};
 
@@ -173,13 +186,30 @@ async function relayFetch(body: unknown, providerId: string, sessionId: string, 
  * 工具编排（agent-loop）在宿主侧不可用——直连是纯聊天形态，工具调用不透传。
  */
 async function streamDirect(
-  payload: { prompt?: string; history?: { role: string; content: unknown }[] },
+  payload: { prompt?: string; history?: { role: string; content: unknown }[]; providerId?: string; modelId?: string },
   sessionId: string,
   messageId: string,
   emit: (ev: { kind: string; payload: unknown }) => void,
 ): Promise<void> {
   const cfg = readStoredDirectConfig();
   if (!cfg) return; // 无本机直连配置：上游调用方已做降级提示
+  // 会话级模型覆盖（独立档）：直连只有一份本机配置副本——供应商必须一致，模型可在其
+  // 模型表内切换。不一致/不在列表时明确报错，不静默忽略（同中继路径原则）。
+  if (payload.providerId && payload.providerId !== cfg.id) {
+    emit({
+      kind: 'stream.error',
+      payload: { sessionId, messageId, message: `独立模式：会话绑定的供应商与直连配置（${cfg.id}）不一致，请在「会话设置」重新选择。` },
+    });
+    return;
+  }
+  if (payload.modelId && !cfg.models.some((m) => m.id === payload.modelId)) {
+    emit({
+      kind: 'stream.error',
+      payload: { sessionId, messageId, message: `独立模式：会话设置的模型 ${payload.modelId} 不在直连配置的模型列表里，请在「会话设置」重新选择。` },
+    });
+    return;
+  }
+  const activeModel = payload.modelId || cfg.activeModel || cfg.models[0]?.id || '';
   const startedAt = Date.now();
   let wireUsage: WireUsage | null = null;
   let responseModel: string | undefined;
@@ -194,10 +224,10 @@ async function streamDirect(
       ...(payload.history ?? []).map((m) => ({ role: m.role as 'user' | 'assistant' | 'system', content: m.content })),
       { role: 'user' as const, content: payload.prompt ?? '' },
     ];
-    const caps = cfg.models.find((m) => m.id === cfg.activeModel)?.capabilities ?? cfg.models[0]?.capabilities;
+    const caps = cfg.models.find((m) => m.id === activeModel)?.capabilities ?? cfg.models[0]?.capabilities;
     const resp = await directFetch(
       {
-        model: cfg.activeModel || cfg.models[0]?.id || '',
+        model: activeModel,
         stream: true,
         messages,
         max_tokens: caps?.maxOutputTokens && caps.maxOutputTokens > 0 ? caps.maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS,
@@ -337,6 +367,9 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     /** OpenAI function 工具定义（agent-loop 传入，透传给上游） */
     tools?: { type: 'function'; function: { name: string; description: string; parameters: unknown } }[];
     toolChoice?: 'auto' | 'none';
+    /** 会话级模型覆盖（会话设置面板写入，经 chat-lite/agent-loop 透传；缺省=跟随全局默认） */
+    providerId?: string;
+    modelId?: string;
   };
   const sessionId = payload.sessionId ?? 'unknown';
   const messageId = payload.messageId ?? 'unknown';
@@ -346,7 +379,7 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
   if (!pickProvider()) {
     try { await refreshProvider(); } catch { /* 下方统一报错 */ }
   }
-  const provider = pickProvider();
+  let provider = pickProvider();
 
   // ---- 独立档分支（standalone；docs/mobile-app-plan.md §10.3）----
   // 宿主不可达时中继/resolveActive 都不通：provider 恒空。此时读本机直连配置
@@ -377,6 +410,49 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
     }
     await streamDirect(payload, sessionId, messageId, emit);
     return;
+  }
+
+  // ---- 会话级模型覆盖（会话设置面板写入 session.providerId/modelId）----
+  // 未设置=跟随全局默认，行为完全不变。设置了但目标失效（供应商被删/停用/缺 Key、
+  // 模型不在列表）时明确报错、绝不静默回落——静默回落会让「会话里选的模型」看起来
+  // 生效、实际没生效（与 transcript-share format 白名单同一原则）。
+  if (payload.providerId || payload.modelId) {
+    const list = await listProviderConfigs();
+    const target = payload.providerId ? list?.configs.find((c) => c.id === payload.providerId) : undefined;
+    if (!payload.providerId || !target || !target.enabled || !target.hasKey) {
+      emit({
+        kind: 'stream.error',
+        payload: {
+          sessionId, messageId,
+          message: '会话设置的模型供应商不可用（已删除 / 停用 / 缺 Key）：请打开「会话设置」重新选择。',
+        },
+      });
+      return;
+    }
+    const wantModel = payload.modelId;
+    const activeModel = wantModel
+      ? (target.models.find((m) => m.id === wantModel)?.id ?? '')
+      : (target.activeModel || target.models[0]?.id || '');
+    if (wantModel && !activeModel) {
+      emit({
+        kind: 'stream.error',
+        payload: {
+          sessionId, messageId,
+          message: `会话设置的模型 ${wantModel} 不在供应商「${target.name || target.id}」的模型列表里：请重新选择。`,
+        },
+      });
+      return;
+    }
+    provider = {
+      id: target.id,
+      name: target.name,
+      baseURL: target.baseURL,
+      models: target.models.map((m) => ({ id: m.id, ...(m.capabilities ? { capabilities: m.capabilities } : {}) })),
+      activeModel,
+      enabled: target.enabled,
+      isDefault: target.isDefault,
+      hasKey: target.hasKey,
+    };
   }
 
   if (!provider) {
@@ -686,6 +762,12 @@ export const realEnginePlugin: LitePlugin = {
       currentProvider = res.ok && res.data?.config ? res.data.config : null;
     };
     refreshProvider = refresh;
+
+    // 会话级模型覆盖的解析数据源：cap.model.admin/list（masked，引擎永不接触 key）
+    listProviderConfigs = async () => {
+      const res = await api.dispatch<{ configs?: ProviderListEntry[] }>({ target: 'cap.model.admin', action: 'list' });
+      return res.ok && res.data?.configs ? { configs: res.data.configs } : null;
+    };
 
     // 配置热更新：面板保存后广播 model-config-changed；登录态变化后重取（未登录时 resolveActive 会 401）
     api.listen('model-config-changed', () => void refresh());

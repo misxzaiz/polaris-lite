@@ -11,7 +11,7 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import { CHANNEL_FILE_BROWSER_COMPOSE, KEY_MOCK_AUTH_SESSION, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, CARD_STORE_CAP, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, CARD_STORE_CAP, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
@@ -95,7 +95,8 @@ export const chatLitePlugin: LitePlugin = {
     // interactive.*：interactive-cards 的交互卡事件；artifact.created：html-preview 等产物插件
     // workspace-renamed：file-browser 改名广播，输入区目录名据此即时同步（不再停留在旧名）
     // mode-changed：standalone-mode 的运行模式广播（独立档切换本地会话镜像，docs/mobile-app-plan.md §10）
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed'],
+    // auth-changed：登录成功立即对账（否则新设备首登要等 30s 轮询才有会话列表）
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed', 'auth-changed'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -188,6 +189,8 @@ export const chatLitePlugin: LitePlugin = {
     });
     // 工作区根改名/登记/删除：广播到输入区与选择器（原先只发不收，目录名会停在旧值）
     api.listen('workspace-renamed', () => notifyRootsChanged());
+    // 登录成功立即对账（auth-changed 由 mock-auth 在状态翻转时发出；登出也发，401 空拉无害）
+    api.listen('auth-changed', () => syncPullNow());
     // ---- 上下文透视（spec §5.3）：ctxStore 单写者由事件驱动，UI 只读 ----
     // ai.usage：real-engine 流末发出（输入/输出 token、缓存命中、耗时、速率分母）
     api.listen('cap.ai.chat:event', (envelope) => {
@@ -674,6 +677,13 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       // 关联只读目录：files 工具可读、bash 不在此执行（服务端仍按登记根白名单校验）
       ...((store.sessions.find((s) => s.id === sid)?.linkedWorkspaceIds?.length ?? 0) > 0
         ? { linkedWorkspaceIds: store.sessions.find((s) => s.id === sid)!.linkedWorkspaceIds }
+        : {}),
+      // 会话级模型覆盖（会话设置面板写入；缺省=跟随全局默认，引擎行为不变）
+      ...((store.sessions.find((s) => s.id === sid)?.providerId || store.sessions.find((s) => s.id === sid)?.modelId)
+        ? {
+            providerId: store.sessions.find((s) => s.id === sid)!.providerId,
+            modelId: store.sessions.find((s) => s.id === sid)!.modelId,
+          }
         : {}),
       // 会话级上下文压缩策略（agent-loop 据此触发自动压缩；spec §4.3）
       ...(useLoop ? { ctxPolicy: ctxPolicyOf(sid) } : {}),

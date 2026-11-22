@@ -1,0 +1,4299 @@
+{
+  "base": "http://127.0.0.1:5000/",
+  "viewport": "390x844 @2x mobile",
+  "steps": [
+    {
+      "label": "01-login",
+      "at": 1795341310972,
+      "ok": true
+    },
+    {
+      "label": "02-main",
+      "at": 1795341314173,
+      "ok": true
+    },
+    {
+      "label": "03-sidebar",
+      "at": 1795341315274,
+      "ok": true
+    },
+    {
+      "label": "04-panel",
+      "at": 1795341316819,
+      "ok": true
+    },
+    {
+      "label": "05-after-send",
+      "at": 1795341329500,
+      "ok": true
+    },
+    {
+      "label": "06-keyboard-480",
+      "at": 1795341330545,
+      "ok": true
+    },
+    {
+      "label": "07-narrow-320",
+      "at": 1795341331632,
+      "ok": true
+    }
+  ],
+  "metrics": {
+    "01-login": {
+      "inner": [
+        390,
+        844
+      ],
+      "visual": [
+        390,
+        844
+      ],
+      "docScroll": [
+        390,
+        844
+      ],
+      "bodyScroll": [
+        390,
+        844
+      ],
+      "key": {
+        "topbar": null,
+        "input": null,
+        "textarea": null,
+        "send": null,
+        "sidebar": null,
+        "panel": null,
+        "gate": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 844
+        },
+        "auth": {
+          "x": 20,
+          "y": 148,
+          "w": 350,
+          "h": 547
+        }
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": null,
+        "bubble": null,
+        "title": null
+      },
+      "overflow": [],
+      "smallTargets": [],
+      "bodyText": "POLARIS\nLITE · PRIVATE INTELLIGENCE\n欢迎回来\n进入你的私人智能空间。首次登录将创建唯一管理员账号。\n账号\n密码\n进入 Polaris\n使用临时凭证登录",
+      "sw": true,
+      "tabbar": null
+    },
+    "02-main": {
+      "inner": [
+        390,
+        844
+      ],
+      "visual": [
+        390,
+        844
+      ],
+      "docScroll": [
+        390,
+        844
+      ],
+      "bodyScroll": [
+        390,
+        844
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": -326,
+          "y": 0,
+          "w": 320,
+          "h": 844
+        },
+        "panel": {
+          "x": 397,
+          "y": 0,
+          "w": 335,
+          "h": 844
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-sessions-refresh",
+          "text": "",
+          "left": -86,
+          "right": -46
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-new",
+          "text": "新会话",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "INPUT",
+          "cls": "chat-session-search",
+          "text": "",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option active",
+          "text": "浅色",
+          "left": -163,
+          "right": -100
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option ",
+          "text": "深色",
+          "left": -96,
+          "right": -33
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "shell-drawer-close",
+          "text": "",
+          "left": 682,
+          "right": 726
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-sheet-toggle",
+          "text": "文件",
+          "left": 409,
+          "right": 686
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-refresh",
+          "text": "⟳",
+          "left": 686,
+          "right": 732
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "",
+          "text": "顶层",
+          "left": 415,
+          "right": 455
+        },
+        {
+          "tag": "INPUT",
+          "cls": "fb-filter",
+          "text": "",
+          "left": 415,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworld3d",
+          "left": 415,
+          "right": 530
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "名",
+          "left": 534,
+          "right": 574
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "工作区",
+          "left": 577,
+          "right": 628
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "left": 631,
+          "right": 671
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworkspace",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nC:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nD:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 324,
+          "h": 34
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n手机实测：请只回复两个字：收到\n2\n你好，请只回复：测试通过\n4\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    },
+    "03-sidebar": {
+      "inner": [
+        390,
+        844
+      ],
+      "visual": [
+        390,
+        844
+      ],
+      "docScroll": [
+        390,
+        844
+      ],
+      "bodyScroll": [
+        390,
+        844
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": 0,
+          "y": 0,
+          "w": 320,
+          "h": 844
+        },
+        "panel": {
+          "x": 397,
+          "y": 0,
+          "w": 335,
+          "h": 844
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "shell-drawer-close",
+          "text": "",
+          "left": 682,
+          "right": 726
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-sheet-toggle",
+          "text": "文件",
+          "left": 409,
+          "right": 686
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-refresh",
+          "text": "⟳",
+          "left": 686,
+          "right": 732
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "",
+          "text": "顶层",
+          "left": 415,
+          "right": 455
+        },
+        {
+          "tag": "INPUT",
+          "cls": "fb-filter",
+          "text": "",
+          "left": 415,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworld3d",
+          "left": 415,
+          "right": 530
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "名",
+          "left": 534,
+          "right": 574
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "工作区",
+          "left": 577,
+          "right": 628
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "left": 631,
+          "right": 671
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworkspace",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nC:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nD:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 324,
+          "h": 34
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n手机实测：请只回复两个字：收到\n2\n你好，请只回复：测试通过\n4\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    },
+    "04-panel": {
+      "inner": [
+        390,
+        844
+      ],
+      "visual": [
+        390,
+        844
+      ],
+      "docScroll": [
+        390,
+        844
+      ],
+      "bodyScroll": [
+        390,
+        844
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": -326,
+          "y": 0,
+          "w": 320,
+          "h": 844
+        },
+        "panel": {
+          "x": 55,
+          "y": 0,
+          "w": 335,
+          "h": 844
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-sessions-refresh",
+          "text": "",
+          "left": -86,
+          "right": -46
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-new",
+          "text": "新会话",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "INPUT",
+          "cls": "chat-session-search",
+          "text": "",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option active",
+          "text": "浅色",
+          "left": -163,
+          "right": -100
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option ",
+          "text": "深色",
+          "left": -96,
+          "right": -33
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 324,
+          "h": 34
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n手机实测：请只回复两个字：收到\n2\n你好，请只回复：测试通过\n4\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    },
+    "05-after-send": {
+      "inner": [
+        390,
+        844
+      ],
+      "visual": [
+        390,
+        844
+      ],
+      "docScroll": [
+        390,
+        844
+      ],
+      "bodyScroll": [
+        390,
+        844
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": -326,
+          "y": 0,
+          "w": 320,
+          "h": 844
+        },
+        "panel": {
+          "x": 397,
+          "y": 0,
+          "w": 335,
+          "h": 844
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-sessions-refresh",
+          "text": "",
+          "left": -86,
+          "right": -46
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-new",
+          "text": "新会话",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "INPUT",
+          "cls": "chat-session-search",
+          "text": "",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option active",
+          "text": "浅色",
+          "left": -163,
+          "right": -100
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option ",
+          "text": "深色",
+          "left": -96,
+          "right": -33
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "shell-drawer-close",
+          "text": "",
+          "left": 682,
+          "right": 726
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-sheet-toggle",
+          "text": "文件",
+          "left": 409,
+          "right": 686
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-refresh",
+          "text": "⟳",
+          "left": 686,
+          "right": 732
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "",
+          "text": "顶层",
+          "left": 415,
+          "right": 455
+        },
+        {
+          "tag": "INPUT",
+          "cls": "fb-filter",
+          "text": "",
+          "left": 415,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworld3d",
+          "left": 415,
+          "right": 530
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "名",
+          "left": 534,
+          "right": 574
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "工作区",
+          "left": 577,
+          "right": 628
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "left": 631,
+          "right": 671
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworkspace",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nC:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nD:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 324,
+          "h": 34
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    },
+    "06-keyboard-480": {
+      "inner": [
+        390,
+        480
+      ],
+      "visual": [
+        390,
+        480
+      ],
+      "docScroll": [
+        390,
+        480
+      ],
+      "bodyScroll": [
+        390,
+        480
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 382,
+          "w": 390,
+          "h": 98
+        },
+        "textarea": {
+          "x": 22,
+          "y": 388,
+          "w": 346,
+          "h": 32
+        },
+        "send": {
+          "x": 324,
+          "y": 424,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": -326,
+          "y": 0,
+          "w": 320,
+          "h": 480
+        },
+        "panel": {
+          "x": 397,
+          "y": 0,
+          "w": 335,
+          "h": 480
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-sessions-refresh",
+          "text": "",
+          "left": -86,
+          "right": -46
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-new",
+          "text": "新会话",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "INPUT",
+          "cls": "chat-session-search",
+          "text": "",
+          "left": -314,
+          "right": -18
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option active",
+          "text": "浅色",
+          "left": -163,
+          "right": -100
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option ",
+          "text": "深色",
+          "left": -96,
+          "right": -33
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "shell-drawer-close",
+          "text": "",
+          "left": 682,
+          "right": 726
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-sheet-toggle",
+          "text": "文件",
+          "left": 409,
+          "right": 686
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-refresh",
+          "text": "⟳",
+          "left": 686,
+          "right": 732
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "",
+          "text": "顶层",
+          "left": 415,
+          "right": 455
+        },
+        {
+          "tag": "INPUT",
+          "cls": "fb-filter",
+          "text": "",
+          "left": 415,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworld3d",
+          "left": 415,
+          "right": 530
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "名",
+          "left": 534,
+          "right": 574
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "工作区",
+          "left": 577,
+          "right": 628
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "left": 631,
+          "right": 671
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworkspace",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nC:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nD:\\",
+          "left": 415,
+          "right": 670
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 674,
+          "right": 714
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "chat-textarea",
+          "text": "",
+          "w": 346,
+          "h": 32
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 324,
+          "h": 34
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    },
+    "07-narrow-320": {
+      "inner": [
+        320,
+        640
+      ],
+      "visual": [
+        320,
+        640
+      ],
+      "docScroll": [
+        320,
+        640
+      ],
+      "bodyScroll": [
+        320,
+        640
+      ],
+      "key": {
+        "topbar": {
+          "x": 0,
+          "y": 0,
+          "w": 320,
+          "h": 60
+        },
+        "input": {
+          "x": 0,
+          "y": 513,
+          "w": 320,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 522,
+          "w": 276,
+          "h": 46
+        },
+        "send": {
+          "x": 254,
+          "y": 582,
+          "w": 44,
+          "h": 44
+        },
+        "sidebar": {
+          "x": -287,
+          "y": 0,
+          "w": 282,
+          "h": 640
+        },
+        "panel": {
+          "x": 326,
+          "y": 0,
+          "w": 282,
+          "h": 640
+        },
+        "gate": null,
+        "auth": null
+      },
+      "fonts": {
+        "body": "15px",
+        "textarea": "16px",
+        "bubble": "15px",
+        "title": "14px"
+      },
+      "overflow": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-sessions-refresh",
+          "text": "",
+          "left": -85,
+          "right": -45
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-new",
+          "text": "新会话",
+          "left": -275,
+          "right": -18
+        },
+        {
+          "tag": "INPUT",
+          "cls": "chat-session-search",
+          "text": "",
+          "left": -275,
+          "right": -18
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-session-kebab",
+          "text": "",
+          "left": -67,
+          "right": -23
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option active",
+          "text": "浅色",
+          "left": -162,
+          "right": -99
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "theme-option ",
+          "text": "深色",
+          "left": -95,
+          "right": -33
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "shell-drawer-close",
+          "text": "",
+          "left": 557,
+          "right": 601
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-sheet-toggle",
+          "text": "文件",
+          "left": 338,
+          "right": 561
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "sc-refresh",
+          "text": "⟳",
+          "left": 561,
+          "right": 607
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "",
+          "text": "顶层",
+          "left": 344,
+          "right": 384
+        },
+        {
+          "tag": "INPUT",
+          "cls": "fb-filter",
+          "text": "",
+          "left": 344,
+          "right": 589
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworld3d",
+          "left": 344,
+          "right": 405
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "名",
+          "left": 409,
+          "right": 449
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "工作区",
+          "left": 452,
+          "right": 503
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "left": 506,
+          "right": 546
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 549,
+          "right": 589
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nworkspace",
+          "left": 344,
+          "right": 545
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 549,
+          "right": 589
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nC:\\",
+          "left": 344,
+          "right": 545
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 549,
+          "right": 589
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-node-main",
+          "text": "▸\nD:\\",
+          "left": 344,
+          "right": 545
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini",
+          "text": "发送",
+          "left": 549,
+          "right": 589
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "BUTTON",
+          "cls": "chat-assistant-row chat-row-btn",
+          "text": "工作目录\n默认目录",
+          "w": 254,
+          "h": 34
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "chat-ws-btn  ",
+          "text": "默认目录",
+          "w": 35,
+          "h": 40
+        },
+        {
+          "tag": "BUTTON",
+          "cls": "fb-mini ",
+          "text": "链",
+          "w": 40,
+          "h": 40
+        }
+      ],
+      "bodyText": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数一数其中「数\n16\n这是一个多步骤大任务，请全程用工具实\n6\n用 render 工具生成一个九九乘\n8\n用 bash 工具执行 pwd 和\n10\n你好。请用一句话介绍你自己，并且告诉\n12\n下面是一段",
+      "sw": true,
+      "tabbar": null
+    }
+  },
+  "errors": [],
+  "networkFailures": [],
+  "login": {
+    "user": "root",
+    "pass": "1234",
+    "submit": "clicked",
+    "ready": true
+  },
+  "sidebar": {
+    "opened": true,
+    "closedByMask": true
+  },
+  "panel": {
+    "opened": true,
+    "tabs": []
+  },
+  "send": {
+    "trigger": "clicked-send",
+    "bubbles": [
+      "测试通过",
+      "测试通过",
+      "测试通过"
+    ],
+    "stillStreaming": false
+  },
+  "keyboard": {
+    "textarea": {
+      "x": 22,
+      "y": 388,
+      "w": 346,
+      "h": 32
+    },
+    "send": {
+      "x": 324,
+      "y": 424,
+      "w": 44,
+      "h": 44
+    },
+    "docScroll": [
+      390,
+      480
+    ]
+  },
+  "pwa": {
+    "manifest": 200,
+    "manifestBody": "{\n  \"name\": \"Polaris Lite\",\n  \"short_name\": \"Polaris Lite\",\n  \"description\": \"私人智能空间 · 手机端\",\n  \"start_url\": \"/\",\n  \"scope\": \"/\",\n  \"display\": \"standalone\",\n  \"orientation\": \"portrait-primary\",\n  \"theme_color\": \"#ffffff\",\n  \"background_color\": \"#ffffff\",\n  \"icons\": [\n    {\n      \"src\": \"/icons/icon-192.png\",\n      \"sizes\": \"192x192\",\n      \"type\": \"image/png\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"/icons/icon-512.png\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/png\",\n      \"purpos",
+    "sw": 200,
+    "/icons/icon-192.png": 200,
+    "/icons/icon-512.png": 200,
+    "/icons/icon-maskable-512.png": 200
+  },
+  "nav": {
+    "duration": 137,
+    "domContentLoaded": 137,
+    "resources": 98,
+    "transferKB": 869,
+    "slowest": [
+      {
+        "name": "model-relay",
+        "ms": 2499
+      },
+      {
+        "name": "sessions",
+        "ms": 147
+      },
+      {
+        "name": "login",
+        "ms": 76
+      },
+      {
+        "name": "index-De1e29Ff.js",
+        "ms": 44
+      },
+      {
+        "name": "index-eTKbBXoh.css",
+        "ms": 33
+      }
+    ]
+  },
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "httpErrors": [
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/chat/sessions/index-events"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/chat/sessions"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/providers/list"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/providers/list"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/tool/config"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/phone/hello"
+    }
+  ]
+}

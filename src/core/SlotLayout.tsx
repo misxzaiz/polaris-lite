@@ -115,6 +115,65 @@ export function SlotLayout() {
     };
   }, [drawer, narrow]);
 
+  // ---- 手机端键盘让位（P2-9）：iOS Safari 不支持 interactive-widget=resizes-content，
+  // 键盘弹出不缩视口，贴底的输入行会被键盘盖住。visualViewport 实测被遮高度写入 CSS 变量，
+  // 消费见 styles.css .shell-input（仅窄屏 transform 抬升）；
+  // Android 上 resizes-content 已缩视口 → overlap≈0，自动退化为 no-op。
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onVV = (): void => {
+      const overlap = window.innerHeight - vv.height - vv.offsetTop;
+      document.documentElement.style.setProperty('--plite-kb-lift', `${Math.max(0, Math.round(overlap))}px`);
+    };
+    vv.addEventListener('resize', onVV);
+    vv.addEventListener('scroll', onVV);
+    onVV();
+    return () => {
+      vv.removeEventListener('resize', onVV);
+      vv.removeEventListener('scroll', onVV);
+      document.documentElement.style.removeProperty('--plite-kb-lift');
+    };
+  }, []);
+
+  // ---- 边缘滑动手势（P2-10）：左缘右滑开侧栏 / 右缘左滑开面板。
+  // 仅手机端且无抽屉打开时生效；横向位移明显占优才触发，避免误伤纵向滚动。
+  const drawerClosed = drawer === 'none';
+  useEffect(() => {
+    if (!narrow || !drawerClosed) return;
+    const EDGE = 28;
+    let sx = 0;
+    let sy = 0;
+    let edge: 'left' | 'right' | null = null;
+    const onStart = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      sx = t.clientX;
+      sy = t.clientY;
+      edge = t.clientX <= EDGE ? 'left' : t.clientX >= window.innerWidth - EDGE ? 'right' : null;
+    };
+    const onMove = (e: TouchEvent): void => {
+      if (!edge) return;
+      const t = e.touches[0];
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+      if (edge === 'left' && dx > 0) setDrawer('sidebar');
+      else if (edge === 'right' && dx < 0) setDrawer('panel');
+      edge = null;
+    };
+    const onEnd = (): void => {
+      edge = null;
+    };
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+    };
+  }, [narrow, drawerClosed]);
+
   if (gate.state === 'pending') return <Splash />;
   if (gate.state === 'unauthenticated') {
     // 门禁是布局的**外部**路径：auth 不是锚点，未登录时壳层骨架一律不渲染。

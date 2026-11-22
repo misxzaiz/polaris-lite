@@ -2,9 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      2026-11-22 移动端优化 P1-5：放开缩放（原 user-scalable=no/maximum-scale=1 双禁）。
+      长表格/大图在手机上需要双指放大才能看清；防误缩放改由控件级 touch-action 处理，
+      不再整体禁掉缩放（WCAG 1.4.4 也要求允许缩放）。
+    -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#ffffff" />
     <link rel="icon" href="/icons/icon-192.png" />

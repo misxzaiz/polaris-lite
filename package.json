@@ -13,7 +13,9 @@
     "preview": "vite preview --port 9825 --strictPort --host 127.0.0.1",
     "start": "node server/prod-server.mjs",
     "dev:standalone": "node scripts/dev-server.mjs",
-    "sync:dist": "node scripts/sync-dist.mjs"
+    "sync:dist": "node scripts/sync-dist.mjs",
+    "deploy:9826": "node scripts/deploy-9826.mjs",
+    "status:9826": "node scripts/deploy-9826.mjs status"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -28,7 +28,8 @@
         "interactive.answered",
         "artifact.created",
         "workspace-renamed",
-        "mode-changed"
+        "mode-changed",
+        "auth-changed"
       ]
     },
     "model-admin": {

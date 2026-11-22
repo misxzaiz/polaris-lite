@@ -30,6 +30,13 @@
  *   POST /api/chat/sessions/:id/live-event → body { events:[{kind,payload}] }
  *                                            发起端批量镜像编排事件（delta/工具卡/done…）
  *   GET  /api/chat/sessions/:id/events     → SSE 订阅该会话的 live 事件流（15s ping 保活）
+ *
+ * 索引变更广播（spec v0.2，2026-11-22：30s 轮询升级为「推送即时对账 + 轮询兜底」）：
+ *   GET  /api/chat/sessions/index-events   → SSE 订阅全局索引变更；
+ *                                            PUT/DELETE/loop-state/GC 回收都会扇出
+ *                                            event:index-changed（payload 只带变更 ids，
+ *                                            客户端据此 pull 对账——版本比对幂等，乱序无害）；
+ *                                            轮询兜底保留（SSE 断开/未送达时 30s 内收敛）
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -48,6 +55,10 @@ const SSE_PING_MS = 15_000;
 const LIVE_EVENT_BATCH_MAX = 64;
 /** 单会话 live 事件订阅者上限（防同一会话被无限订阅） */
 const LIVE_SUBS_PER_SESSION_MAX = 32;
+/** 索引变更 SSE 订阅者上限 */
+const INDEX_SUBS_MAX = 64;
+/** 索引变更合批窗口（ms）：同窗口内多次写合并为一条事件（流式 settle + 队列派发可能连续写多个会话） */
+const INDEX_NOTIFY_BATCH_MS = 120;
 
 /** 提取会话的展示字段（服务端不理解消息语义，只数条数与取首条 content 做预览） */
 function summarize(session) {
@@ -137,11 +148,45 @@ export function createServerPart(options = {}) {
   const runningLoops = new Map();
   /** sessionId → Set<res(SSE)>；live 事件订阅者 */
   const liveSubs = new Map();
+  // ---- 索引变更广播（见文件头「索引变更广播」注释） ----
+  /** Set<res(SSE)>；全局索引变更订阅者 */
+  const indexSubs = new Set();
+  /** 合批窗口内的待通知变更 ids */
+  const indexPendingIds = new Set();
+  let indexNotifyTimer = null;
+
+  /** 扇出索引变更事件给所有订阅者（断开连接由 close 自清理） */
+  function fanoutIndexChanged(ids) {
+    if (indexSubs.size === 0 || ids.length === 0) return;
+    const frame = `event: index-changed\ndata: ${JSON.stringify({ ids, at: Date.now() })}\n\n`;
+    for (const res of [...indexSubs]) {
+      try { res.write(frame); } catch { indexSubs.delete(res); }
+    }
+    if (indexSubs.size === 0) indexSubs.clear();
+  }
+
+  /** 记录一次索引变更（合批后扇出；幂等——同一会话窗口内只出现一次） */
+  function notifyIndex(...ids) {
+    for (const id of ids) {
+      if (id && typeof id === 'string') indexPendingIds.add(id);
+    }
+    if (indexPendingIds.size === 0) return;
+    if (indexNotifyTimer) return; // 窗口已排程
+    indexNotifyTimer = setTimeout(() => {
+      indexNotifyTimer = null;
+      const batch = [...indexPendingIds];
+      indexPendingIds.clear();
+      fanoutIndexChanged(batch);
+    }, INDEX_NOTIFY_BATCH_MS);
+  }
 
   function gcLoops() {
     const now = Date.now();
     for (const [id, st] of runningLoops) {
-      if (now - st.lastBeat > LOOP_BEAT_TIMEOUT_MS) runningLoops.delete(id);
+      if (now - st.lastBeat > LOOP_BEAT_TIMEOUT_MS) {
+        runningLoops.delete(id);
+        notifyIndex(id); // GC 回收也是「执行中」徽标的可见性变更（其他设备即时摘牌）
+      }
     }
   }
 
@@ -223,6 +268,30 @@ export function createServerPart(options = {}) {
         return sendJson(200, { sessions, tombstones, running: runningSnapshot() });
       }
 
+      // ---- 索引变更 SSE 订阅（全局；15s ping 保活，断开自清理；见文件头「索引变更广播」） ----
+      // 注意：必须先于 :id 匹配——id 白名单含连字符，index-events 会被误认成会话 id
+      if (pathname === '/api/chat/sessions/index-events' && req.method === 'GET') {
+        if (indexSubs.size >= INDEX_SUBS_MAX) {
+          return sendJson(429, { error: 'too many subscribers', code: 'TOO_MANY_SUBSCRIBERS' });
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-store',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        res.flushHeaders(); // writeHead 不主动上线，客户端 fetch/EventSource 会挂到首个 ping（15s）才 open
+        indexSubs.add(res);
+        const ping = setInterval(() => {
+          try { res.write(`event: ping\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`); } catch { /* 断开由 close 回收 */ }
+        }, SSE_PING_MS);
+        req.on('close', () => {
+          clearInterval(ping);
+          indexSubs.delete(res);
+        });
+        return; // SSE 长连接由 res 持有
+      }
+
       // ---- 单会话（:id）----
       const m = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})$/);
       if (m) {
@@ -273,6 +342,7 @@ export function createServerPart(options = {}) {
             const updatedAt = Date.now();
             writeRecord(id, { version, updatedAt, session: incoming });
             audit({ op: 'put', sessionId: id, version, ok: true, force });
+            notifyIndex(id); // 索引变更广播（v0.2）：其他设备即时对账
             return { status: 200, body: { ok: true, version, updatedAt } };
           });
           if (result.status !== 200) audit({ op: 'put', sessionId: id, ok: false, code: result.body.code });
@@ -289,6 +359,7 @@ export function createServerPart(options = {}) {
             writeRecord(id, { ...cur, version, updatedAt: now, deletedAt: now });
             audit({ op: 'delete', sessionId: id, version, ok: true });
             sweepTombstones();
+            notifyIndex(id); // 墓碑广播：其他设备即时移除该条目
             return { status: 200, body: { ok: true, version } };
           });
           return sendJson(result.status, result.body);
@@ -317,6 +388,7 @@ export function createServerPart(options = {}) {
             lastBeat: Date.now(),
           });
           audit({ op: 'loop-start', sessionId: id });
+          notifyIndex(id); // 「执行中」徽标全设备即时亮起
         } else if (event === 'heartbeat') {
           const st = runningLoops.get(id);
           if (st) { st.lastBeat = Date.now(); st.phase = String(body.phase ?? st.phase).slice(0, 24); }
@@ -324,6 +396,7 @@ export function createServerPart(options = {}) {
         } else {
           runningLoops.delete(id);
           audit({ op: 'loop-done', sessionId: id });
+          notifyIndex(id); // 「执行中」徽标全设备即时摘除
         }
         return sendJson(200, { ok: true });
       }
@@ -365,6 +438,7 @@ export function createServerPart(options = {}) {
           Connection: 'keep-alive',
           'X-Accel-Buffering': 'no',
         });
+        res.flushHeaders(); // 同上：不冲刷则 live overlay 订阅要等 15s ping 才建立
         subs.add(res);
         const ping = setInterval(() => {
           try { res.write(`event: ping\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`); } catch { /* 断开由 close 回收 */ }

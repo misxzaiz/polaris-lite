@@ -1,7 +1,8 @@
 /** 消息流：编辑式助手排版 + 收敛的用户消息 + 消息操作条，保留贴底跟随。
  *  P0/P1 消息操作：复制 / 编辑重答（仅最后一轮）/ 回填 / 重发 / 跳到本条开头 / 重新生成；
  *  滚动导航（回到底部胶囊 + 回顶部）锚定在 stream-area 内，不压输入框。 */
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSessionStore, isToolCard, hasBlocks, type StoreMessage, type ToolCardMessage } from './store';
 import { EmptyState } from './EmptyState';
 import { Markdown } from './markdown';
@@ -13,9 +14,61 @@ import { renderBlocks } from './BlockGroup';
 /** 编辑态：一次只编辑一条；draft 进状态（确认条重建 DOM 不丢稿） */
 interface EditState { msgId: string; draft: string; confirm: boolean }
 
+/** 动作定义：icon 行（短标签）与动作单（全文案）共用同一份 spec，防两处行为漂移 */
+interface MsgActionSpec { key: string; short: string; label: string; icon: React.ReactNode; done?: boolean; run: () => void }
+
+/**
+ * 单条消息渲染隔离罩：一条毒消息渲染抛错时只降级为错误气泡，其余消息照常显示——
+ * 绝不再让单条消息崩掉整页（2026-11-22 白屏事故的横向兜底）。
+ * key 绑定 msg.id，实例随消息重建；错误后该消息保持降级态直到刷新（流式中途瞬错不自动恢复，宁可少渲染不可静默错渲染）。
+ */
+class MessageBoundary extends Component<
+  { msgId: string; children: React.ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) {
+    console.error('[chat-lite] 消息渲染失败，已降级:', this.props.msgId, error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="chat-msg assistant" data-testid="msg-render-error">
+          <div className="chat-avatar" aria-hidden="true"><PolarisMark size={19} /></div>
+          <div className="chat-bubble-col">
+            <div className="chat-bubble markdown">
+              这条消息渲染出错，已跳过（{this.state.error.message}）。其余消息不受影响。
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="19" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** 浮层根：宿主 SlotLayout 提供的 fixed 覆盖层（空态 pointer-events:none 放行，
+ *  子元素恢复 auto）——插件 CSS 门禁禁 fixed，弹层一律 absolute 挂这里锚定视口。 */
+function overlayRoot(): HTMLElement | null {
+  return document.getElementById('plite-overlay-root');
+}
+
 /** 单条消息行：气泡（或编辑态）+ 悬浮操作条。
  *  动作范围：用户消息 = 复制 / [编辑|回填] / 重发；AI 消息 = 复制 / [开头] / [重新生成]。
- *  编辑仅最后一轮且非流式；重新生成仅末条 AI 且非流式；流式中重发转排队。 */
+ *  编辑仅最后一轮且非流式；重新生成仅末条 AI 且非流式；流式中重发转排队。
+ *  手机端（≤768px）图标标签隐藏、命中区外扩 ≥44px，另加 ⋮ 打开全文案动作单
+ *  （不用气泡长按：会和 iOS 原生文本选择冲突，消息正文选择/复制是高频操作）。 */
 function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, editing, setEditing, onConfirm }: {
   m: StoreMessage;
   sid: string;
@@ -28,6 +81,7 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
   onConfirm: (msgId: string, draft: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
@@ -44,55 +98,59 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
     copyTimer.current = setTimeout(() => setCopied(false), 1200);
   };
 
-  const actions: React.ReactNode[] = [];
-  actions.push(
-    <button key="copy" type="button" className={`msg-act${copied ? ' done' : ''}`}
-      title={isUser ? '复制原文' : '复制正文（不含思考/工具卡/提示）'}
-      onClick={() => void doCopy()}>
-      {copied ? <CheckIcon /> : <CopyIcon />}<span className="lbl">复制</span>
-    </button>,
-  );
+  const specs: MsgActionSpec[] = [];
+  specs.push({
+    key: 'copy',
+    short: '复制',
+    label: isUser ? '复制原文' : '复制正文（不含思考/工具卡/提示）',
+    icon: copied ? <CheckIcon /> : <CopyIcon />,
+    done: copied,
+    run: () => { void doCopy(); },
+  });
   if (isUser) {
     if (isLastUser && !sessionStreaming && !isEditing) {
-      actions.push(
-        <button key="edit" type="button" className="msg-act"
-          title="编辑并重答（截断此轮回复，并从所有设备上移除）"
-          onClick={() => setEditing({ msgId: m.id, draft: m.content, confirm: false })}>
-          <EditIcon /><span className="lbl">编辑</span>
-        </button>,
-      );
+      specs.push({
+        key: 'edit',
+        short: '编辑',
+        label: '编辑并重答（截断此轮回复，并从所有设备上移除）',
+        icon: <EditIcon />,
+        run: () => setEditing({ msgId: m.id, draft: m.content, confirm: false }),
+      });
     }
     if (!isLastUser) {
-      actions.push(
-        <button key="backfill" type="button" className="msg-act" title="回填输入框（不发送，取回再编辑）"
-          onClick={() => requestCompose(m.content)}>
-          <BackfillIcon /><span className="lbl">回填</span>
-        </button>,
-      );
+      specs.push({
+        key: 'backfill',
+        short: '回填',
+        label: '回填输入框（不发送，取回再编辑）',
+        icon: <BackfillIcon />,
+        run: () => requestCompose(m.content),
+      });
     }
-    actions.push(
-      <button key="resend" type="button" className="msg-act"
-        title={sessionStreaming ? '重发（当前回复结束后自动发出）' : '重发（追加新一轮，保留历史）'}
-        onClick={() => resendMessage(sid, m.id)}>
-        <ResendIcon /><span className="lbl">重发</span>
-      </button>,
-    );
+    specs.push({
+      key: 'resend',
+      short: '重发',
+      label: sessionStreaming ? '重发（当前回复结束后自动发出）' : '重发（追加新一轮，保留历史）',
+      icon: <ResendIcon />,
+      run: () => resendMessage(sid, m.id),
+    });
   } else {
     if (isLong) {
-      actions.push(
-        <button key="jump" type="button" className="msg-act" title="跳到本条消息的开头"
-          onClick={() => rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-          <JumpIcon /><span className="lbl">开头</span>
-        </button>,
-      );
+      specs.push({
+        key: 'jump',
+        short: '开头',
+        label: '跳到本条消息的开头',
+        icon: <JumpIcon />,
+        run: () => rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      });
     }
     if (isLast && !sessionStreaming) {
-      actions.push(
-        <button key="regen" type="button" className="msg-act" title="重新生成（同提示词重答，替换本轮回复）"
-          onClick={() => void regenerateLast(sid)}>
-          <RegenIcon /><span className="lbl">重新生成</span>
-        </button>,
-      );
+      specs.push({
+        key: 'regen',
+        short: '重新生成',
+        label: '重新生成（同提示词重答，替换本轮回复）',
+        icon: <RegenIcon />,
+        run: () => void regenerateLast(sid),
+      });
     }
   }
 
@@ -115,8 +173,40 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
             {m.streaming && !hasBlocks(m) && <span className="cursor" />}
           </div>
         )}
-        {!isEditing && <div className="msg-actions">{actions}</div>}
+        {!isEditing && (
+          <div className="msg-actions">
+            {specs.map((sp) => (
+              <button key={sp.key} type="button" className={`msg-act${sp.done ? ' done' : ''}`}
+                title={sp.label}
+                onClick={sp.run}>
+                {sp.icon}<span className="lbl">{sp.short}</span>
+              </button>
+            ))}
+            {/* 全文案动作单入口：桌面 hover 行已有完整 title，仅窄屏显示（CSS 门控） */}
+            <button type="button" className="msg-act msg-more" title="更多操作" aria-label="更多操作"
+              onClick={() => setSheetOpen(true)}>
+              <MoreIcon />
+            </button>
+          </div>
+        )}
       </div>
+      {sheetOpen && (() => {
+        const root = overlayRoot();
+        return root ? createPortal(
+          <div className="chat-sheet-mask" onClick={() => setSheetOpen(false)}>
+            <div className="chat-sheet" role="menu" aria-label="消息操作" onClick={(e) => e.stopPropagation()}>
+              {specs.map((sp) => (
+                <button key={sp.key} type="button" className={`chat-sheet-item${sp.done ? ' done' : ''}`}
+                  role="menuitem" onClick={() => { setSheetOpen(false); sp.run(); }}>
+                  {sp.icon}<span>{sp.label}</span>
+                </button>
+              ))}
+              <button type="button" className="chat-sheet-cancel" onClick={() => setSheetOpen(false)}>取消</button>
+            </div>
+          </div>,
+          root,
+        ) : null;
+      })()}
     </div>
   );
 }
@@ -310,18 +400,19 @@ export function MessageStream() {
             isToolCard(m) ? (
               <ToolCard key={m.id} msg={m as ToolCardMessage} />
             ) : (
-              <MessageRow
-                key={m.id}
-                m={m}
-                sid={session.id}
-                isLastUser={m.id === lastUserId}
-                isLast={m.id === messages[msgCount - 1]?.id}
-                isLong={longMsgIds.has(m.id)}
-                sessionStreaming={sessionStreaming}
-                editing={editing}
-                setEditing={setEditing}
-                onConfirm={(msgId, draft) => void editResendLast(session.id, msgId, draft)}
-              />
+              <MessageBoundary key={m.id} msgId={m.id}>
+                <MessageRow
+                  m={m}
+                  sid={session.id}
+                  isLastUser={m.id === lastUserId}
+                  isLast={m.id === messages[msgCount - 1]?.id}
+                  isLong={longMsgIds.has(m.id)}
+                  sessionStreaming={sessionStreaming}
+                  editing={editing}
+                  setEditing={setEditing}
+                  onConfirm={(msgId, draft) => void editResendLast(session.id, msgId, draft)}
+                />
+              </MessageBoundary>
             ),
           )}
           <div ref={bottomRef} />

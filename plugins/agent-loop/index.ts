@@ -367,6 +367,7 @@ function engineTurn(
   onDelta?: (delta: string) => void,
   onReasoning?: (delta: string) => void,
   onRetry?: (attempt: number, maxAttempts: number) => void,
+  modelOverride?: { providerId?: string; modelId?: string },
 ): { promise: Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number }>; cancel: () => void } {
   let off: (() => void) | undefined;
   const promise = new Promise<{ text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number }>((resolve, reject) => {
@@ -419,6 +420,7 @@ function engineTurn(
         messageId: turnMessageId,
         messages,
         ...(toolDefs.length > 0 ? { tools: toolDefs } : {}),
+        ...(modelOverride ?? {}),
       },
     });
   });
@@ -443,8 +445,15 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     prompt?: string;
     history?: { role: string; content: string }[];
     ctxPolicy?: CtxPolicy;
+    /** 会话级模型覆盖（chat-lite 透传，缺省=跟随全局默认；仅转发给引擎，loop 自身不解析） */
+    providerId?: string;
+    modelId?: string;
   };
   const sessionId = payload.sessionId ?? 'unknown';
+  // 会话级模型覆盖快照：整个 loop 期间固定用它（编辑重答后 start 会带新值进来）
+  const modelOverride = payload.providerId || payload.modelId
+    ? { providerId: payload.providerId, modelId: payload.modelId }
+    : undefined;
   // 会话级上下文策略：chat-lite 每次发送透传（缺省字段回退默认值）
   if (payload.ctxPolicy) ctxPolicies.set(sessionId, payload.ctxPolicy);
 
@@ -535,6 +544,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             messageId: assistantId,
             prompt,
             history: payload.history ?? [],
+            ...(modelOverride ?? {}),
           },
         });
       } finally {
@@ -748,7 +758,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       }, (attempt, maxAttempts) => {
         // 引擎断流自动重试：转发到编排通道（chat-lite 渲染「正在重试 N/10」浮层）
         emitTo(emit, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts });
-      });
+      }, modelOverride);
       running.set(`${sessionId}::turn`, t.cancel);
       let result: { text: string; toolCalls: ToolCallProto[]; finishReason: string; partialToolCalls?: number };
       try {

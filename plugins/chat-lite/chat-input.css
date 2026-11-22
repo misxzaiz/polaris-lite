@@ -283,23 +283,17 @@
   cursor: pointer;
 }
 
-/* ===== 助手面板：操作行调谐图标触发，内联展开在按钮行上方 ===== */
-.chat-assistant-drawer {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  flex: 0 0 auto;
-  transition: max-height var(--plite-dur) var(--plite-ease), opacity var(--plite-dur);
-}
-.chat-assistant-drawer.open { max-height: 180px; opacity: 1; }
-.chat-assistant-inner {
+/* ===== 会话设置面板（浮层形态）：portal 到 body，chat-ws-pop 卡片锚在输入条上方，
+   用消息区空间完整展示——内联在输入条里会被 .shell-input 42dvh 上限 + overflow:hidden
+   裁剪（2026-11-22 冒烟实测盖住发送按钮/压成内滚小窗），故不内联。 ===== */
+.chat-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 6px 10px 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-hover);
 }
 .chat-assistant-row {
   display: flex;
@@ -355,20 +349,28 @@
 .chat-queue-act:hover { border-color: var(--accent); color: var(--accent-bright); }
 .chat-queue-act.danger:hover { border-color: var(--plite-danger); color: var(--plite-danger); }
 
-/* 调谐入口（操作行图标按钮）：展开工作区 / 执行模式 / 队列面板 */
-.chat-send.tune {
+/* 会话设置入口（原「调谐」，并入原「工作目录」按钮）：sliders 图标 + 常显工作区名，
+   点击上拉设置面板（模型 / 执行 / 队列 / 分享） */
+.chat-send.session-settings {
   position: relative;
-  min-width: 36px;
-  width: 36px;
-  padding: 0;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 0 10px 0 9px;
   background: transparent;
   border-color: transparent;
-  color: var(--text-faint);
+  color: var(--text-dim);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  overflow: hidden;
 }
-.chat-send.tune:hover:not(:disabled),
-.chat-send.tune.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-bright); }
-/* 信任模式角标：仅信任开启时出现在调谐图标右上角（琥珀=安全门槛降低），不占独立控件位 */
-.chat-tune-badge {
+.chat-send.session-settings svg { flex: 0 0 auto; opacity: 0.8; }
+.chat-send.session-settings:hover:not(:disabled),
+.chat-send.session-settings.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-bright); }
+/* 常显工作区名：正常随按钮色；绑定失效红字（不展开面板也能看见） */
+.chat-session-ws { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-session-ws.invalid { color: var(--plite-danger); }
+/* 信任模式角标：仅信任开启时出现在图标右上角（琥珀=安全门槛降低），不占独立控件位 */
+.chat-session-badge {
   position: absolute;
   top: 5px;
   right: 5px;
@@ -379,6 +381,22 @@
   box-shadow: 0 0 0 2px var(--bg-translucent);
   pointer-events: none;
 }
+/* 关联只读目录角标（自原工作目录按钮迁入） */
+.chat-ws-btn-aux { flex: 0 0 auto; font-size: 10px; color: var(--accent-bright); }
+/* 模型行的恢复默认（清除会话级覆盖） */
+.chat-model-reset {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.chat-model-reset:hover { color: var(--accent-bright); background: var(--accent-soft); }
 
 /* 附件 */
 .chat-attach-strip { display: flex; flex-wrap: wrap; gap: 8px; padding: 3px 2px; }
@@ -421,46 +439,46 @@
   .chat-input-hint { display: none; }
   .chat-input-btns { min-height: 42px; }
   .chat-send { height: 34px; min-height: 34px; }
-  .chat-send.attach, .chat-send.tune, .chat-send.new-session { min-width: 40px; width: 40px; }
+  .chat-send.attach, .chat-send.new-session { min-width: 40px; width: 40px; }
   .chat-attach-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .chat-attach-thumb img { width: 48px; height: 48px; }
 }
-/* ===== 操作行：当前工作目录（始终可见，点一下直接选） ===== */
-.chat-ws-btn {
-  display: inline-flex;
+/* ===== 模型选择浮层（复用 chat-ws-pop 骨架；供应商分组 / 模型列表） ===== */
+.chat-model-pop .chat-model-list { overflow-y: auto; }
+.chat-model-row {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
-  min-width: 0;
-  max-width: 170px;
-  padding: 0 9px 0 7px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text);
   font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.01em;
+  text-align: left;
   cursor: pointer;
+}
+.chat-model-row:last-child { border-bottom: none; }
+.chat-model-row:hover { background: var(--accent-soft); }
+.chat-model-row.sel { background: var(--accent-soft); }
+.chat-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.chat-model-meta {
+  margin-left: auto;
   flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
-  transition: background var(--plite-dur), color var(--plite-dur), border-color var(--plite-dur);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-faint);
 }
-.chat-ws-btn:hover {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  color: var(--accent-bright);
-}
-.chat-ws-btn.pinned { color: var(--text); border-color: var(--border); }
-.chat-ws-btn.invalid {
-  color: var(--plite-danger);
-  border-color: color-mix(in srgb, var(--plite-danger) 42%, var(--border));
-  background: var(--plite-danger-soft);
-}
-.chat-ws-btn:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); }
-.chat-ws-btn svg { flex: 0 0 auto; opacity: 0.72; }
-.chat-ws-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-ws-btn-aux { flex: 0 0 auto; font-size: 10px; color: var(--accent-bright); }
+.chat-model-current { flex: 0 0 auto; margin-left: 2px; font-size: 10px; color: var(--accent-bright); }
+.chat-model-empty { padding: 14px 10px; font-size: 11px; color: var(--text-faint); }
+/* 面板模型行 chips：上限宽防长模型名挤爆抽屉 */
+.chat-model-chip { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* 分区标题（模型 / 执行 / 待发队列 / 分享） */
+.chat-assistant-sec { padding: 5px 2px 1px; font-size: 10px; color: var(--text-faint); letter-spacing: 0.08em; }
 
 /* 抽屉一级：工作目录行做成可点行（不是静态 span） */
 .chat-assistant-row.chat-row-btn {
@@ -696,7 +714,7 @@
 .wpb-err { flex: 0 0 auto; padding: 4px 8px; color: var(--plite-danger); font-size: 10px; }
 
 @media (max-width: 768px) {
-  .chat-ws-btn { margin-right: auto; max-width: 138px; height: 28px; font-size: 11.5px; }
+  .chat-send.session-settings { margin-right: auto; max-width: 150px; height: 28px; font-size: 11.5px; }
   .chat-ws-pop { border-radius: 14px; }
   .wpb-row { padding: 7px 8px; }
   .wpb-current-path { font-size: 9.5px; }

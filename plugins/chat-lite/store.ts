@@ -15,11 +15,13 @@ import type { Attachment } from './attachments';
 import { loadWorkspacePrefs } from './workspace-prefs';
 import { openLiveIfNeeded } from './liveOverlay';
 import {
-  createSync, cacheGetAll, pullSession, pushSession, deleteSessionRemote,
+  createSync, cacheGetAll, cachePutAll, cacheDelete, pullSession, pushSession, deleteSessionRemote,
   type SyncHandle, type SessionSnapshot, type SyncStatus, type ConflictInfo, type LoopRunState,
 } from './sync';
 
 const STORAGE_KEY = 'chat-lite.sessions.v1';
+/** 本机交互态（spec §5.4 分类）：刷新前正开着的会话 id——activeId 属 UI 事实，不入会话数据、不入镜像 */
+const ACTIVE_KEY = 'chat-lite.active-session';
 const PERSIST_DEBOUNCE_MS = 800;
 /** 待发队列项：文本 + 完整附件（附件不再压成 `[附件: name]` 文本） */
 export interface PendingSend {
@@ -82,6 +84,10 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
   workspaceId?: string;
   /** 关联只读目录 root id：可被 files 工具读取，但 bash 不在此执行、不可写 */
   linkedWorkspaceIds?: string[];
+  /** 会话级模型覆盖（会话设置面板写入）：缺省=跟随全局默认供应商/模型，引擎行为不变。
+   *  只选供应商不选模型时 modelId 为空 → 用该供应商的 activeModel。随会话 JSON 一并上云。 */
+  providerId?: string;
+  modelId?: string;
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。
    *  缺省回退 createdAt（旧快照兼容）。随会话 JSON 一并上云，多端排序一致。 */
   lastActiveAt?: number;
@@ -109,6 +115,8 @@ interface SessionState {
   dirty: Set<string>;
   /** 多设备同步状态（侧栏小状态点消费） */
   syncStatus: 'idle' | 'syncing' | 'offline' | 'conflict';
+  /** 冷启动引导进度（sync 层并行拉全文期间非空；侧栏 x/y 与「正在同步」空态消费） */
+  bootstrap: { done: number; total: number } | null;
   /** 待用户决策的冲突（sessionId → 服务端版本；非空时输入区提示条） */
   conflicts: Record<string, { serverVersion: number }>;
   /** 正在执行编排 loop 的会话表（服务端运行态；侧栏「执行中」徽标消费） */
@@ -120,6 +128,8 @@ interface SessionState {
   setSessionWorkspace: (id: string, workspaceId: string | undefined) => void;
   /** 设置会话的关联只读目录（最多 3 个；主目录自动排除） */
   setSessionLinkedWorkspaces: (id: string, linked: string[]) => void;
+  /** 设置/清除会话级模型覆盖（undefined=清除该字段，回到跟随全局默认） */
+  setSessionModel: (id: string, providerId: string | undefined, modelId: string | undefined) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -202,6 +212,10 @@ function setSyncStatus(s: SyncStatus): void {
   if (useSessionStore.getState().syncStatus !== s) useSessionStore.setState({ syncStatus: s });
 }
 
+function onBootProgress(progress: { done: number; total: number } | null): void {
+  if (useSessionStore.getState().bootstrap !== progress) useSessionStore.setState({ bootstrap: progress });
+}
+
 function onSyncConflict(info: ConflictInfo): void {
   const st = useSessionStore.getState();
   useSessionStore.setState({ conflicts: { ...st.conflicts, [info.sessionId]: { serverVersion: info.serverVersion } }, syncStatus: 'conflict' });
@@ -224,6 +238,7 @@ function bootstrapSync(): void {
     applyTombstone,
     setStatus: setSyncStatus,
     onRunning,
+    onBootProgress,
     onConflict: onSyncConflict,
     getState: syncState,
     isStreaming: (id) => {
@@ -236,6 +251,21 @@ function bootstrapSync(): void {
 
 /** 初始态：空会话；真实数据由启动引导（IndexedDB 缓存 → 服务端对账）异步填充 */
 const initial = { sessions: [] as (ChatSessionShape & { messages: StoreMessage[] })[], activeId: null as string | null };
+function loadActiveHint(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveHint(id: string | null): void {
+  try {
+    if (id) localStorage.setItem(ACTIVE_KEY, id);
+    else localStorage.removeItem(ACTIVE_KEY);
+  } catch { /* 隐私模式忽略 */ }
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: initial.sessions,
   activeId: initial.activeId,
@@ -243,6 +273,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   versions: {},
   dirty: new Set<string>(),
   syncStatus: 'idle',
+  bootstrap: null,
   conflicts: {},
   runningLoops: {},
 
@@ -255,6 +286,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ...(defaultWs ? { workspaceId: defaultWs } : {}),
     });
     set((st) => ({ sessions: sortSessions([session, ...st.sessions]), activeId: id }));
+    saveActiveHint(id);
     versions[id] = versions[id] ?? 0;
     dirty.add(id);
     scheduleSync();
@@ -263,6 +295,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setActive: (id) => {
     set({ activeId: id });
+    saveActiveHint(id); // 本机 UI 态：刷新后恢复正开着的会话
     scheduleSync();
     // 跨设备实时查看：目标会话在执行中（服务端 running 表）→ 建立 live overlay 订阅
     void openLiveIfNeeded(id).catch(() => undefined);
@@ -299,6 +332,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     scheduleSync();
   },
 
+  setSessionModel: (id, providerId, modelId) => {
+    set((st) => ({
+      sessions: sortSessions(st.sessions.map((s) => {
+        if (s.id !== id) return s;
+        // undefined=显式删除键（而不是留一个 undefined 值），旧快照兼容口径与 JSON 落盘形态一致
+        const next = { ...s };
+        if (providerId === undefined) delete next.providerId; else next.providerId = providerId;
+        if (modelId === undefined) delete next.modelId; else next.modelId = modelId;
+        return touch(next);
+      })),
+    }));
+    dirty.add(id);
+    scheduleSync();
+  },
+
   deleteSession: (id) => {
     set((st) => {
       const sessions = st.sessions.filter((s) => s.id !== id);
@@ -313,9 +361,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         activeId: st.activeId === id ? (sessions[0]?.id ?? null) : st.activeId,
       };
     });
+    if (get().activeId) saveActiveHint(get().activeId); // 删的是正开会话：提示键同步前移
+    else saveActiveHint(null);
     delete versions[id];
     dirty.delete(id);
-    if (syncHandle) void deleteSessionRemote(id).catch(() => undefined);
+    void deleteSessionRemote(id)
+      .then(() => cacheDelete(id)) // 镜像同步清理（v0.2）：软删除后本地镜像不留残影
+      .catch(() => undefined);
   },
 
   appendMessage: (sessionId, msg) => {
@@ -558,6 +610,8 @@ export async function acceptServerVersion(sessionId: string): Promise<void> {
   const snap = await pullSession(sessionId);
   if (snap.ok) {
     applyServerSnapshot(snap.data);
+    // 镜像写通：决策后的服务端版本也落本地镜像（与 pull/push 路径同一语义）
+    void cachePutAll([{ ...snap.data, active: useSessionStore.getState().activeId === sessionId }]).catch(() => undefined);
     const { [sessionId]: _c, ...rest } = useSessionStore.getState().conflicts;
     useSessionStore.setState({ conflicts: rest, syncStatus: 'idle' });
   } else {
@@ -586,7 +640,7 @@ export function setOfflineMode(on: boolean): void {
   syncHandle?.setOfflineMode(on);
 }
 
-/** 启动：IndexedDB 缓存秒开 → 服务端对账。旧 localStorage 只提示不迁移（R5）。 */
+/** 启动：IndexedDB 缓存秒开（含 activeId 恢复）→ 服务端对账。旧 localStorage 只提示不迁移（R5）。 */
 void (async () => {
   if (typeof window === 'undefined') return;
   // 旧库存在性提示（一次性；不读取内容、不迁移——多设备版以服务端为权威）
@@ -604,15 +658,26 @@ void (async () => {
       messages: (e.session.messages ?? []).map(m => ({ ...m, streaming: false })),
     })));
     for (const e of cached) versions[e.session.id] = e.version;
-    useSessionStore.setState(st => ({
+    // activeId 恢复（spec v0.2）：本机 UI 态键优先（刷新前正开着的会话）；
+    // 键缺失/指向已不存在的会话时回退最新会话。刷新后不再落回欢迎页。
+    const hint = loadActiveHint();
+    const hinted = hint ? sessions.find((s) => s.id === hint) : undefined;
+    const restoredActive = hinted?.id ?? sessions[0]?.id ?? null;
+    useSessionStore.setState({
       sessions,
-      activeId: st.activeId ?? sessions[0]?.id ?? null,
-    }));
+      activeId: restoredActive,
+    });
   }
   bootstrapSync();
   if (legacyHint) console.info(`[chat-lite] ${legacyHint}`);
 })();
 
+
+/** 登录成功后立即对账（auth-changed 触发）：冷启动时的首轮 pull 若在登录前发生只会拿到
+ *  401 并回落到 30s 轮询——新设备/新浏览器首登后会话列表要空等半分钟才出现。 */
+export function syncPullNow(): void {
+  void syncHandle?.pullNow();
+}
 
 export function activeSession(): (ChatSessionShape & { messages: StoreMessage[] }) | undefined {
   const { sessions, activeId } = useSessionStore.getState();

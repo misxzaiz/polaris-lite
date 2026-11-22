@@ -1,0 +1,110 @@
+{
+ "steps": {
+  "t1_login": {
+   "authSwitch": {
+    "x": 45,
+    "y": 637,
+    "w": 300,
+    "h": 19
+   },
+   "authCard": {
+    "x": 20,
+    "y": 159,
+    "w": 350,
+    "h": 526
+   }
+  },
+  "t2_loginFill": [
+   "root",
+   "1234"
+  ],
+  "t2_loggedIn": true,
+  "t3_drawer": {
+   "open": true,
+   "search": {
+    "x": 12,
+    "y": 118,
+    "w": 296,
+    "h": 40
+   },
+   "groups": [
+    "今天",
+    "7 天内",
+    "更早"
+   ],
+   "refreshBtn": {
+    "x": 258,
+    "y": 20,
+    "w": 22,
+    "h": 22
+   }
+  },
+  "t4_search": [
+   "请记住暗号：星尘-7749。请只回复\n12"
+  ],
+  "t5_send": {
+   "sendBtn": {
+    "x": 333,
+    "y": 787,
+    "w": 35,
+    "h": 34
+   }
+  },
+  "t5_streamed": true,
+  "t6_keyboard": {
+   "input": {
+    "x": 0,
+    "y": 351,
+    "w": 390,
+    "h": 129
+   },
+   "send": {
+    "x": 333,
+    "y": 787,
+    "w": 35,
+    "h": 34
+   },
+   "bubbles": 1
+  },
+  "t7_msgSheet": {
+   "open": false,
+   "items": []
+  },
+  "t8_topbarBtns": [
+   {
+    "x": 34,
+    "y": 30,
+    "title": "会话列表"
+   },
+   {
+    "x": 356,
+    "y": 30,
+    "title": "能力面板"
+   }
+  ],
+  "t8_panel": {
+   "open": false,
+   "visibleTabs": [],
+   "sheetToggle": {
+    "x": 409,
+    "y": 44,
+    "w": 277,
+    "h": 36
+   }
+  },
+  "t8_panelMenu": {
+   "open": false,
+   "items": []
+  },
+  "t9_dark": {
+   "rootClass": "",
+   "sidebarOpen": true
+  },
+  "t10_offline": {
+   "body": "插件加载失败：registry（Failed to fetch）\nPOLARIS LITE\n槽位 sidebar 暂无插件\n槽位 stream 暂无插件\n槽位 input 暂无插件\n槽位 panel 暂无插件",
+   "gate": false,
+   "app": false
+  },
+  "t11_recovered": true
+ }
+}

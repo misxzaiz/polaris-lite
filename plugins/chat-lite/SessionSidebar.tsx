@@ -1,6 +1,11 @@
 /** 会话侧栏：克制的内容目录 + 行内删除确认 + 会话工作区设置入口 + 多设备同步状态。
- *  v2：手动刷新（立即对账）+ 「执行中」徽标（服务端 loop 运行态，跨设备可见）。 */
-import { useState } from 'react';
+ *  v2：手动刷新（立即对账）+ 「执行中」徽标（服务端 loop 运行态，跨设备可见）。
+ *  v3（spec v0.2）：冷启动引导进度（x/y）——服务端为权威，本地镜像只是缓存，
+ *  空列表 ≠ 无会话；三操作按钮 class 语义化（原共用 chat-session-del 是命名债）。
+ *  v4（2026-11-22 移动端优化）：搜索框 + 时间分组（今天/7天内/更早，80+ 会话平铺找不到）；
+ *  窄屏行内小图标收进「⋮」动作菜单（触控目标从 22-30px 提到 44px 级）；
+ *  触屏长按会话行唤出同一菜单（iOS/安卓原生习惯）。 */
+import { useMemo, useRef, useState } from 'react';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
 import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
@@ -47,10 +52,34 @@ function displayTitle(title: string, firstMessage: string | undefined): string {
   return firstMessage ? firstMessage.slice(0, 18) : title;
 }
 
+// ---- 时间分组（P0-4）：列表顺序已按最后活跃倒序，桶顺序天然递增 ----
+type TimeBucket = 'today' | 'week' | 'older';
+const BUCKET_ORDER: TimeBucket[] = ['today', 'week', 'older'];
+const BUCKET_LABEL: Record<TimeBucket, string> = { today: '今天', week: '7 天内', older: '更早' };
+
+function bucketOf(ts: number): TimeBucket {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  if (ts >= startOfDay.getTime()) return 'today';
+  if (ts >= Date.now() - 7 * 86_400_000) return 'week';
+  return 'older';
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="19" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function SessionSidebar() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeId = useSessionStore((s) => s.activeId);
   const syncStatus = useSessionStore((s) => s.syncStatus);
+  const bootstrap = useSessionStore((s) => s.bootstrap);
   const runningLoops = useSessionStore((s) => s.runningLoops);
   const setActive = useSessionStore((s) => s.setActive);
   const createSession = useSessionStore((s) => s.createSession);
@@ -65,8 +94,16 @@ export function SessionSidebar() {
   const [wsPickerFor, setWsPickerFor] = useState<string | null>(null);
   /** 手动刷新进行中（按钮旋转/禁用态） */
   const [refreshing, setRefreshing] = useState(false);
+  /** 会话搜索词（P0-4） */
+  const [query, setQuery] = useState('');
+  /** 动作菜单打开中的会话 id（窄屏 ⋮ / 长按唤出） */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  /** 长按计时器 + 长按生效时间戳（吞掉随后 600ms 内的 click，否则松手即切会话；自过期防残留） */
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressedUntil = useRef(0);
 
   const pickedSession = sessions.find((s) => s.id === wsPickerFor);
+  const menuSession = sessions.find((s) => s.id === menuFor);
 
   const startRename = (id: string) => {
     const s = sessions.find((x) => x.id === id);
@@ -87,6 +124,140 @@ export function SessionSidebar() {
     try { await refreshNow(); } finally { setRefreshing(false); }
   };
 
+  // ---- 搜索过滤（P0-4）：标题 + 首条消息全文，客户端过滤零成本 ----
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!q) return sessions;
+    return sessions.filter((s) => `${s.title} ${s.messages[0]?.content ?? ''}`.toLowerCase().includes(q));
+  }, [sessions, q]);
+
+  // ---- 时间分组（无搜索词时）：今天 / 7 天内 / 更早 ----
+  const grouped = useMemo(() => {
+    const map: Record<TimeBucket, typeof sessions> = { today: [], week: [], older: [] };
+    for (const s of filtered) map[bucketOf(s.lastActiveAt ?? s.createdAt)].push(s);
+    return map;
+  }, [filtered]);
+
+  const clearPress = () => {
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; }
+  };
+
+  /** 触屏长按会话行 → 动作菜单（与 ⋮ 同一菜单；P1-8 的重命名入口即菜单第一项） */
+  const onRowPointerDown = (id: string, e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    clearPress();
+    pressTimer.current = setTimeout(() => {
+      longPressedUntil.current = Date.now() + 600;
+      setMenuFor(id);
+    }, 500);
+  };
+  const onRowPointerUp = () => clearPress();
+  const onRowClick = (id: string) => {
+    if (Date.now() < longPressedUntil.current) return; // 长按松手随行的 click 不切会话
+    setActive(id);
+  };
+
+  const renderRow = (s: (typeof sessions)[number]) => {
+    const run = runningLoops[s.id];
+    const stale = run ? Date.now() - run.lastBeat > 20_000 : false;
+    const isRenaming = renaming?.id === s.id;
+    return (
+      <div
+        key={s.id}
+        className={`chat-session-item ${s.id === activeId ? 'active' : ''}`}
+        onClick={() => onRowClick(s.id)}
+        onPointerDown={(e) => onRowPointerDown(s.id, e)}
+        onPointerUp={onRowPointerUp}
+        onPointerLeave={onRowPointerUp}
+        onPointerCancel={onRowPointerUp}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <span className="title" onDoubleClick={() => startRename(s.id)}>
+          {isRenaming ? (
+            <input
+              className="chat-rename-input"
+              value={renaming.value}
+              autoFocus
+              onFocus={(e) => e.target.select()}
+              aria-label="重命名会话"
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setRenaming({ id: s.id, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); saveRename(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null); }
+              }}
+              onBlur={saveRename}
+            />
+          ) : (
+            <>
+              {displayTitle(s.title, s.messages[0]?.content)}
+              {s.workspaceId && <span className="chat-session-ws" title={`工作区：${s.workspaceId}`}>⌂</span>}
+            </>
+          )}
+        </span>
+        {run && (
+          <span
+            className={`chat-run-badge${stale ? ' stale' : ''}`}
+            title={stale
+              ? '执行端心跳超时，即将回收'
+              : `${run.device} 发起 · 已执行 ${Math.max(1, Math.round((Date.now() - run.startedAt) / 1000))}s`}
+          >
+            <i className="chat-run-dot" />执行中
+          </span>
+        )}
+        {confirmId === s.id ? (
+          <span className="chat-session-confirm" onClick={(e) => e.stopPropagation()}>
+            <span>删除？</span>
+            <button className="danger" onClick={() => { deleteSession(s.id); setConfirmId(null); }}>确认</button>
+            <button onClick={() => setConfirmId(null)}>取消</button>
+          </span>
+        ) : (
+          <>
+            {!isRenaming && <span className="chat-session-count">{s.messages.length}</span>}
+            {/* 桌面：行内三图标（hover 浮现）；窄屏：CSS 隐藏图标、显示 ⋮（44px 命中区） */}
+            <span className="chat-session-actions">
+              {!isRenaming && (
+                <button
+                  className="chat-session-act chat-session-rename"
+                  title="重命名（双击标题同效）"
+                  aria-label={`重命名会话 ${displayTitle(s.title, s.messages[0]?.content)}`}
+                  onClick={(e) => { e.stopPropagation(); startRename(s.id); }}
+                >
+                  <PencilIcon />
+                </button>
+              )}
+              <button
+                className="chat-session-act chat-session-folder"
+                title="设置工作区"
+                aria-label={`设置工作区 ${displayTitle(s.title, s.messages[0]?.content)}`}
+                onClick={(e) => { e.stopPropagation(); setWsPickerFor(s.id); }}
+              >
+                <FolderIcon />
+              </button>
+              <button
+                className="chat-session-act chat-session-trash"
+                title="删除会话"
+                aria-label={`删除会话 ${displayTitle(s.title, s.messages[0]?.content)}`}
+                onClick={(e) => { e.stopPropagation(); setConfirmId(s.id); }}
+              >
+                <TrashIcon />
+              </button>
+            </span>
+            <button
+              type="button"
+              className="chat-session-kebab"
+              aria-label={`会话操作 ${displayTitle(s.title, s.messages[0]?.content)}`}
+              aria-haspopup="menu"
+              onClick={(e) => { e.stopPropagation(); setMenuFor(s.id); }}
+            >
+              <MoreIcon />
+            </button>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="chat-sessions" data-testid="session-sidebar">
       <div className="chat-sessions-head">
@@ -102,7 +273,8 @@ export function SessionSidebar() {
           >
             <RefreshIcon />
           </button>
-          {String(sessions.length).padStart(2, '0')}
+          {/* 冷启动引导期显示 x/y（本地是缓存、服务端为权威——裸数字 00 会误导为「全丢了」） */}
+          {bootstrap ? `${bootstrap.done}/${bootstrap.total}` : String(sessions.length).padStart(2, '0')}
         </span>
       </div>
       <ConflictBanner />
@@ -110,98 +282,85 @@ export function SessionSidebar() {
         <PlusIcon /><span>新会话</span>
       </button>
 
+      {sessions.length > 0 && (
+        <input
+          className="chat-session-search"
+          type="search"
+          placeholder="搜索会话…"
+          aria-label="搜索会话"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
+
       {sessions.length === 0 && (
         <div className="chat-sessions-empty">
-          <strong>尚无对话记录</strong>
-          <span>从一个想法开始，<br />这里会留下你的思考轨迹。</span>
+          {bootstrap && bootstrap.total > 0 ? (
+            <>
+              <strong>正在同步会话…</strong>
+              <span>{bootstrap.done}/{bootstrap.total} 条记录从服务端加载，</span>
+              <span>列表马上就好。</span>
+            </>
+          ) : (
+            <>
+              <strong>尚无对话记录</strong>
+              <span>从一个想法开始，<br />这里会留下你的思考轨迹。</span>
+            </>
+          )}
         </div>
       )}
 
-      <div className="chat-session-list">
-        {sessions.map((s) => {
-          const run = runningLoops[s.id];
-          const stale = run ? Date.now() - run.lastBeat > 20_000 : false;
-          const isRenaming = renaming?.id === s.id;
-          return (
-          <div
-            key={s.id}
-            className={`chat-session-item ${s.id === activeId ? 'active' : ''}`}
-            onClick={() => setActive(s.id)}
-          >
-            <span className="title" onDoubleClick={() => startRename(s.id)}>
-              {isRenaming ? (
-                <input
-                  className="chat-rename-input"
-                  value={renaming.value}
-                  autoFocus
-                  onFocus={(e) => e.target.select()}
-                  aria-label="重命名会话"
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => setRenaming({ id: s.id, value: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); saveRename(); }
-                    else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null); }
-                  }}
-                  onBlur={saveRename}
-                />
-              ) : (
-                <>
-                  {displayTitle(s.title, s.messages[0]?.content)}
-                  {s.workspaceId && <span className="chat-session-ws" title={`工作区：${s.workspaceId}`}>⌂</span>}
-                </>
-              )}
-            </span>
-            {run && (
-              <span
-                className={`chat-run-badge${stale ? ' stale' : ''}`}
-                title={stale
-                  ? '执行端心跳超时，即将回收'
-                  : `${run.device} 发起 · 已执行 ${Math.max(1, Math.round((Date.now() - run.startedAt) / 1000))}s`}
-              >
-                <i className="chat-run-dot" />执行中
-              </span>
-            )}
-            {confirmId === s.id ? (
-              <span className="chat-session-confirm" onClick={(e) => e.stopPropagation()}>
-                <span>删除？</span>
-                <button className="danger" onClick={() => { deleteSession(s.id); setConfirmId(null); }}>确认</button>
-                <button onClick={() => setConfirmId(null)}>取消</button>
-              </span>
-            ) : (
-              <span className="chat-session-actions">
-                {!isRenaming && <span className="chat-session-count">{s.messages.length}</span>}
-                {!isRenaming && (
-                  <button
-                    className="chat-session-del"
-                    title="重命名（双击标题同效）"
-                    aria-label={`重命名会话 ${displayTitle(s.title, s.messages[0]?.content)}`}
-                    onClick={(e) => { e.stopPropagation(); startRename(s.id); }}
-                  >
-                    <PencilIcon />
-                  </button>
-                )}
-                <button
-                  className="chat-session-del"
-                  title="设置工作区"
-                  aria-label={`设置工作区 ${displayTitle(s.title, s.messages[0]?.content)}`}
-                  onClick={(e) => { e.stopPropagation(); setWsPickerFor(s.id); }}
-                >
-                  <FolderIcon />
-                </button>
-                <button
-                  className="chat-session-del"
-                  title="删除会话"
-                  aria-label={`删除会话 ${displayTitle(s.title, s.messages[0]?.content)}`}
-                  onClick={(e) => { e.stopPropagation(); setConfirmId(s.id); }}
-                >
-                  <TrashIcon />
-                </button>
-              </span>
-            )}
+      {sessions.length > 0 && filtered.length === 0 && (
+        <div className="chat-sessions-empty"><strong>无匹配会话</strong><span>换个关键词试试。</span></div>
+      )}
+
+      {q ? (
+        <div className="chat-session-list">{filtered.map(renderRow)}</div>
+      ) : (
+        BUCKET_ORDER.map((b) =>
+          grouped[b].length > 0 ? (
+            <div className="chat-session-group-wrap" key={b}>
+              <div className="chat-session-group">{BUCKET_LABEL[b]}</div>
+              <div className="chat-session-list">{grouped[b].map(renderRow)}</div>
+            </div>
+          ) : null,
+        )
+      )}
+
+      {/* 窄屏会话动作菜单（⋮ / 长按唤出）：底部 sheet，触控目标 44px 级。
+          删除仍走行内两步确认（选删除后菜单关闭、该行原地出确认条）。 */}
+      {menuSession && (
+        <div className="chat-sheet-mask" onClick={() => setMenuFor(null)}>
+          <div className="chat-sheet" role="menu" aria-label="会话操作" onClick={(e) => e.stopPropagation()}>
+            <div className="chat-sheet-title">{displayTitle(menuSession.title, menuSession.messages[0]?.content)}</div>
+            <button
+              type="button"
+              className="chat-sheet-item"
+              role="menuitem"
+              onClick={() => { startRename(menuSession.id); setMenuFor(null); }}
+            >
+              <PencilIcon /><span>重命名</span>
+            </button>
+            <button
+              type="button"
+              className="chat-sheet-item"
+              role="menuitem"
+              onClick={() => { setWsPickerFor(menuSession.id); setMenuFor(null); }}
+            >
+              <FolderIcon /><span>设置工作目录</span>
+            </button>
+            <button
+              type="button"
+              className="chat-sheet-item danger"
+              role="menuitem"
+              onClick={() => { setConfirmId(menuSession.id); setMenuFor(null); }}
+            >
+              <TrashIcon /><span>删除会话</span>
+            </button>
+            <button type="button" className="chat-sheet-cancel" onClick={() => setMenuFor(null)}>取消</button>
           </div>
-          );
-        })}
-      </div>
+        </div>
+      )}
 
       {pickedSession && (
         <WorkspacePicker

@@ -12,12 +12,15 @@
  * 预算口径（report §8.1）：src/（含 styles/tokens/main）+ server/。
  * plugins/、tests/、docs/ 不计（它们不是核心）。
  *
- * 当前水位：4679 行（2026-11-22 P2-2 完成后实测;起点 7527）。B 档达成。路线图预期：
+ * 当前水位：4853 行（2026-11-22 移动端优化后实测;起点 7527）。B 档达成。路线图预期：
  * - A 档（立闸）：≤ 7600（当前水位 + 1% 缓冲——本档只立闸不瘦身）
  * - B 档（止血+瘦身）：≤ 4300（workspace 冻结 + chrome 外移 + chat-lite 纵切后）
  * - C 档（理念兑现）：≤ 1600（workspace 抽出 + 探测迁移后）
  * 豁免历史（台账：每条一行，日期 + 谁 + 理由）：
- *   （暂无——首个豁免出现时在此登记）
+ *   2026-11-22 · 移动端可用性优化（用户主用手机浏览器）：P2-9 键盘让位（visualViewport
+ *   监听）+ P2-10 边缘滑动手势进 SlotLayout.tsx（+57 行）、shell-drawer-head 关闭栏与
+ *   --plite-kb-lift 消费进 styles.css（+39 行）。壳层视口/抽屉手势属核心职责，插件化
+ *   需新增容器契约反而更重。CORE_BUDGET 4800 → 4880。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,8 +30,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 预算上限（见上：A 档水位 + 1% 缓冲；B/C 档达成时下调本值） */
-const CORE_BUDGET = 4800;
+/** 预算上限（见上：A 档水位 + 1% 缓冲；B/C 档达成时下调本值）
+ *  2026-11-22 上调 4800 → 4880：移动端优化（键盘让位+边缘手势进核心，理由见豁免台账） */
+const CORE_BUDGET = 4880;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

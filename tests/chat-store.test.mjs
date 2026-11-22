@@ -84,6 +84,7 @@ test('未登录访问 chat-store 一律 401', async (t) => {
   const gets = [
     c.send('/api/chat/sessions'),
     c.send('/api/chat/sessions/s-abc'),
+    c.send('/api/chat/sessions/index-events'),
   ];
   const puts = c.send('/api/chat/sessions/s-abc', { method: 'PUT', body: { session: mkSession('s-abc'), baseVersion: 0 } });
   const dels = c.send('/api/chat/sessions/s-abc', { method: 'DELETE' });
@@ -202,6 +203,77 @@ test('单会话超过 4MB → 413', async (t) => {
   const big = mkSession('s-big', { messages: [{ id: 'm', role: 'user', content: 'x'.repeat(5 * 1024 * 1024), createdAt: 1 }] });
   const res = await c.send('/api/chat/sessions/s-big', { method: 'PUT', body: { session: big, baseVersion: 0 } });
   assert.equal(res.status, 413);
+});
+
+// ---------------------------------------------------------------- 索引变更广播（spec v0.2）
+
+/**
+ * SSE 订阅端（raw fetch 流式读：client().send 会等完整 body，SSE 永不结束）。
+ * readFrame：从字节流里按空行切帧，返回第一条包含 match 的帧。
+ */
+async function readFrame(reader, bufRef, match, timeoutMs = 3000) {
+  const decoder = new TextDecoder();
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const idx = bufRef.s.indexOf('\n\n');
+    if (idx >= 0) {
+      const frame = bufRef.s.slice(0, idx);
+      bufRef.s = bufRef.s.slice(idx + 2);
+      if (frame.includes(match)) return frame;
+      continue; // ping 等无关帧：跳过继续读
+    }
+    if (Date.now() > deadline) throw new Error(`SSE frame timeout waiting "${match}"; buf=${bufRef.s.slice(0, 200)}`);
+    const remaining = deadline - Date.now();
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise((r) => setTimeout(() => r({ done: true, value: undefined }), remaining)),
+    ]);
+    if (done) throw new Error('SSE closed early');
+    bufRef.s += decoder.decode(value, { stream: true });
+  }
+}
+
+test('索引变更 SSE：另一设备的 PUT / loop-state / DELETE 都即时扇出 index-changed', async (t) => {
+  const env = tempRoot();
+  const host = await startHost(t, env);
+  const a = host.client();
+  const b = host.client();
+  for (const c of [a, b]) {
+    const res = await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+    assert.equal(res.status, 200);
+  }
+
+  // 设备 B 订阅索引变更流
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const sseRes = await fetch(`${host.base}/api/chat/sessions/index-events`, {
+    headers: { cookie: b.cookie() },
+    signal: controller.signal,
+  });
+  assert.equal(sseRes.status, 200);
+  assert.ok((sseRes.headers.get('content-type') ?? '').includes('text/event-stream'));
+  const reader = sseRes.body.getReader();
+  const bufRef = { s: '' };
+
+  // 设备 A PUT → B 收到变更事件（合批窗口 ≤120ms + 网络投递）
+  const put = await a.send('/api/chat/sessions/s-sse', { method: 'PUT', body: { session: mkSession('s-sse'), baseVersion: 0 } });
+  assert.equal(put.status, 200);
+  const f1 = await readFrame(reader, bufRef, 'index-changed');
+  assert.ok(f1.includes('s-sse'), `frame should carry session id: ${f1}`);
+
+  // loop-state start（「执行中」徽标数据）→ 同样扇出
+  const ls = await a.send('/api/chat/sessions/s-sse/loop-state', { method: 'POST', body: { event: 'start', device: 'A' } });
+  assert.equal(ls.status, 200);
+  await readFrame(reader, bufRef, 'index-changed');
+  const ld = await a.send('/api/chat/sessions/s-sse/loop-state', { method: 'POST', body: { event: 'done' } });
+  assert.equal(ld.status, 200);
+  await readFrame(reader, bufRef, 'index-changed');
+
+  // DELETE（墓碑）→ 扇出，其他设备据此即时移除
+  const del = await a.send('/api/chat/sessions/s-sse', { method: 'DELETE' });
+  assert.equal(del.status, 200);
+  const f3 = await readFrame(reader, bufRef, 'index-changed');
+  assert.ok(f3.includes('s-sse'));
 });
 
 // ---------------------------------------------------------------- 多设备语义

@@ -1,0 +1,214 @@
+{
+  "steps": {
+    "coldStart": {
+      "loginFlash": 700,
+      "ready": true
+    },
+    "draft": {
+      "value": "草稿保留测试"
+    },
+    "sidebar": {
+      "items": [
+        "你好，请只回复：测试通过",
+        "手机实测：请只回复两个字：收到",
+        "只回复两个字：OK",
+        "请记住暗号：星尘-7749。请只回复",
+        "新会话⌂",
+        "新会话⌂",
+        "开始构建「万象世界」系列 v2 版本⌂",
+        "新会话⌂",
+        "新会话⌂",
+        "新会话⌂"
+      ],
+      "itemRects": [
+        {
+          "w": 296,
+          "h": 56
+        },
+        {
+          "w": 296,
+          "h": 56
+        },
+        {
+          "w": 296,
+          "h": 56
+        }
+      ]
+    },
+    "switch": {
+      "bubbles": [
+        "测试通过",
+        "测试通过",
+        "测试通过"
+      ]
+    },
+    "moreMenu": {
+      "hasMore": false,
+      "open": false,
+      "metrics": {
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "menu": null,
+        "doc": [
+          390,
+          844
+        ],
+        "small": [
+          {
+            "cls": "chat-assistant-row chat-row-btn",
+            "text": "工作目录\n默认目录",
+            "w": 324,
+            "h": 34
+          }
+        ],
+        "body": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话"
+      },
+      "items": [],
+      "afterClick": null
+    },
+    "filePanel": {
+      "opened": false,
+      "metrics": {
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        },
+        "send": {
+          "x": 324,
+          "y": 786,
+          "w": 44,
+          "h": 44
+        },
+        "menu": null,
+        "doc": [
+          390,
+          844
+        ],
+        "small": [
+          {
+            "cls": "chat-assistant-row chat-row-btn",
+            "text": "工作目录\n默认目录",
+            "w": 324,
+            "h": 34
+          }
+        ],
+        "body": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话"
+      }
+    },
+    "theme": {
+      "rootClass": ""
+    },
+    "longChat": {
+      "before": {
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        }
+      },
+      "after": {
+        "input": {
+          "x": 0,
+          "y": 717,
+          "w": 390,
+          "h": 127
+        },
+        "textarea": {
+          "x": 22,
+          "y": 726,
+          "w": 346,
+          "h": 46
+        }
+      }
+    },
+    "offline": {
+      "body": "POLARIS LITE\n对话目录\n82\n新会话\n今天\n你好，请只回复：测试通过\n6\n手机实测：请只回复两个字：收到\n2\n只回复两个字：OK\n2\n请记住暗号：星尘-7749。请只回复\n12\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v2 版本⌂\n2\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n开始构建「万象世界」系列 v1 版本⌂\n2\n开始构建「万象世界」系列 v1 版本⌂\n8\n新会话⌂\n0\n新会话⌂\n0\n新会话⌂\n0\n你好，这是另一个会话。请问 TCP\n14\n请调用 nonexistent_to\n4\n我们来玩故事接龙。设定：主角是机器人\n16\n下面是一段长文。请仔细数",
+      "gate": false,
+      "app": true
+    }
+  },
+  "login": {
+    "user": "root",
+    "pass": "1234",
+    "alreadyIn": false
+  },
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "Failed to load resource: net::ERR_INTERNET_DISCONNECTED"
+  ],
+  "httpErrors": [
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/chat/sessions/index-events"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/chat/sessions"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/providers/list"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/providers/list"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/tool/config"
+    },
+    {
+      "status": 401,
+      "url": "http://127.0.0.1:5000/api/phone/hello"
+    }
+  ]
+}

@@ -511,6 +511,42 @@ body.ws-dragging-tab { cursor: grabbing; }
     -webkit-overflow-scrolling: touch;
   }
   .shell-panel.open { transform: translateX(0); box-shadow: -18px 0 60px rgba(0, 0, 0, 0.5); }
+  /* 能力面板关闭栏（P0-3，WorkspaceTree 渲染）：sticky 吸顶，✕ 命中区 44px */
+  .shell-drawer-head {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 44px;
+    padding: 0 6px 0 14px;
+    background: var(--bg-translucent);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(18px);
+  }
+  .shell-drawer-head-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+  }
+  .shell-drawer-close {
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .shell-drawer-close:active { background: var(--accent-soft); color: var(--accent-bright); }
+  .shell-drawer-close svg { width: 20px; height: 20px; }
+  /* 关闭栏吸顶后，面板内 sticky tab 条/sheet 条让出它的高度（面板专属，侧栏无此条） */
+  .shell-panel .sc-wrap { top: 44px; }
   .drawer-mask {
     display: block;
     position: fixed;
@@ -521,7 +557,12 @@ body.ws-dragging-tab { cursor: grabbing; }
     animation: mask-in var(--plite-dur-slow) ease-out;
   }
   @keyframes mask-in { from { opacity: 0; } to { opacity: 1; } }
-  .shell-input { padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  /* 键盘让位（P2-9）：--plite-kb-lift 由 SlotLayout 按 visualViewport 写入（iOS 键盘高度）；
+     Android resizes-content 生效时变量≈0 无副作用 */
+  .shell-input {
+    padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    transform: translateY(calc(-1 * var(--plite-kb-lift, 0px)));
+  }
   .shell-gate::before { inset: 10px; }
   .shell-gate .slot-auth { padding: 32px 24px 28px; }
   .plite-layout-notice { left: 12px; right: 12px; bottom: 12px; max-width: none; }

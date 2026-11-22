@@ -8,6 +8,9 @@
  * - 非空 text 块打断分组（正文永远平铺，流式末尾带光标）；
  * - 交互卡（interactive）打断分组：提问卡原位渲染在触发它的工具卡之后
  *   （2026-11-21 修复：此前不打断分组，交互卡被压到整条消息所有工具之下并叠加）。
+ * - notice/truncated（自动续写/截断提示）打断分组（2026-11-22 修复：此前不打断，
+ *   与 renderBlocks 的 owner 映射口径分叉致组序号漂移，groups[漂移号] 越界读
+ *   items → 整页白屏；含多次自动续写的长工具轮次会话打开即崩）。
  */
 import { Fragment, useEffect, useState } from 'react';
 import { CHANNEL_ARTIFACT_RENDERERS } from '@sdk';
@@ -24,7 +27,7 @@ function CardShim({ card }: { card: ToolCardData }) {
 type ToolBlock = Extract<AsstBlock, { type: 'tool' }>;
 type GroupItem = { kind: 'tool'; block: ToolBlock } | { kind: 'thinking'; block: Extract<AsstBlock, { type: 'thinking' }> };
 
-/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text 与 interactive 打断 */
+/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text / interactive / notice / truncated 打断 */
 function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[] }[] {
   const groups: { start: number; items: GroupItem[] }[] = [];
   let current: GroupItem[] = [];
@@ -52,6 +55,11 @@ function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[
     // 交互卡同样是「用户行动点」：提问前后的工具属两段独立过程。若不打断分组，
     // 交互卡会被压到整条消息所有工具之下（多张还会叠加），直到正文出现才归位。
     if (b.type === 'interactive') flush();
+    // notice/truncated（自动续写/截断提示）独立渲染，同样打断分组——必须与下方
+    // renderBlocks 的 owner 口径完全一致：owner 把这两类当作打断，这里若仍并组，
+    // 组序号会相对 owner 永久漂移 +1，下次成组后 groups[漂移号] 越界读 items →
+    // 整页白屏（2026-11-22 事故：含多次自动续写的长工具轮次会话打开即崩）。
+    if (b.type === 'notice' || b.type === 'truncated') flush();
   });
   flush();
   return groups;
@@ -221,7 +229,9 @@ export function renderBlocks(
   blocks.forEach((b, i) => {
     if (processed.has(b)) return;
     const g = owner.get(i);
-    if (g !== undefined) {
+    // groups[g] 存在性守卫：owner 与 identifyGroups 口径若再分叉，绝不越界崩整页，
+    // 降级为平铺渲染（2026-11-22 白屏事故的最后一道兜底）
+    if (g !== undefined && groups[g]) {
       const group = groups[g];
       const arts = (groupArtifacts.get(g) ?? []).filter((a): a is Extract<AsstBlock, { type: 'artifact' }> => a.type === 'artifact').map((a) => a.card);
       result.push(
@@ -244,6 +254,9 @@ export function renderBlocks(
       // 通用产物块：渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记（rendererType → 组件），
       // chat-lite 不再为每种可视化产物加硬编码分支。未登记（插件被停用）渲兜底提示，不崩不空白。
       result.push(<ArtifactSlot key={`af-${b.card.callId}`} card={b.card} />);
+    } else if (b.type === 'tool') {
+      // owner 有记录但组不存在时的平铺兜底（上方守卫落入此处）：单卡原位渲染
+      result.push(<CardShim key={`ft-${b.card.callId || i}`} card={b.card} />);
     } else if (b.type === 'thinking') {
       // 组外独立思考（工具之前/之后的纯思考段）
       result.push(<ThinkingBlock key={`th-${i}`} text={b.text} live={streaming && i === blocks.length - 1} />);
