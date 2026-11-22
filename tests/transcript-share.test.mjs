@@ -242,9 +242,10 @@ test('本地导出 /api/share/export：human/ai 双形式，会话门禁', async
   assert.equal(ai.json.schema, 'plite-transcript-ai-v1');
   assert.equal(ai.json.stats.messages, 2);
 
-  // 未知会话 404 / 非法 sessionId 400
+  // 未知会话 404 / 非法 sessionId 400 / 未知名 format 400（绝不静默回落——防验证假阳性）
   assert.equal((await c.send('/api/share/export?sessionId=nope&format=human')).status, 404);
   assert.equal((await c.send('/api/share/export?sessionId=..%2F..%2Fetc&format=human')).status, 400);
+  assert.equal((await c.send('/api/share/export?sessionId=s-export&format=bogus')).status, 400);
 
   // html = 分享前预览：同一渲染器、会话门禁、不创建 token
   const htmlPreview = await c.send('/api/share/export?sessionId=s-export&format=html');

@@ -381,6 +381,11 @@ export function createServerPart(options = {}) {
           const url = new URL(req.url, 'http://x');
           const sessionId = String(url.searchParams.get('sessionId') ?? '');
           const format = String(url.searchParams.get('format') ?? 'human');
+          // 白名单校验：未知名一律 400，绝不静默回落——否则"新格式在生产旧进程上
+          // 验证返回 200"是假阳性（旧进程回落 human md 也 200），验证失去意义
+          if (!['human', 'ai', 'human-html', 'html'].includes(format)) {
+            return sendJson(400, { error: `unknown format: ${format.slice(0, 32)}`, code: 'BAD_REQUEST' });
+          }
           if (!ID_RE.test(sessionId)) return sendJson(400, { error: 'invalid sessionId', code: 'BAD_REQUEST' });
           const rec = readChatRecord(sessionId);
           if (!rec || rec.deletedAt) return sendJson(404, { error: 'session not found', code: 'SESSION_NOT_FOUND' });
