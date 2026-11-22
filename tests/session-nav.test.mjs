@@ -99,7 +99,12 @@ test('sortSessions：不修改入参数组（纯函数）', () => {
 test('applyServerSnapshot：合并保留服务端 lastActiveAt，不做本地 touch（排序不颠倒回归）', () => {
   const snapStart = storeSrc.indexOf('function applyServerSnapshot');
   assert.ok(snapStart >= 0, 'store.ts 必须含 applyServerSnapshot');
-  const snapEnd = storeSrc.indexOf('\r\n}\r\n', snapStart);
+  // 边界查找 CRLF/LF 兼容（与上方 sortSessions 提取同一修法）：
+const snapEnd = (() => {
+  const crlf = storeSrc.indexOf("\r\n}\r\n", snapStart);
+  if (crlf > snapStart) return crlf + 2;
+  return storeSrc.indexOf("\n}\n", snapStart);
+})();
   const snapSrc = storeSrc.slice(snapStart, snapEnd);
   assert.ok(!/\btouch\s*\(/.test(snapSrc),
     'applyServerSnapshot 不得调用 touch()——拉取逐条进行，touch 会把后拉的旧会话排到最前（bug：最新会话沉底）');

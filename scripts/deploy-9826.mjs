@@ -19,7 +19,7 @@
  *   - 结束后自动 pm2 restart + pm2 save，并在 clone/logs/deploy-9826.log 记一行版本戳。
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 const SRC = resolve(process.env.PLITE_SRC_DIR ?? 'D:/space/base/polaris-lite');
@@ -59,6 +59,15 @@ const stamp = (fullSha) => {
   const line = new Date().toISOString() + '  ' + fullSha.slice(0, 7) + '  '
     + shortLog(fullSha, DEST).split(' ').slice(1).join(' ') + '\n';
   appendFileSync(join(DEST, 'logs', 'deploy-9826.log'), line);
+  // app-updater 版本文件：写进 9826 数据目录（绝对路径钉在仓库本体，与 clone 无关），
+  // 前端 /api/app-updater/version 读它比对「客户端 vs 服务器」版本（docs/app-updater-plan.md）
+  const dataDir = resolve(process.env.PLITE_9826_DATA_DIR ?? join(SRC, '.polaris-lite-pm2'));
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(join(dataDir, 'app-updater-version.json'), JSON.stringify({
+    sha: fullSha,
+    subject: shortLog(fullSha, DEST).split(' ').slice(1).join(' '),
+    time: new Date().toISOString(),
+  }, null, 2) + '\n');
 };
 
 const doStatus = () => {

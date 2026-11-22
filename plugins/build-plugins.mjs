@@ -85,7 +85,9 @@ const plugins = [
   { id: 'chat-store', config: 'chat-store/vite.config.ts', dist: 'chat-store/dist', order: 19 },
   { id: 'plugin-manager', config: 'plugin-manager/vite.config.ts', dist: 'plugin-manager/dist', order: 18 },
   { id: 'mobile-companion', config: 'mobile-companion/vite.config.ts', dist: 'mobile-companion/dist', order: 20 },
-  { id: 'phone-agent', config: 'phone-agent/vite.config.ts', dist: 'phone-agent/dist', order: 21 },
+  // 应用更新（App 刷新引导）：版本检查 + 24h 惰性提示；server 半边提供版本端点
+  { id: 'app-updater', config: 'app-updater/vite.config.ts', dist: 'app-updater/dist', order: 21 },
+  { id: 'phone-agent', config: 'phone-agent/vite.config.ts', dist: 'phone-agent/dist', order: 22 },
   { id: 'standalone-mode', config: 'standalone-mode/vite.config.ts', dist: 'standalone-mode/dist', order: 22 },
   // CodeBuddy CLI 引擎（服务端半边 spawn adapter.js → codebuddy CLI）。
   // 与 real-engine 互斥：cap.ai.chat 是单注册位，registry 里两者只能 enabled 一个。

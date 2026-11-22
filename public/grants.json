@@ -1,5 +1,5 @@
 {
-  "version": "15",
+  "version": "16",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -230,6 +230,15 @@
       "capabilities": [],
       "provides": [
         "cap.mobile.companion"
+      ],
+      "events": []
+    },
+    "app-updater": {
+      "capabilities": [
+        "cap.ai.chat:event"
+      ],
+      "provides": [
+        "cap.app.updater"
       ],
       "events": []
     },

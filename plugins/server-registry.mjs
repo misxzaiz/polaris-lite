@@ -37,6 +37,8 @@ export const SERVER_PLUGINS = [
   // 供应商探测半边（2026-11-21 自 server/providers-api.mjs 迁入;host-slimming-report §7.3）
   { id: 'model-admin', entry: './model-admin/server.mjs' },
   { id: 'transcript-share', entry: './transcript-share/server.mjs' },
+  // 应用更新：版本查询端点（App 刷新引导；docs/app-updater-plan.md）
+  { id: 'app-updater', entry: './app-updater/server.mjs' },
 ];
 
 /**

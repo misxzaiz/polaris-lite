@@ -1,0 +1,109 @@
+/**
+ * app-updater 面板样式。
+ * 门禁约束：不用 position:fixed（toast 挂宿主 overlay root，锚定由宿主提供）、
+ * 不碰 :root/html/body/.slot-*，全部选择器收在 .au- 前缀命名空间内。
+ */
+.au-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.au-panel h3 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: .08em;
+  color: var(--text-faint);
+}
+.au-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+.au-k {
+  flex-shrink: 0;
+  min-width: 64px;
+  color: var(--text-faint);
+}
+.au-v {
+  min-width: 0;
+  word-break: break-all;
+  color: var(--text);
+}
+.au-mono {
+  font-family: Consolas, monospace;
+}
+.au-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--plite-dur), color var(--plite-dur);
+  align-self: flex-start;
+}
+.au-btn:hover { background: var(--accent); color: #fff; }
+.au-btn:disabled { opacity: .5; cursor: default; }
+.au-btn-check { align-self: stretch; }
+.au-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.au-update-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(75, 110, 255, .08);
+  font-size: 12px;
+  color: var(--text);
+  flex-wrap: wrap;
+}
+.au-update-box span { flex: 1; min-width: 0; line-height: 1.6; }
+
+/* 更新提示 toast（挂宿主 overlay root；宽度由内容+max-width 决定） */
+.au-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(92vw, 520px);
+  margin: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-raised, #fff);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
+  color: var(--text);
+}
+.au-toast-text { flex: 1; min-width: 0; }
+.au-toast-title { font-size: 13px; line-height: 1.5; }
+.au-toast-sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.au-toast-btn {
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.au-toast-ghost {
+  min-height: 36px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}

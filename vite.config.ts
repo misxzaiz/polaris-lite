@@ -1,7 +1,31 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { createHost } from './server/host.mjs';
+
+// 构建期注入当前 commit sha（app-updater 插件据此比对客户端/服务器版本）：
+// - index.html 加 <meta name="plite-build-sha" content="<sha>">；
+// - dev（vite dev 无 transformIndexHtml 之外的注入点）/ git 不可用时 meta 不存在，
+//   app-updater 按「开发环境」降级（后台检查关闭，仅保留面板手动功能）。
+function buildSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+const injectBuildSha = {
+  name: 'polaris-lite-build-sha',
+  transformIndexHtml(html: string) {
+    const sha = buildSha();
+    if (!sha) return html;
+    return html.replace(
+      '<meta name="theme-color" content="#ffffff" />',
+      `<meta name="theme-color" content="#ffffff" />\n    <meta name="plite-build-sha" content="${sha}" />`,
+    );
+  },
+};
 
 // 宿主内嵌服务端（dev 形态）：鉴权 / 供应商配置 / 模型中继 全部走 server/host.mjs，
 // 与 prod(node server) 同一份实现，避免两套行为漂移。
@@ -24,7 +48,7 @@ const embeddedHost = {
 };
 
 export default defineConfig({
-  plugins: [react(), embeddedHost],
+  plugins: [react(), injectBuildSha, embeddedHost],
   resolve: {
     alias: { '@': resolve(__dirname, 'src') },
   },
