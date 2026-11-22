@@ -6,10 +6,18 @@
  *  窄屏行内小图标收进「⋮」动作菜单（触控目标从 22-30px 提到 44px 级）；
  *  触屏长按会话行唤出同一菜单（iOS/安卓原生习惯）。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
 import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
 
+/** 浮层根：宿主 SlotLayout 提供的 fixed 覆盖层（空态 pointer-events:none 放行，子元素恢复 auto）。
+ *  侧栏 .chat-sessions 是滚动容器（无限滚动后长列表常滚离顶部），就地 absolute 渲染的
+ *  遮罩会随内容滚出视口（「面板留在上面」bug），故动作单/工作区弹层与消息侧动作单
+ *  一样经 portal 挂这里锚定视口。 */
+function overlayRoot(): HTMLElement | null {
+  return document.getElementById('plite-overlay-root');
+}
 /** 同步状态点：多设备共享的可感知性（offline/conflict 才醒目，idle/syncing 弱化） */
 function SyncDot() {
   const status = useSessionStore((s) => s.syncStatus);
@@ -365,7 +373,9 @@ export function SessionSidebar() {
 
       {/* 窄屏会话动作菜单（⋮ / 长按唤出）：底部 sheet，触控目标 44px 级。
           删除仍走行内两步确认（选删除后菜单关闭、该行原地出确认条）。 */}
-      {menuSession && (
+      {menuSession && (() => {
+        const root = overlayRoot();
+        return root ? createPortal(
         <div className="chat-sheet-mask" onClick={() => setMenuFor(null)}>
           <div className="chat-sheet" role="menu" aria-label="会话操作" onClick={(e) => e.stopPropagation()}>
             <div className="chat-sheet-title">{displayTitle(menuSession.title, menuSession.messages[0]?.content)}</div>
@@ -395,10 +405,14 @@ export function SessionSidebar() {
             </button>
             <button type="button" className="chat-sheet-cancel" onClick={() => setMenuFor(null)}>取消</button>
           </div>
-        </div>
-      )}
+        </div>,
+        root,
+        ) : null;
+      })()}
 
-      {pickedSession && (
+      {pickedSession && (() => {
+        const root = overlayRoot();
+        return root ? createPortal(
         <WorkspacePicker
           session={pickedSession}
           onPick={(workspaceId) => { setSessionWorkspace(pickedSession.id, workspaceId); setWsPickerFor(null); }}
@@ -408,8 +422,10 @@ export function SessionSidebar() {
             setSessionLinkedWorkspaces(pickedSession.id, next);
           }}
           onClose={() => setWsPickerFor(null)}
-        />
-      )}
+        />,
+        root,
+        ) : null;
+      })()}
     </div>
   );
 }

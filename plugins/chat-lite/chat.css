@@ -170,9 +170,10 @@
 }
 
 /* ===== 底部动作单（chat-sheet）：会话 ⋮/长按菜单 与 消息 ⋮ 动作单共用 =====
-   会话单就地渲染（遮罩以 fixed 侧栏为包含块）；消息单经 portal 挂 #plite-overlay-root
+   会话单与消息单均经 portal 挂 #plite-overlay-root（宿主 fixed 覆盖层为包含块）
    （宿主 fixed 覆盖层 → absolute inset:0 即视口覆盖。插件 CSS 门禁禁 fixed，
-   参见 chrome.css 窄屏收纳菜单同款取舍）。触控目标统一 44px 级。 */
+   参见 chrome.css 窄屏收纳菜单同款取舍）。触控目标统一 44px 级。
+   会话单原先就地渲染在滚动容器 .chat-sessions 内，长列表滚离顶部后遮罩随内容滚出视口（面板留在上面），已改为 portal。 */
 .chat-sheet-mask {
   position: absolute;
   inset: 0;

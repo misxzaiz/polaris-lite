@@ -67,8 +67,8 @@ test('streaming 标记：当前会话任一消息在流式即 true', () => {
 // 这里从源码提取函数体自证（与 reasoning.test.mjs 的源码级断言同风格）。
 const storeSrc = readFileSync(resolve(root, 'plugins/chat-lite/store.ts'), 'utf8');
 const fnStart = storeSrc.indexOf('export function sortSessions');
-const fnEnd = storeSrc.indexOf(String.fromCharCode(10) + '}' + String.fromCharCode(10), fnStart);
-const fnSrc = fnStart >= 0 && fnEnd > fnStart ? storeSrc.slice(fnStart, fnEnd + 2) : null;
+const fnEnd = storeSrc.indexOf(String.fromCharCode(13,10) + String.fromCharCode(125) + String.fromCharCode(13,10), fnStart);
+const fnSrc = fnStart >= 0 && fnEnd > fnStart ? storeSrc.slice(fnStart, fnEnd + 4) : null;
 assert.ok(fnSrc, 'store.ts 必须导出 sortSessions');
 // new Function 不吃 TS 泛型参数——剥掉 <T extends ...> 再求值（仅本测试的运行时自证）
 const jsFn = fnSrc.replace(/^export function/, 'function').replace(/<T extends[^>]*>/, '').replace(/\(sessions: T\[\]\)/, '(sessions)').replace(/\)\s*:\s*T\[\]\s*\{/, ') {');
@@ -99,7 +99,7 @@ test('sortSessions：不修改入参数组（纯函数）', () => {
 test('applyServerSnapshot：合并保留服务端 lastActiveAt，不做本地 touch（排序不颠倒回归）', () => {
   const snapStart = storeSrc.indexOf('function applyServerSnapshot');
   assert.ok(snapStart >= 0, 'store.ts 必须含 applyServerSnapshot');
-  const snapEnd = storeSrc.indexOf('\n}\n', snapStart);
+  const snapEnd = storeSrc.indexOf('\r\n}\r\n', snapStart);
   const snapSrc = storeSrc.slice(snapStart, snapEnd);
   assert.ok(!/\btouch\s*\(/.test(snapSrc),
     'applyServerSnapshot 不得调用 touch()——拉取逐条进行，touch 会把后拉的旧会话排到最前（bug：最新会话沉底）');
