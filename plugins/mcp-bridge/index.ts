@@ -7,7 +7,8 @@
  *    agent-loop A1 已兼容聚合数组形态。
  * 2. cap.tool.mcp-ops（AI 自建通道，runtime-extensions-and-market-final.md P1.1）：
  *    describe 同样返回聚合数组（mcp_server_add/remove/list 三个管理工具，danger='execute'
- *    走 agent-loop 审批链）——AI 可在会话里登记/移除 MCP server，写完下轮对话即生效。
+ *    走 agent-loop 审批链）——AI 可在会话里登记/移除 MCP server；写完广播 tool-registered，
+ *    agent-loop 与 MCP 面板即时跟进（本轮消息的工具集不变，下一条消息可用）。
  * 3. cap.mcp.admin：管理面（list/add/remove/gate），供面板/设置使用。
  * 4. server 半边：MCP client 池（stdio NDJSON JSON-RPC 2.0，协议 2024-11-05）+
  *    配置仓库（<dataDir>/mcp-servers.json 原生格式，唯一写目标）+ /api/mcp/* 管理端点。
@@ -70,7 +71,15 @@ const MCP_OPS_DESCRIPTORS: McpToolDescriptor[] = [
   },
 ];
 
-function createMcpOpsHandler(): CapabilityHandler {
+/** 变更后广播 tool-registered：agent-loop 立即重扫工具表，MCP 面板开着也即时跟进。
+ *  emit 失败（权限/总线异常）绝不能让已成功的写入动作被误报为失败。 */
+function emitToolsChanged(api: SlotHostApi, name: string, op: 'add' | 'remove' | 'gate'): void {
+  try {
+    api.emit('tool-registered', { cap: 'cap.tool.mcp', name, op });
+  } catch { /* 事件未授权/总线异常：写入已落盘，忽略广播失败 */ }
+}
+
+function createMcpOpsHandler(api: SlotHostApi): CapabilityHandler {
   return async (req) => {
     const payload = (req.payload ?? {}) as Record<string, unknown>;
     try {
@@ -96,6 +105,7 @@ function createMcpOpsHandler(): CapabilityHandler {
           });
           const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
           if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+          emitToolsChanged(api, String(payload.name ?? ''), 'add');
           return { ok: true, stdout: `[已登记 MCP server ${String(payload.name)}] 其工具将在下一轮对话中可用。`, exitCode: 0 };
         }
         if (op === 'mcp_server_remove') {
@@ -107,6 +117,7 @@ function createMcpOpsHandler(): CapabilityHandler {
           });
           const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
           if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+          emitToolsChanged(api, String(payload.name ?? ''), 'remove');
           return { ok: true, stdout: `[已移除 MCP server ${String(payload.name)}]`, exitCode: 0 };
         }
         if (op === 'mcp_server_list') {
@@ -160,7 +171,7 @@ function createMcpToolHandler(): CapabilityHandler {
   };
 }
 
-function createMcpAdminHandler(): CapabilityHandler {
+function createMcpAdminHandler(api: SlotHostApi): CapabilityHandler {
   return async (req) => {
     try {
       if (req.action === 'list') {
@@ -177,6 +188,7 @@ function createMcpAdminHandler(): CapabilityHandler {
         });
         const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
         if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+        emitToolsChanged(api, String(payload.name ?? ''), 'add');
         return { ok: true };
       }
       if (req.action === 'remove') {
@@ -185,10 +197,11 @@ function createMcpAdminHandler(): CapabilityHandler {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: payload.name }),
+          body: JSON.stringify(payload),
         });
         const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
         if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
+        emitToolsChanged(api, String(payload.name ?? ''), 'remove');
         return { ok: true };
       }
       if (req.action === 'gate') {
@@ -199,6 +212,7 @@ function createMcpAdminHandler(): CapabilityHandler {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+        if (resp.ok) emitToolsChanged(api, String(payload.tool ?? ''), 'gate');
         return { ok: resp.ok };
       }
       return { ok: false, error: `unknown action: ${req.action}` };
@@ -223,8 +237,8 @@ export const mcpBridgePlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     setMcpPanelApi(api);
     api.registerCapability.register('cap.tool.mcp', createMcpToolHandler());
-    api.registerCapability.register('cap.tool.mcp-ops', createMcpOpsHandler());
-    api.registerCapability.register('cap.mcp.admin', createMcpAdminHandler());
+    api.registerCapability.register('cap.tool.mcp-ops', createMcpOpsHandler(api));
+    api.registerCapability.register('cap.mcp.admin', createMcpAdminHandler(api));
     api.emit('tool-registered', { cap: 'cap.tool.mcp', name: 'mcp' });
   },
 };

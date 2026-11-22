@@ -13,7 +13,7 @@
  * 与 UI。跨会话隔离靠服务端归属校验——本半边无法伪造 agentKey（dispatch 的 sessionId
  * 由 agent-loop 注入，面板动作不带 sessionId）。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 import { BrowserPanel, setPanelApi } from './Panel';
 import { ShotCard } from './ShotCard';
 import './panel.css';
@@ -110,6 +110,13 @@ export async function callBrowserApi(action: string, params: Record<string, unkn
   if (!resp.ok || !json) {
     return { ok: false, error: json?.error ?? `HTTP ${resp.status}` };
   }
+  // 业务级失败（HTTP 200 但 ok:false，如引擎报错/围栏拦截）必须如实透传——
+  // 此前只看 HTTP 状态就 return {ok:true, ...result}，把引擎错误伪装成成功
+  // 且丢掉 error 字段：AI 以为操作成功（2026-11-21 排查「截图消失」的根因之一，
+  // 事故链：puppeteer-core 被剃掉 → 每次动作都 ok:false → 被伪装成裸 {ok:true}）。
+  if (json.ok === false) {
+    return { ok: false, error: json.error ?? '浏览器操作失败' };
+  }
   // 服务端成功响应是 {ok:true, result:{...引擎载荷}}；引擎载荷本身无 ok 字段
   // （如 search 返回 {tabId,url,results}）——这里补 ok，让 agent-loop 的 br.ok 判定成立。
   return { ok: true, ...(json.result ?? {}) };
@@ -166,11 +173,11 @@ export const browserLitePlugin: LitePlugin = {
     setPanelApi(api);
     api.registerCapability.register('cap.tool.browser', createBrowserHandler());
     api.emit('tool-registered', { cap: 'cap.tool.browser', name: DESCRIPTOR.name });
-    // 截图渲染器登记：chat-lite 的 BlockGroup 经 __PLITE_ARTIFACT_RENDERERS__ 查表渲染
+    // 截图渲染器登记：chat-lite 的 BlockGroup 经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 查表渲染
     const w = window as unknown as Record<string, unknown>;
-    const registry = (w.__PLITE_ARTIFACT_RENDERERS__ ?? {}) as Record<string, unknown>;
+    const registry = (w[CHANNEL_ARTIFACT_RENDERERS] ?? {}) as Record<string, unknown>;
     registry['browser-lite-shot'] = ShotCard;
-    w.__PLITE_ARTIFACT_RENDERERS__ = registry;
+    w[CHANNEL_ARTIFACT_RENDERERS] = registry;
   },
 };
 

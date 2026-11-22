@@ -82,8 +82,8 @@ export function createServerPart(options = {}) {
       if (!existsSync(rootsFile)) return [];
       const raw = JSON.parse(readFileSync(rootsFile, 'utf8'));
       return (Array.isArray(raw.roots) ? raw.roots : [])
-        .map((r) => String(r.path ?? ''))
-        .filter(Boolean);
+        .map((r) => ({ id: String(r.id ?? ''), path: String(r.path ?? '') }))
+        .filter((r) => r.path);
     } catch { return []; }
   }
 
@@ -98,9 +98,12 @@ export function createServerPart(options = {}) {
     }
     let rootPath = null;
     if (rootId) {
+      // rootId 兼容三种形态：登记根 id（file-browser roots 返回的 r-*）/ 完整路径 /
+      // 路径尾段。此前只按路径匹配，编排方（agent-loop）按 id 传默认根时会
+      // `unknown rootId`（2026-11-22 长任务实测：会话绑定根后 files_write 全部失败）。
       const roots = readRoots();
-      const hit = roots.find((p) => p === rootId || p.endsWith(rootId));
-      if (hit) rootPath = hit;
+      const hit = roots.find((r) => r.id === rootId || r.path === rootId || r.path.endsWith(rootId));
+      if (hit) rootPath = hit.path;
       else return { error: `unknown rootId: ${rootId}`, code: 'ROOT_NOT_FOUND' };
     }
     const raw = String(absOrRel);
@@ -137,7 +140,7 @@ export function createServerPart(options = {}) {
       }
       if (!real) real = resolve(target);
     }
-    const roots = [builtinRoot, ...readRoots().map((p) => { try { return realpathSync(p); } catch { return ''; } }).filter(Boolean)];
+    const roots = [builtinRoot, ...readRoots().map((r) => { try { return realpathSync(r.path); } catch { return ''; } }).filter(Boolean)];
     const within = roots.some((root) => real === root || real.startsWith(root + sep));
     if (!within) {
       return { error: '路径越出工作区根（写面只允许内建 workspace 与已登记根）', code: 'PATH_ESCAPE' };

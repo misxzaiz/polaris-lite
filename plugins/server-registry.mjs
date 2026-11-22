@@ -34,6 +34,8 @@ export const SERVER_PLUGINS = [
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
   { id: 'zcode-compat', entry: './zcode-compat/server.mjs' },
   { id: 'plugin-market', entry: './plugin-market/server.mjs' },
+  // 供应商探测半边（2026-11-21 自 server/providers-api.mjs 迁入;host-slimming-report §7.3）
+  { id: 'model-admin', entry: './model-admin/server.mjs' },
   { id: 'transcript-share', entry: './transcript-share/server.mjs' },
 ];
 

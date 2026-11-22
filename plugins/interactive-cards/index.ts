@@ -13,7 +13,7 @@
  *
  * 纯插件：无服务端半边（状态存模块内存 + cap.config 持久化偏好）。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { CHANNEL_INTERACTIVE_RESPOND, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 
 /** 交互卡等待上限：与 agent-loop 审批同量级（超时返回 __timeout，模型自行改口） */
 const ASK_TIMEOUT_MS = 180_000;
@@ -32,6 +32,7 @@ const DESCRIPTOR = {
     '向用户发起结构化交互并等待作答。当你缺少必要信息（偏好、参数、确认）时用本工具直接问，' +
     '不要靠开放式文本猜。三种 kind：question（title + options 选项列表，用户单选或自定义输入）、' +
     'form（title + fields 字段数组，每项 {name,label}，收集多字段）、confirm（title，是/否确认）。' +
+    '用户可以跳过作答（跳过或超时都会以提示返回，请基于已有信息继续，不要空等或重复提问）。' +
     '作答以 JSON 返回（如 {"selected":"...","customInput":"..."} 或 {"confirmed":true}），' +
     `用户 ${ASK_TIMEOUT_MS / 1000}s 未作答则返回 {"__timeout":true}——此时应改用已有信息继续或明确说明等待。`,
   parameters: {
@@ -66,7 +67,7 @@ export const interactiveCardsPlugin: LitePlugin = {
     api.registerCapability.register('cap.interactive', createHandler());
     api.emit('tool-registered', { cap: 'cap.interactive', name: DESCRIPTOR.name });
     // 供 chat-lite 的 InteractiveCard 调用（跨插件解耦桥）
-    (window as unknown as Record<string, unknown>).__INTERACTIVE_RESPOND__ = respondInteractive;
+    (window as unknown as Record<string, unknown>)[CHANNEL_INTERACTIVE_RESPOND] = respondInteractive;
   },
 };
 

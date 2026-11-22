@@ -1,18 +1,21 @@
 /**
- * SlotLayout：核心壳层（topbar + 工作区树 + 移动端抽屉）+ auth 门禁。
+ * SlotLayout：核心壳层（topbar + 布局主体 + 移动端抽屉）+ auth 门禁。
  *
- * 与改造前的区别：四个固定槽位不再写死在 JSX 里，而是由 `workspaceStore` 里的
- * **工作区树**渲染（`./workspace/WorkspaceTree`）。默认树与旧的四槽布局逐节点等价，
- * 所以既有插件与样式零改动；插件/用户在运行时改树即可重排界面。
+ * 2026-11-21 P2-2（host-slimming-report §7.1）：工作区树已抽出为 workspace-layout
+ * 插件（layout-root 容器）。本壳层把「主体区域」渲染委托给容器贡献组件——有插件
+ * 注册时渲染布局树（renderAnchor 注入锚点内容、resolveView 注入视图组件解析）；
+ * 无插件注册时回退**固定四槽**（WorkspaceTree 时代之前的形态,不破可用）。
  *
- * 壳层自己只管四件事：顶栏与抽屉、断点、布局落盘时机、门禁。布局数据不在这里。
+ * 壳层自己只管：顶栏与抽屉、断点、门禁、容器 wiring（viewRegistry 注入布局插件）。
  */
-import { useEffect, useSyncExternalStore } from 'react';
-import { WorkspaceTree, LayoutNotice } from './workspace/WorkspaceTree';
-import { workspaceStore } from './workspace/hostStore';
+import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useAuthGate } from './useAuthGate';
 import { Brand } from './Brand';
 import { SlotOutlet } from './SlotOutlet';
+import { host } from './hostRuntime';
+import { getRuntimeComponent } from './externalPlugins';
+import { viewRegistry } from './workspace/viewRegistry';
+import type { LayoutRootProps } from './types';
 import {
   dismissNotice,
   getDrawer,
@@ -90,11 +93,18 @@ export function SlotLayout() {
   const drawer = useDrawer();
   const narrow = useNarrow();
   const gate = useAuthGate();
-  const snapshot = useSyncExternalStore(workspaceStore.subscribe, workspaceStore.getSnapshot, workspaceStore.getSnapshot);
+
+  // layout-root 容器解析 + 一次性 wiring（把核心 viewRegistry/组件解析注入布局插件）
+  const container = host.slots.resolveContainer('layout-root');
+  const LayoutComp = container
+    ? (getRuntimeComponent(container.pluginId, container.component) as
+        ((props: LayoutRootProps) => ReactNode) | undefined)
+    : undefined;
+  // wiring 已移至 main.tsx 装载完成后（必修包修4:渲染体不再做副作用;wire 缺失有 boot notice）
 
   useEffect(() => {
     if (drawer === 'none') return;
-    const onKey = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setDrawer('none');
     };
     window.addEventListener('keydown', onKey);
@@ -105,24 +115,9 @@ export function SlotLayout() {
     };
   }, [drawer, narrow]);
 
-  // 页面隐藏 / 关闭前把布局落盘：移动端不一定触发 pagehide，两个事件都听
-  useEffect(() => {
-    const flush = () => workspaceStore.flush();
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') flush();
-    };
-    window.addEventListener('pagehide', flush);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('pagehide', flush);
-      document.removeEventListener('visibilitychange', onVisibility);
-      flush();
-    };
-  }, []);
-
   if (gate.state === 'pending') return <Splash />;
   if (gate.state === 'unauthenticated') {
-    // 门禁是树的**外部**路径：auth 不是锚点，未登录时壳层骨架一律不渲染。
+    // 门禁是布局的**外部**路径：auth 不是锚点，未登录时壳层骨架一律不渲染。
     // 但启动告警仍要显示——「插件没装成功」和「进不去」经常同时发生，
     // 把告警藏在登录墙后面等于让人在无信息状态下排查。
     return (
@@ -138,7 +133,7 @@ export function SlotLayout() {
   return (
     <div
       className={`polaris-lite-shell ${drawer !== 'none' ? 'drawer-open' : ''}`}
-      data-layout="workspace-tree"
+      data-layout={LayoutComp ? 'workspace-tree' : 'fixed-slots'}
       data-drawer={drawer}
     >
       <BootNotices />
@@ -164,11 +159,31 @@ export function SlotLayout() {
       </header>
 
       <div className="shell-body">
-        <WorkspaceTree node={snapshot.tree} />
+        {LayoutComp ? (
+          <LayoutComp
+            renderAnchor={(anchor) => <SlotOutlet slot={anchor} />}
+            resolveView={(viewType) => {
+              const def = viewRegistry.get(viewType);
+              return def ? getRuntimeComponent(def.pluginId, def.component) : undefined;
+            }}
+          />
+        ) : (
+          // 回退：固定四槽（workspace-layout 插件未注册/被禁用时不破可用）
+          <div className="ws-fallback-grid" data-layout="fixed-slots">
+            <SlotOutlet slot="sidebar" />
+            <SlotOutlet slot="stream" />
+            <SlotOutlet slot="input" />
+            <SlotOutlet slot="panel" />
+          </div>
+        )}
       </div>
 
-      <LayoutNotice />
       {drawer !== 'none' && <div className="drawer-mask" onClick={() => setDrawer('none')} />}
+
+      {/* 插件浮层根（cap.ui.overlay 的宿主实现，经 api.overlay.root() 取用）：
+          fixed 锚定视口、脱离 .shell-panel 滚动容器——插件浮层在此 portal 渲染，
+          移动端抽屉滚动时不再随内容漂移。空态 pointer-events:none 放行点击。 */}
+      <div className="slot-overlay-root" id="plite-overlay-root" />
     </div>
   );
 }

@@ -9,11 +9,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WorkspaceStore } from '../src/core/workspace/store.ts';
+import { WorkspaceStore } from '../plugins/workspace-layout/store.ts';
 import { ViewRegistry } from '../src/core/workspace/viewRegistry.ts';
-import { createLayoutHandler, CAP_UI_LAYOUT, CAP_UI_LAYOUT_GLOBAL } from '../src/core/workspace/layoutCap.ts';
-import { createDefaultTree, replaceById } from '../src/core/workspace/treeOps.ts';
-import { findNode, validateWorkspace } from '../src/core/workspace/schema.ts';
+import { createLayoutHandler, CAP_UI_LAYOUT, CAP_UI_LAYOUT_GLOBAL } from '../plugins/workspace-layout/layoutCap.ts';
+import { createDefaultTree, replaceById } from '../plugins/workspace-layout/treeOps.ts';
+import { findNode, validateWorkspace } from '../plugins/sdk/schema.ts';
 
 function setup() {
   const registry = new ViewRegistry();

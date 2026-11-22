@@ -38,148 +38,6 @@ button { -webkit-tap-highlight-color: transparent; }
   min-height: 0;
 }
 
-/* ===== 工作区树：split / pane / splitter ===== */
-.ws-root,
-.ws-split {
-  flex: 1 1 auto;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-}
-.ws-root { flex-direction: column; }
-.ws-split-row { flex-direction: row; }
-.ws-split-col { flex-direction: column; }
-
-.ws-pane {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  /* 窗格是最后一道裁切：任何内容都不许越过窗格边界跑到别的窗格/视口上。
-     实测没有这条时，输入区内容比窗格高会整块溢出，发送按钮落到视口外且无法点击
-     （窗格 152px / 内容 284px → 按钮 bottom 851，视口只有 748）。 */
-  overflow: hidden;
-}
-/* 窗格内容自己撑满：锚点依赖这条才能像原来的 grid 项一样拉伸 */
-.ws-pane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
-
-/* 分隔条占 0 宽（不改变既有 1px 细线视觉），靠伪元素扩出 9px 命中区 */
-.ws-splitter {
-  position: relative;
-  flex: 0 0 0;
-  z-index: 3;
-  touch-action: none;
-  outline: none;
-}
-.ws-splitter[data-dir='row'] { cursor: col-resize; }
-.ws-splitter[data-dir='col'] { cursor: row-resize; }
-.ws-splitter::before {
-  content: '';
-  position: absolute;
-}
-.ws-splitter[data-dir='row']::before { top: 0; bottom: 0; left: -4px; width: 9px; }
-.ws-splitter[data-dir='col']::before { left: 0; right: 0; top: -4px; height: 9px; }
-.ws-splitter::after {
-  content: '';
-  position: absolute;
-  background: var(--border);
-  transition: background var(--plite-dur) var(--plite-ease);
-}
-.ws-splitter[data-dir='row']::after { top: 0; bottom: 0; left: 0; width: 1px; }
-.ws-splitter[data-dir='col']::after { left: 0; right: 0; top: 0; height: 1px; }
-.ws-splitter:hover::after,
-.ws-splitter:focus-visible::after { background: var(--accent); }
-.ws-splitter:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
-
-/* 拖动中：全局禁选 + 光标跟随方向（拖动会掠过 iframe / textarea，必须整体收口） */
-body[data-ws-resize] { user-select: none; }
-body[data-ws-resize='row'] { cursor: col-resize; }
-body[data-ws-resize='col'] { cursor: row-resize; }
-
-/* 窗格关闭按钮：默认隐形，悬停/聚焦才出现，避免干扰插件内容 */
-.ws-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 6;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--bg-translucent);
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--plite-dur) var(--plite-ease), color var(--plite-dur), border-color var(--plite-dur);
-  backdrop-filter: blur(8px);
-}
-.ws-pane:hover > .ws-close,
-.ws-close:focus-visible { opacity: 1; }
-.ws-close:hover { color: var(--text); border-color: var(--border-strong); }
-.ws-close svg { width: 13px; height: 13px; }
-
-/* 没有 hover 的设备（触屏平板 > 断点）上，hover 揭示等于永不显示 —— 直接常驻 */
-@media (hover: none) {
-  .ws-close { opacity: 1; }
-}
-
-/* tab 拖拽：ghost 跟手，pointer-events 必须关掉，否则 elementFromPoint 命不中容器 */
-.ws-tab-ghost {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 9999;
-  pointer-events: none;
-  padding: 6px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 2px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 12.5px;
-  box-shadow: var(--plite-shadow-1);
-}
-body.ws-dragging-tab { cursor: grabbing; }
-[data-drop-before='true']::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  background: var(--accent);
-}
-.ws-drop-tail {
-  display: block;
-  width: 2px;
-  margin: 8px 0;
-  background: var(--accent);
-}
-
-/* 锚点显式子树的容器（预设用） */
-.ws-anchor-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-/* 宿主槽位视图（host.slot.<anchor>）作为 tabs 窗格时的容器：
-   必须撑满，否则 SlotOutlet 里的 tabbody 拿不到高度，面板内容会被压成一行 */
-.ws-slot-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-.ws-slot-body > .slot-tabs { flex: 1 1 auto; min-height: 0; }
-
 /* ===== 四个锚点（沿用原四槽的视觉，类名不变） ===== */
 .shell-sidebar {
   display: flex;
@@ -280,201 +138,95 @@ body.ws-dragging-tab { cursor: grabbing; }
 .shell-panel > .slot { border-bottom: 1px solid var(--border); }
 .shell-panel > .slot:last-child { border-bottom: none; }
 
-/* ===== 多面板 Tab（横向滚动 + 溢出收纳，panel-tabs-schemes 方案 C） ===== */
+/* ===== 工作区树样式已随 workspace-layout 插件走(plugins/workspace-layout/layout.css 的 .ws-* 段) ===== */
+
+/* 以下块含 body 滚动锁/窄屏 fixed 抽屉/裸 *——壳层级,插件 CSS 门禁禁止,留宿主 */
+.ws-slot-body > .slot, .ws-slot-body > .slot-tabs { flex: 1 1 auto; min-height: 0; }
+/* 窗格内容自己撑满：锚点依赖这条才能像原来的 grid 项一样拉伸 */
+.ws-pane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+/* 拖动中：全局禁选 + 光标跟随方向（拖动会掠过 iframe / textarea，必须整体收口） */
+body[data-ws-resize] { user-select: none; }
+body[data-ws-resize='row'] { cursor: col-resize; }
+body[data-ws-resize='col'] { cursor: row-resize; }
+
+/* tab 拖拽：ghost 跟手，pointer-events 必须关掉，否则 elementFromPoint 命不中容器 */
+.ws-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: var(--plite-shadow-1);
+}
+body.ws-dragging-tab { cursor: grabbing; }
+
+
+/* ===== 回退固定四槽（workspace-layout 插件缺席时;P2-2） ===== */
+/* 侧栏列 + 主区 + 输入区 + 面板列的简单纵向/横向堆叠:可用性优先,不做拖拽布局 */
+.ws-fallback-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas:
+    'sidebar stream'
+    'sidebar input'
+    'panel stream';
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.ws-fallback-grid > .slot-sidebar { grid-area: sidebar; overflow-y: auto; }
+.ws-fallback-grid > .slot-stream { grid-area: stream; }
+.ws-fallback-grid > .slot-input { grid-area: input; }
+.ws-fallback-grid > .slot-panel { grid-area: panel; overflow-y: auto; }
+@media (max-width: 768px) {
+  .ws-fallback-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    grid-template-areas: 'stream' 'input' 'panel' 'sidebar';
+  }
+}
+
+/* ===== 多面板 Tab：基础结构（宿主）+ chrome（随 shell-chrome 插件,见 plugins/shell-chrome/chrome.css） ===== */
+/* 核心保留 tab 骨架与面板容器；置顶/收纳/搜索/⟳/渐隐箭头等 chrome 样式随 shell-chrome 插件走 */
 .slot-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .ws-tabs { flex: 1 1 auto; }
-/* wrap 是滚动容器与收纳菜单的定位上下文：mask/箭头/＋n 都贴在它上面 */
-.slot-tabbar-wrap {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  display: flex;
-  align-items: stretch;
-  min-height: 55px;
-  background: var(--bg-translucent);
-  border-bottom: 1px solid var(--border);
-}
-/* 左侧渐隐：能向左滚才出现（data-can-left 由 SlotOutlet 实测滚动几何写入） */
-.slot-tabbar-wrap[data-can-left='true']::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 28px;
-  background: linear-gradient(to right, var(--bg-translucent), transparent);
-  pointer-events: none;
-  z-index: 1;
-}
-.slot-tabbar-wrap[data-can-right='true']::after {
-  content: '';
-  position: absolute;
-  right: 34px;
-  top: 0;
-  bottom: 0;
-  width: 28px;
-  background: linear-gradient(to left, var(--bg-translucent), transparent);
-  pointer-events: none;
-  z-index: 1;
-}
 .slot-tabbar {
   display: flex;
+  align-items: stretch;
+  gap: 2px;
   min-height: 55px;
-  /* 右侧预留 ＋n 按钮的宽度：溢出时末位 tab 不被收纳按钮盖住
-     （scrollIntoView 对齐的是滚动容器边缘，按钮浮在容器上层） */
-  padding: 0 12px 0 12px;
-  margin-right: 0;
-  flex: 1 1 auto;
-  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  overscroll-behavior-x: contain;
-  /* 工作区树 TabsView 没有外层 wrap（那是 SlotOutlet 专属），sticky 留在这里兜底：
-     在 SlotOutlet 里外层 wrap 已 sticky，这里的 sticky 落在不滚动容器内无害 */
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--bg-translucent);
 }
-/* 只有溢出（出现 ＋n）时才补右侧让位；无溢出时 tab 条吃到最右 */
-.slot-tabbar-wrap[data-more='true'] .slot-tabbar { padding-right: 46px; }
 .slot-tabbar::-webkit-scrollbar { display: none; }
 .slot-tab {
-  position: relative;
-  /* 自然宽度：短名（2字）省空间，长名不截断——等分挤压在 9 面板时每格只剩 74px */
-  flex: 0 0 auto;
-  min-width: 0;
-  height: 55px;
-  padding: 0 6px;
-  margin: 0 2px;
-  border: none;
+  border: 0;
   background: transparent;
   color: var(--text-dim);
-  font-size: 12.5px;
-  letter-spacing: 0.02em;
+  padding: 8px 12px;
   cursor: pointer;
+  font: inherit;
+  font-size: 13px;
   white-space: nowrap;
-  transition: color var(--plite-dur) var(--plite-ease);
+  border-bottom: 2px solid transparent;
 }
-.slot-tab::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: -1px;
-  height: 1px;
-  background: var(--accent);
-  transform: scaleX(0);
-  transition: transform var(--plite-dur-slow) var(--plite-ease);
-}
-.slot-tab:hover { color: var(--text-dim); }
-.slot-tab.active { color: var(--accent-bright); }
-.slot-tab.active::after { transform: scaleX(1); }
-/* 置顶 tab 前的小圆点：不占额外宽度（::before 是绝对定位），标识「它在收藏里」 */
-.slot-tab.pinned::before {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: 14px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--accent);
-  opacity: 0.7;
-}
-/* ＋n 收纳入口：只在有溢出时由 JS 挂载，宽度恒定不参与滚动 */
-.slot-tab-more {
-  flex: 0 0 auto;
-  padding: 0 10px;
-  border: none;
-  border-left: 1px solid var(--border);
-  background: var(--bg-translucent);
-  color: var(--text-dim);
-  font-size: 12.5px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--plite-dur) var(--plite-ease);
-}
-.slot-tab-more:hover, .slot-tab-more[aria-expanded='true'] { color: var(--accent-bright); }
-/* 收纳菜单：全量面板 + 搜索 + 置顶；绝对定位于 tab 条下方，宽度上限不超面板 */
-.slot-tabmenu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 20;
-  min-width: 220px;
-  max-width: min(300px, 100%);
-  max-height: 60vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--plite-shadow-2);
-}
-.slot-tabmenu-search {
-  margin: 2px 2px 6px;
-  padding: 0 10px;
-  height: var(--plite-h-sm);
-  border: 1px solid var(--border);
-  border-radius: var(--plite-radius-sm, 6px);
-  background: var(--bg);
+.slot-tab.active {
   color: var(--text);
-  font-size: var(--plite-fs-sm);
-  outline: none;
+  border-bottom-color: var(--accent);
 }
-.slot-tabmenu-search:focus-visible { border-color: var(--accent); }
-.slot-tabmenu-empty { padding: 10px; color: var(--text-faint); font-size: var(--plite-fs-sm); text-align: center; }
-.slot-tabmenu-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border-radius: var(--plite-radius-sm, 6px);
-}
-.slot-tabmenu-row.active { background: var(--accent-soft); }
-.slot-tabmenu-item {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 7px 10px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: var(--plite-fs-md);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-.slot-tabmenu-item:hover { background: var(--bg-hover); }
-.slot-tabmenu-row.active .slot-tabmenu-item { color: var(--accent-bright); }
-.slot-tabmenu-pin {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  margin-right: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--plite-radius-sm, 6px);
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.slot-tabmenu-pin svg { width: 15px; height: 15px; }
-.slot-tabmenu-pin:hover { background: var(--bg-hover); color: var(--text); }
-.slot-tabmenu-pin.pinned { color: var(--accent-bright); }
 .slot-tabbody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .slot-tabpanel,
 .ws-tabpanel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; }
 /* tabs 里的视图没有窗格，关闭按钮挂在面板右上角；hover 才显现，触屏常驻 */
 .ws-tabpanel:hover > .ws-tab-close,
 .ws-tabpanel > .ws-tab-close:focus-visible { opacity: 1; }
-
 /* ===== auth 门禁 ===== */
 /* 登录墙外层：允许顶部叠加启动告警（告警占位，登录页占剩余高度） */
 .shell-gate-wrap {
@@ -703,17 +455,7 @@ body.ws-dragging-tab { cursor: grabbing; }
   /* 窄屏窗格的 × 隐藏（手指容易误触），但 tabs 面板里的 × 是该视图唯一的关闭入口 */
   .ws-tabpanel > .ws-tab-close { display: inline-flex; }
 
-  /* 窄屏收纳菜单 sheet 化：面板抽屉宽度有限，绝对定位的下拉菜单在抽屉里容易溢出屏幕；
-     底部弹层（bottom sheet）是移动端全量面板列表的惯用形态，且天然避开顶部安全区 */
-  .slot-tabmenu {
-    position: fixed;
-    left: 12px;
-    right: 12px;
-    top: auto;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
-    max-width: none;
-    max-height: 55vh;
-  }
+  /* 窄屏收纳菜单 sheet 化规则已随 shell-chrome 插件走（.sc-menu 的移动端形态见其 chrome.css） */
 
   /* 窗格溶解成 contents 后，它的子元素直接变成祖父 split 的 flex item，
      但 `.ws-pane > *` 的 `flex: 1 1 auto` 依然按 DOM 父子关系命中它们——
@@ -796,4 +538,18 @@ body.ws-dragging-tab { cursor: grabbing; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ===== 插件浮层根（cap.ui.overlay 的宿主实现，2026-11-22） =====
+ * fixed 锚定视口、脱离 .shell-panel 滚动容器：插件浮层经 api.overlay.root() 拿到本容器
+ * 做 createPortal，移动端抽屉滚动时不再随内容漂移。构建门禁禁插件 CSS 用 position:fixed，
+ * 因此锚点由宿主持有。空态 pointer-events:none 放行点击，有子元素（portal 内容）时自动接管。 */
+.slot-overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.slot-overlay-root > * {
+  pointer-events: auto;
 }

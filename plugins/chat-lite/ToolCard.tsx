@@ -83,11 +83,63 @@ function oneLine(s: string | undefined, max = 48): string {
   return `${clean.slice(0, cut > max * 0.5 ? cut : max)}…`;
 }
 
+/**
+ * 参数 JSON 折叠块（2026-11-21 用户反馈「json格式最好可以折叠展开」）：
+ * 默认折叠一行预览，点开看 pretty JSON；bash 的参数就是 {command, timeoutMs}——
+ * 命令区已展示，自动跳过避免重复。非法 JSON 降级显示原文，不抛错。
+ */
+function ArgsBlock({ argsJson }: { argsJson?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!argsJson) return null;
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const p = JSON.parse(argsJson) as unknown;
+    if (p && typeof p === 'object' && !Array.isArray(p)) parsed = p as Record<string, unknown>;
+  } catch { /* 非法 JSON：显示原文 */ }
+  if (parsed && parsed.command !== undefined && Object.keys(parsed).every((k) => k === 'command' || k === 'timeoutMs')) return null;
+  const pretty = parsed ? JSON.stringify(parsed, null, 2) : argsJson;
+  const line = pretty.replace(/\s+/g, ' ').trim();
+  const preview = line.length > 72 ? `${line.slice(0, 72)}…` : line;
+  return (
+    <>
+      <button type="button" className="tc-args-toggle" onClick={() => setOpen(!open)} aria-expanded={open} data-testid={`tc-args-${open ? 'open' : 'closed'}`}>
+        <span className="tc-section-label">参数</span>
+        {!open && <span className="tc-args-preview">{preview}</span>}
+        <svg className="tc-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d={open ? 'M9 6l6 6-6 6' : 'M6 9l6 6 6-6'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && <pre className="tc-args">{pretty}</pre>}
+    </>
+  );
+}
+
+/** 工具输出复制（P0 消息操作）：输出区标题行的小字按钮，点击后短暂变为「已复制」 */
+function OutputCopy({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!text.trim()) return null;
+  return (
+    <button
+      type="button"
+      className={`tc-copy${copied ? ' done' : ''}`}
+      title="复制输出"
+      aria-label="复制输出"
+      onClick={async () => {
+        try { await navigator.clipboard.writeText(text); } catch { /* 剪贴板受限：静默 */ }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
+  );
+}
+
 export function ToolCard({ msg }: { msg: ToolCardMessage }) {
   const [open, setOpen] = useState(false);
   const tool = msg.tool;
   const isApproval = tool.status === 'awaiting';
-  const hasBody = !isApproval && (tool.command || tool.stdout || tool.stderr || tool.exitCode !== undefined);
+  const hasBody = !isApproval && !!(tool.command || tool.argsJson || tool.stdout || tool.stderr || tool.exitCode !== undefined);
   const spin = tool.status === 'running';
 
   // 审批卡：独立视觉（warning 色边 + 按钮组）；决策直接回填 cap.agent.loop。
@@ -95,8 +147,9 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
   if (isApproval) {
     return (
       <div className="tc-approval" data-call-id={tool.callId} data-testid={`tc-approval-${tool.callId}`}>
-        <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
-        <pre className="tc-cmd">{tool.command}</pre>
+      <div className="tc-approval-head"><AlertIcon />工具请求执行（{tool.name}）</div>
+      <pre className="tc-cmd">{tool.command}</pre>
+      <ArgsBlock argsJson={tool.argsJson} />
         <div className="tc-approval-btns">
           <button className="tc-btn primary" onClick={() => resolveApproval(tool.callId, 'once')}>允许一次</button>
           <button className="tc-btn" onClick={() => resolveApproval(tool.callId, 'always')}>总是允许该前缀</button>
@@ -134,9 +187,13 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
                 <pre className="tc-cmd">{tool.command}</pre>
               </>
             )}
+            <ArgsBlock argsJson={tool.argsJson} />
             {(tool.stdout || tool.stderr) && (
               <>
-                <div className="tc-section-label">输出</div>
+                <div className="tc-section-head">
+                  <div className="tc-section-label">输出</div>
+                  <OutputCopy text={`${tool.stdout ?? ''}${tool.stderr ? `${tool.stdout ? '\n' : ''}[stderr]\n${tool.stderr}` : ''}`} />
+                </div>
                 <pre className={`tc-output ${tool.stderr && !tool.stdout ? 'tc-stderr' : ''}`}>
                   {tool.stdout}
                   {tool.stderr ? `\n[stderr]\n${tool.stderr}` : ''}

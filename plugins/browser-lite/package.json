@@ -1,0 +1,8 @@
+{
+  "name": "polaris-browser-lite-deps",
+  "private": true,
+  "description": "browser-lite 服务端引擎的运行时依赖（loadPuppeteerCore 从本目录 node_modules 向上解析）。独立成包是为了不被仓库根的 npm install 剃掉——2026-11-21 事故：--no-save 安装的 puppeteer-core 被根 install 静默移除，浏览器动作全部静默失败（引擎错误曾被 callBrowserApi 伪装成 ok:true，AI 与用户都看不到）。重装：本目录 npm install。",
+  "dependencies": {
+    "puppeteer-core": "^25.0.0"
+  }
+}

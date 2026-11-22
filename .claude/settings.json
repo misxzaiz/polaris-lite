@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd /c echo [PreToolUse] %date% %time% >> %CD%\\.claude\\hook-log.jsonl"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd /c echo [PostToolUse] %date% %time% >> %CD%\\.claude\\hook-log.jsonl"
+          }
+        ]
+      }
+    ]
+  }
+}

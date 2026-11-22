@@ -34,9 +34,19 @@ export interface SessionIndexEntry {
   version: number;
 }
 
+/** 会话 loop 运行态（服务端 chat-store 维护；发起端暴毙由 20s 心跳超时 GC） */
+export interface LoopRunState {
+  startedAt: number;
+  device: string;
+  phase: string;
+  lastBeat: number;
+}
+
 export interface PullIndexResult {
   sessions: SessionIndexEntry[];
   tombstones: { id: string; deletedAt: number; version: number }[];
+  /** 正在执行编排 loop 的会话表（无执行时为空对象；字段缺省兼容旧服务端） */
+  running?: Record<string, LoopRunState>;
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'conflict';
@@ -155,6 +165,8 @@ export interface SyncCallbacks {
   applyTombstone: (id: string) => void;
   /** 同步状态变化（驱动侧栏小状态点） */
   setStatus: (s: SyncStatus) => void;
+  /** 服务端 loop 运行态表（侧栏「执行中」徽标数据源；随索引轮询刷新） */
+  onRunning: (running: Record<string, LoopRunState>) => void;
   /** 冲突上报（409；store 弹「另一台设备已更新」） */
   onConflict: (info: ConflictInfo) => void;
   /** 取当前状态（读取会话/版本/流式标记/activeId） */
@@ -203,9 +215,10 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
         cb.setStatus(res.status === 0 ? 'offline' : 'idle');
         return;
       }
-      const { sessions, tombstones } = res.data;
+      const { sessions, tombstones, running } = res.data;
       const st = cb.getState();
 
+      if (running) cb.onRunning(running);
       for (const tb of tombstones) cb.applyTombstone(tb.id);
 
       for (const entry of sessions) {

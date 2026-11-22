@@ -1,7 +1,7 @@
 /**
  * ShotCard —— 浏览器截图卡片（chat-lite 通用 artifact 块的渲染器）。
  *
- * 登记进 __PLITE_ARTIFACT_RENDERERS__['browser-lite-shot']（index.ts setup 时），
+ * 登记进 CHANNEL_ARTIFACT_RENDERERS(@sdk)['browser-lite-shot']（index.ts setup 时），
  * chat-lite 只认 {rendererType, callId, title, data} 契约，零 chat-lite 依赖。
  * iframe/img 原素零重载（html-preview PreviewCard 同纪律）。
  */

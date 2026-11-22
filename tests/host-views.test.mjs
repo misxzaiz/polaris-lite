@@ -15,14 +15,15 @@ import {
   anchorOfSlotView,
   isHostSlotView,
   registerHostSlotViews,
+  setHostViewRegistry,
   slotViewType,
-} from '../src/core/workspace/hostViews.ts';
+} from '../plugins/workspace-layout/hostViews.ts';
 import { viewRegistry } from '../src/core/workspace/viewRegistry.ts';
 import { ViewRegistry } from '../src/core/workspace/viewRegistry.ts';
-import { WorkspaceStore } from '../src/core/workspace/store.ts';
-import { createLayoutHandler, CAP_UI_LAYOUT, CAP_UI_LAYOUT_GLOBAL } from '../src/core/workspace/layoutCap.ts';
-import { findNode, validateWorkspace } from '../src/core/workspace/schema.ts';
-import { createDefaultTree } from '../src/core/workspace/treeOps.ts';
+import { WorkspaceStore } from '../plugins/workspace-layout/store.ts';
+import { createLayoutHandler, CAP_UI_LAYOUT, CAP_UI_LAYOUT_GLOBAL } from '../plugins/workspace-layout/layoutCap.ts';
+import { findNode, validateWorkspace } from '../plugins/sdk/schema.ts';
+import { createDefaultTree } from '../plugins/workspace-layout/treeOps.ts';
 
 // ---------- 命名空间 ----------
 
@@ -41,6 +42,8 @@ test('slotViewType / anchorOfSlotView 双向可逆，非法锚点返回 null', (
 });
 
 test('registerHostSlotViews 注册 4 个槽位视图，且归属宿主、带可访问名', () => {
+  // P2-2:hostViews 迁插件后注册表经注入(setHostViewRegistry);测试用真实 viewRegistry 注入
+  setHostViewRegistry({ register: (def) => viewRegistry.register(def) });
   registerHostSlotViews();
   for (const anchor of ['sidebar', 'stream', 'input', 'panel']) {
     const def = viewRegistry.get(slotViewType(anchor));

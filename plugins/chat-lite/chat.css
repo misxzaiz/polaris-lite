@@ -525,6 +525,50 @@
 .tc-exit { font-size: 10.5px; color: var(--text-dim); margin-top: 6px; }
 .tc-exit.fail { color: var(--plite-danger); }
 
+/* 参数 JSON 折叠块（ArgsBlock）：标签行可点开/收起，展开体与 tc-cmd 同视觉但限高更高 */
+.tc-args-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  margin: 6px 0 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-dim);
+}
+.tc-args-toggle:hover { color: var(--text); }
+.tc-args-toggle .tc-section-label { margin: 0; }
+.tc-args-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.tc-args-toggle .tc-chevron { flex: none; }
+.tc-args {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 /* 审批卡（warning 色独立视觉） */
 .tc-approval {
   border: 1px solid color-mix(in srgb, var(--plite-warning) 45%, var(--border));
@@ -702,6 +746,38 @@
 .tc-text { min-width: 0; }
 .tc-text + .tc-text, .tc-card + .tc-text, .tc-text + .tc-card, .tc-group + .tc-text, .tc-text + .tc-group { margin-top: 10px; }
 
+/* ===== 轻提示块（自动续写进度）与截断块（带「继续」兜底） ===== */
+.tc-notice {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.62;
+  font-style: italic;
+}
+.tc-truncated {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--plite-warning) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--plite-warning) 8%, transparent);
+  font-size: 12.5px;
+  color: var(--plite-warning);
+}
+.tc-resume-btn {
+  border: 1px solid color-mix(in srgb, var(--plite-warning) 55%, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--plite-warning);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 12px;
+  cursor: pointer;
+}
+.tc-resume-btn:hover { background: color-mix(in srgb, var(--plite-warning) 14%, transparent); }
+
 /* ===== 会话工作区：侧栏徽标 + 设置弹层 ===== */
 .chat-session-ws { margin-left: 5px; color: var(--accent); font-size: 11px; flex-shrink: 0; }
 .chat-sessions { position: relative; }
@@ -871,7 +947,7 @@
 }
 .tc-ia-field input:focus { outline: none; border-color: var(--accent); }
 .tc-ia-confirm { display: flex; gap: 7px; }
-.tc-submit { align-self: flex-start; }
+.tc-ia-actions { display: flex; gap: 7px; align-self: flex-start; }
 .tc-ia .tc-receipt { font-size: 12px; color: var(--text-dim, var(--text)); opacity: 0.85; word-break: break-all; }
 .tc-ia.answered { border-left-color: var(--plite-success, var(--accent)); opacity: 0.85; }
 /* 空态：换一批与类别色点 */
@@ -935,3 +1011,232 @@
   font-size: 11px; padding: 2px 8px; cursor: pointer;
 }
 .chat-sync-conflict-item button.primary { border-color: var(--accent); color: var(--accent); }
+
+/* ---- 断流自动重试浮层（2026-11-20「突然中断」修复；瞬态，不进历史） ---- */
+.stream-retry-banner {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 4px 0; padding: 8px 12px;
+  border: 1px solid rgba(232, 161, 58, 0.5); border-radius: 8px;
+  background: rgba(232, 161, 58, 0.1);
+  font-size: 12px; color: var(--text);
+}
+.stream-retry-spinner {
+  flex: 0 0 auto; width: 12px; height: 12px;
+  border: 2px solid rgba(232, 161, 58, 0.35); border-top-color: #e8a13a;
+  border-radius: 50%;
+  animation: stream-retry-spin 0.8s linear infinite;
+}
+@keyframes stream-retry-spin { to { transform: rotate(360deg); } }
+
+/* ---- 侧栏 v2：手动刷新 + 「执行中」徽标（服务端 loop 运行态） ---- */
+.chat-sessions-refresh {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--plite-dur), border-color var(--plite-dur), background var(--plite-dur);
+}
+.chat-sessions-refresh:hover:not(:disabled) {
+  color: var(--accent); border-color: rgba(var(--accent-rgb), 0.3); background: rgba(var(--accent-rgb), 0.06);
+}
+.chat-sessions-refresh:disabled { opacity: 0.45; cursor: default; }
+.chat-sessions-refresh.spinning svg { animation: chat-refresh-spin 0.8s linear infinite; }
+.chat-sessions-refresh:active:not(:disabled) { transform: scale(0.92); }
+@keyframes chat-refresh-spin { to { transform: rotate(360deg); } }
+
+.chat-run-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.07);
+  color: var(--accent);
+  font-size: 10px;
+  font-family: var(--plite-font-mono);
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+}
+.chat-run-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent);
+  animation: chat-run-pulse 1.4s ease-in-out infinite;
+}
+.chat-run-badge.stale { color: var(--text-faint); background: transparent; border-color: var(--border); }
+.chat-run-badge.stale .chat-run-dot { background: var(--text-faint); animation: none; }
+@keyframes chat-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ===== 消息操作条（P0/P1 消息操作：复制/编辑/回填/重发/开头/重新生成） =====
+   悬浮气泡下方浮现；流式消息自身隐藏；手机端（≤768px）常显图标化。 */
+.chat-bubble-col { min-width: 0; display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity var(--plite-dur), transform var(--plite-dur), visibility var(--plite-dur);
+}
+.chat-msg:hover .msg-actions, .msg-actions:focus-within { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+.chat-msg.user .msg-actions { justify-content: flex-end; }
+.chat-msg.streaming .msg-actions { display: none; }
+.msg-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color var(--plite-dur), background var(--plite-dur);
+}
+.msg-act:hover { background: var(--bg-hover); color: var(--accent); }
+.msg-act.done { color: var(--plite-success); }
+.msg-act svg { flex-shrink: 0; }
+
+/* 编辑态：气泡撑满整行（编辑框不跟随原消息长度坍缩） */
+.chat-msg.editing { width: 100%; max-width: 100%; }
+.edit-box { width: 100%; }
+.edit-textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  border: 1px solid var(--accent);
+  border-radius: 10px 3px 10px 10px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 10px 13px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  outline: none;
+  box-shadow: var(--plite-focus-ring);
+}
+@supports (field-sizing: content) { .edit-textarea { field-sizing: content; min-height: 84px; } }
+.edit-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.edit-btns button {
+  border-radius: 7px;
+  padding: 5px 13px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color var(--plite-dur), color var(--plite-dur);
+}
+.edit-btns button:hover { border-color: var(--border-strong); color: var(--text); }
+.edit-btns button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.edit-btns button.primary:hover { background: var(--accent-bright); }
+.edit-confirm {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--plite-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--plite-danger) 35%, var(--border));
+  color: var(--plite-danger);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.edit-confirm button {
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--plite-danger) 40%, var(--border));
+  background: var(--bg);
+  color: var(--plite-danger);
+  cursor: pointer;
+}
+.edit-confirm button.go { background: var(--plite-danger); color: var(--bg); }
+
+/* ===== 滚动导航（锚定 stream-area：贴消息流底部之上，不入输入框） ===== */
+.stream-area { position: relative; flex: 1; min-height: 0; display: flex; }
+.scroll-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-translucent);
+  backdrop-filter: blur(6px);
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: var(--plite-shadow-2);
+  transition: background var(--plite-dur);
+}
+.scroll-pill:hover { background: var(--accent-soft); }
+.to-top {
+  position: absolute;
+  right: 22px;
+  bottom: 14px;
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--plite-shadow-2);
+  transition: color var(--plite-dur), border-color var(--plite-dur);
+}
+.to-top:hover { color: var(--accent); border-color: var(--border-strong); }
+
+/* ===== 侧栏行内重命名 ===== */
+.chat-rename-input {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  box-shadow: var(--plite-focus-ring);
+}
+
+/* ===== 工具输出复制（工具卡输出区标题行） ===== */
+.tc-section-head { display: flex; align-items: center; justify-content: space-between; }
+.tc-copy {
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color var(--plite-dur), background var(--plite-dur);
+}
+.tc-copy:hover { background: var(--bg-hover); color: var(--accent); }
+.tc-copy.done { color: var(--plite-success); }
+
+/* ===== 手机端（≤768px）：触屏无 hover → 操作条常显图标化；编辑框占满行宽 ===== */
+@media (max-width: 768px) {
+  .msg-actions { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+  .msg-act { padding: 3px 7px; }
+  .msg-act .lbl { display: none; }
+  .chat-msg.editing { width: 100%; max-width: 100%; }
+  .scroll-pill { bottom: 10px; }
+  .to-top { right: 12px; bottom: 10px; }
+}

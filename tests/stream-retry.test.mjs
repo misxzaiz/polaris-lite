@@ -32,7 +32,10 @@ test('real-engine：断流必须自动重试且上限 10 次，重试时 carry �
   assert.match(engineSrc, /kind: 'stream\.retry'/, '每次重试必须发 stream.retry 事件（页面提示数据源）');
   assert.match(engineSrc, /role: 'assistant' as const, content: carriedText/, '重试必须把已生成正文作为尾随 assistant 消息喂回（续写不重复）');
   // 上游断流错误帧必须进重试流程，不得直接报错收敛
-  assert.match(engineSrc, /json\.error\.code === 'UPSTREAM_DISCONNECTED'/, '必须识别中继注入的断流错误帧');
+  // （engine-kit 接线后识别逻辑上移共享模块：断言 kit 判定函数 + 引擎调用点）
+  const kitSrc = readFileSync(resolve(root, 'plugins/engine-kit/sse.ts'), 'utf8');
+  assert.match(kitSrc, /code === 'UPSTREAM_DISCONNECTED'/, 'kit 必须识别中继注入的断流错误帧');
+  assert.match(engineSrc, /isUpstreamDisconnectFrame\(json\)/, 'real-engine 必须经 kit 判定断流帧');
   // 达上限才报错
   assert.match(engineSrc, /上游连接反复中断/, '重试耗尽必须如实报错');
   // 不得再把「无结束标记的 EOF」当正常结束

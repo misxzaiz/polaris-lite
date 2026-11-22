@@ -5,9 +5,12 @@
  * - 连续 tool 块（含夹在其间的 thinking 块，思考也按「过程项」归组）归为一个组；
  * - **流式期间一律平铺**：每个工具卡/思考块实时可见，不折叠——用户要能看着 AI 干活；
  * - **流结束统一折叠**：整组收拢为一条汇总条（全部完成/有失败 · N 项），点开回看全程；
- * - 非空 text 块打断分组（正文永远平铺，流式末尾带光标）。
+ * - 非空 text 块打断分组（正文永远平铺，流式末尾带光标）；
+ * - 交互卡（interactive）打断分组：提问卡原位渲染在触发它的工具卡之后
+ *   （2026-11-21 修复：此前不打断分组，交互卡被压到整条消息所有工具之下并叠加）。
  */
 import { Fragment, useEffect, useState } from 'react';
+import { CHANNEL_ARTIFACT_RENDERERS } from '@sdk';
 import { Markdown } from './markdown';
 import type { AsstBlock, ArtifactCardData, ToolCardData, ToolCardMessage } from './store';
 import { ToolCard } from './ToolCard';
@@ -21,7 +24,7 @@ function CardShim({ card }: { card: ToolCardData }) {
 type ToolBlock = Extract<AsstBlock, { type: 'tool' }>;
 type GroupItem = { kind: 'tool'; block: ToolBlock } | { kind: 'thinking'; block: Extract<AsstBlock, { type: 'thinking' }> };
 
-/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text 打断 */
+/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text 与 interactive 打断 */
 function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[] }[] {
   const groups: { start: number; items: GroupItem[] }[] = [];
   let current: GroupItem[] = [];
@@ -46,6 +49,9 @@ function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[
       return;
     }
     if (b.type === 'text' && b.text.trim().length > 0) flush();
+    // 交互卡同样是「用户行动点」：提问前后的工具属两段独立过程。若不打断分组，
+    // 交互卡会被压到整条消息所有工具之下（多张还会叠加），直到正文出现才归位。
+    if (b.type === 'interactive') flush();
   });
   flush();
   return groups;
@@ -146,11 +152,15 @@ function ProcessGroup({ items, streaming, artifacts = [] }: { items: GroupItem[]
 
 /**
  * assistant blocks 渲染入口：分组 + 平铺（text→Markdown，tool→ToolCard，
- * thinking→ThinkingBlock，interactive→InteractiveCard）。
+ * thinking→ThinkingBlock，interactive→InteractiveCard，notice/truncated→轻提示行）。
  * 连续过程块（tool + 夹在其间的 thinking）归为一组：流式平铺、结束折叠；
- * 非空 text 块打断分组并原序渲染（流式末尾带光标）；interactive 独立渲染。
+ * 非空 text / interactive 块打断分组并原序渲染（流式末尾带光标）；interactive 独立渲染。
  */
-export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.ReactNode {
+export function renderBlocks(
+  blocks: AsstBlock[],
+  streaming: boolean,
+  onResume?: () => void,
+): React.ReactNode {
   const groups = identifyGroups(blocks);
 
   // 块索引 → 所属组序号（组内为连续 tool / 组内 thinking）
@@ -164,7 +174,7 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
     } else if (b.type === 'thinking' && inGroup) {
       // 已在组内（前面有 tool）的思考随组渲染；组外的独立思考不归组
       owner.set(i, gi);
-    } else if (b.type === 'text' && b.text.trim().length > 0) {
+    } else if ((b.type === 'text' && b.text.trim().length > 0) || b.type === 'interactive' || b.type === 'notice' || b.type === 'truncated') {
       inGroup = false;
     }
   });
@@ -201,6 +211,13 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
   // 独立渲染块，按索引区间标记会把夹着的块误标为已处理而跳过渲染，
   // 实测症状：浏览器截图（artifact 块）夹在工具与思考之间时刷新即消失）。
   const processed = new Set<AsstBlock>();
+  // card 引用 → 原块引用：processed 按 Set 引用去重，归组的 artifact 必须标记回
+  // blocks 里的原对象——此前 `processed.add({ type:'artifact', card })` 新建了对象，
+  // 原块永远不被标记 → 截图渲染两次（组内一次 + 原位置再渲染一次）。
+  const artifactBlockByCard = new Map<ArtifactCardData, AsstBlock>();
+  blocks.forEach((b) => {
+    if (b.type === 'artifact') artifactBlockByCard.set(b.card, b);
+  });
   blocks.forEach((b, i) => {
     if (processed.has(b)) return;
     const g = owner.get(i);
@@ -217,16 +234,39 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
       );
       // 只标记组内实际包含的块（按引用）；夹在组内块之间的其它块（artifact 等）不受影响
       group.items.forEach((it) => processed.add(it.block));
-      arts.forEach((a) => processed.add({ type: 'artifact', card: a })); // 归组的 artifact 随组渲染（标记回块引用）
+      arts.forEach((a) => {
+        const original = artifactBlockByCard.get(a);
+        if (original) processed.add(original); // 归组的 artifact 随组渲染（标记回块引用）
+      });
     } else if (b.type === 'interactive') {
       result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
     } else if (b.type === 'artifact') {
-      // 通用产物块：渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记（rendererType → 组件），
+      // 通用产物块：渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记（rendererType → 组件），
       // chat-lite 不再为每种可视化产物加硬编码分支。未登记（插件被停用）渲兜底提示，不崩不空白。
       result.push(<ArtifactSlot key={`af-${b.card.callId}`} card={b.card} />);
     } else if (b.type === 'thinking') {
       // 组外独立思考（工具之前/之后的纯思考段）
       result.push(<ThinkingBlock key={`th-${i}`} text={b.text} live={streaming && i === blocks.length - 1} />);
+    } else if (b.type === 'notice') {
+      // 自动续写等轻提示：小字弱化，不进正文镜像
+      result.push(<div key={`n-${i}`} className="tc-notice">{b.text}</div>);
+    } else if (b.type === 'truncated') {
+      // 截断提示 + 「继续」：点击续开同一 assistant 消息（不新增用户消息、不开新气泡）；
+      // 流式中隐藏按钮（续写由循环自动进行）
+      result.push(
+        <div key={`tr-${i}`} className="tc-truncated">
+          <span className="tc-truncated-text">[{b.text}]</span>
+          {!streaming && onResume && (
+            <button
+              type="button"
+              className="tc-resume-btn"
+              onClick={(e) => { e.stopPropagation(); onResume?.(); }}
+            >
+              继续
+            </button>
+          )}
+        </div>,
+      );
     } else if (b.type === 'text') {
       result.push(<div key={`t-${i}`} className="tc-text"><Markdown text={b.text} /></div>);
       if (streaming && i === blocks.length - 1) result.push(<span key={`cur-${i}`} className="cursor" />);
@@ -239,7 +279,7 @@ export function renderBlocks(blocks: AsstBlock[], streaming: boolean): React.Rea
 type ArtifactRenderer = (props: { callId: string; title: string; data: Record<string, unknown> }) => React.ReactNode;
 
 function ArtifactSlot({ card }: { card: ArtifactCardData }): React.ReactNode {
-  const registry = (window as unknown as Record<string, unknown>).__PLITE_ARTIFACT_RENDERERS__ as
+  const registry = (window as unknown as Record<string, unknown>)[CHANNEL_ARTIFACT_RENDERERS] as
     | Record<string, ArtifactRenderer>
     | undefined;
   const Renderer = card.rendererType ? registry?.[card.rendererType] : undefined;

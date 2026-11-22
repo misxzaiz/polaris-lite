@@ -1,12 +1,11 @@
 /**
- * 上游访问策略（SSRF 防线，服务端唯一出处）。
+ * 上游访问策略（服务端唯一出处）。
  *
- * 密钥下沉服务端后，上游 URL 由服务端从 providers.json 读取并拼接，
- * 因此这里必须在**保存时**与**转发时**各校验一次：
- * - 仅 https；
- * - 主机必须在白名单（内置 + plugins/relay-hosts.json）；
- * - 拒绝私有/环回/链路本地地址（防 169.254.169.254 一类元数据端点）；
- * - 不跟随重定向（relay 用 redirect:'manual'）。
+ * 2026-11-22 起默认**不限制**（用户决定：个人部署，http/局域网/私网网关直接可用，
+ * 生产同样允许）：assertAllowedUrl 仅校验 URL 可解析。
+ * 旧行为（https-only + 白名单 + 私网拦截）可通过 PLITE_UPSTREAM_STRICT=1
+ * 或 options.strict 恢复——防线逻辑保留在 strict 分支，随时可切回。
+ * 不跟随重定向（relay 用 redirect:'manual'）依旧成立。
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -33,6 +32,12 @@ export function createHostPolicy(extraHosts = loadExtraHosts(), options = {}) {
   const allowed = new Set([...DEFAULT_HOSTS, ...extraHosts].map((h) => h.toLowerCase()));
   /** 仅供本地联调/测试放行环回地址；生产形态永远保持 false */
   const allowPrivate = options.allowPrivate === true;
+  /**
+   * 上游限制开关（2026-11-22 用户决定：个人部署 http/局域网网关直接可用，**生产也允许——默认不限制**）。
+   * 默认仅保留「URL 可解析」校验，任意 http/https 主机（含私网）均可保存与转发；
+   * 设 PLITE_UPSTREAM_STRICT=1（或 options.strict）恢复旧三道门：https-only + 私网拦截 + 主机白名单。
+   */
+  const strict = options.strict === true || process.env.PLITE_UPSTREAM_STRICT === '1';
 
   /** 私有/环回/链路本地地址判定（含 IPv4 与常见 IPv6 写法） */
   const isPrivateHost = (hostname) => {
@@ -62,6 +67,7 @@ export function createHostPolicy(extraHosts = loadExtraHosts(), options = {}) {
     } catch {
       throw new Error('upstream url 非法');
     }
+    if (!strict) return u; // 默认不限制：任意 http/https 主机（含私网/局域网）
     // 环回 http 仅在 allowPrivate（本地联调/测试）时放行——mock 上游挂不了证书；
     // 生产 allowPrivate 恒为 false，远端上游仍强制 https。
     const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1';
@@ -75,5 +81,5 @@ export function createHostPolicy(extraHosts = loadExtraHosts(), options = {}) {
     return u;
   };
 
-  return { assertAllowedUrl, isPrivateHost, allowedHosts: () => [...allowed] };
+  return { assertAllowedUrl, isPrivateHost, allowedHosts: () => [...allowed], strict };
 }

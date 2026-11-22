@@ -44,7 +44,7 @@ import {
   rmSync,
   readdirSync,
 } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseViewContributions, validateViews, isExported } from './manifest-views.mjs';
 
@@ -105,6 +105,10 @@ const plugins = [
   { id: 'plugin-market', config: 'plugin-market/vite.config.ts', dist: 'plugin-market/dist', order: 28 },
   // transcript-share = AI 对话全过程只读分享（needs #069）：链接分享接口（token+有效期）+ panel + cap.tool.transcript
   { id: 'transcript-share', config: 'transcript-share/vite.config.ts', dist: 'transcript-share/dist', order: 29 },
+  // shell-chrome = 多面板 tab 条 chrome 的插件化实现（host-slimming-report §7.2/P1-2;containers 契约首个消费者）
+  { id: 'shell-chrome', config: 'shell-chrome/vite.config.ts', dist: 'shell-chrome/dist', order: 30 },
+  // workspace-layout = 工作区布局树插件化（host-slimming-report §7.1/P2-2;layout-root 容器）
+  { id: 'workspace-layout', config: 'workspace-layout/vite.config.ts', dist: 'workspace-layout/dist', order: 31 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
@@ -113,6 +117,13 @@ function fail(msg) {
 }
 function ok(msg) {
   console.log(`  ok  ${msg}`);
+}
+
+/** 剥离 JS 注释：注释里提到通道名/端点属正常文档，不算实现违规 */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
 /** 从插件源码里取出 manifest 对象字面量的文本（括号配对，跳过字符串与注释） */
@@ -348,7 +359,37 @@ function readSourceManifest(p) {
     events: list('events'),
     slots: readSlotContributions(literal, p.id),
     views: parseViews(literal, p.id),
+    containers: readContainerContributions(literal, p.id),
   };
+}
+
+/**
+ * 解析 contributes.containers（host-slimming-report 必修包修2:P1 校验盲区焊死）。
+ * 容器名拼错此前会构建期放行、运行时静默回退、无任何提示——与「插件静默不加载」
+ * 同级的故障类别,必须在构建期挡掉。kind 受控枚举;component 必须非空字符串。
+ */
+function readContainerContributions(literal, pluginId) {
+  const CONTAINER_KINDS = new Set(['slot-tabs', 'layout-root']);
+  const m = /\bcontainers\s*:\s*\[/.exec(literal);
+  if (!m) return [];
+  const arrStart = literal.indexOf('[', m.index);
+  const arrText = extractBracketed(literal, arrStart);
+  if (!arrText) fail(`插件 ${pluginId}：manifest.containers 括号不闭合`);
+  const items = [];
+  const objRe = /\{\s*container[\s\S]*?\}/g;
+  for (const hit of arrText.matchAll(objRe)) {
+    const obj = hit[0];
+    const kind = (/\bcontainer\s*:\s*['"`]([^'"`]+)['"`]/.exec(obj) ?? [])[1];
+    if (!kind) fail(`插件 ${pluginId}：containers 项缺少 container 字段`);
+    if (!CONTAINER_KINDS.has(kind)) {
+      fail(`插件 ${pluginId}：未知容器 "${kind}"（合法值：${[...CONTAINER_KINDS].join(' / ')}）。拼错的容器运行时静默回退，必须挡在构建期`);
+    }
+    const comp = (/\bcomponent\s*:\s*['"`]([^'"`]+)['"`]/.exec(obj) ?? [])[1];
+    if (!comp) fail(`插件 ${pluginId}：containers.${kind} 缺少 component 字段`);
+    const orderRaw = (/\border\s*:\s*(\d+)/.exec(obj) ?? [])[1];
+    items.push({ container: kind, component: comp, order: orderRaw ? Number(orderRaw) : 0 });
+  }
+  return items;
 }
 
 // ============================================================================
@@ -489,6 +530,69 @@ function preflight() {
     }
   }
   ok(`插件样式门禁通过${cssWarnings ? `（${cssWarnings} 条提示）` : ''}`);
+
+  // 暗通道门禁（host-slimming-report §3 闸 2）：插件源码禁止出现裸跨插件通道字面量。
+  // 背景：跨插件集成曾靠各自硬编码的 window 全局名 / storage 键（"暗通道"），不在
+  // manifest/grants 里可见，替换一方会静默打断另一方。通道名已收编进 @sdk 契约常量
+  // （CHANNEL_* / KEY_*），新通道必须先在 sdk 登记再使用，否则这里 fail-fast。
+  // 注：stripComments 后只剩实现代码，注释里提到通道名不算违规。
+  const DARK_CHANNELS = [
+    '__PLITE_FILE_BROWSER_COMPOSE__',
+    '__PLITE_INTERACTIVE_RESPOND__',
+    '__PLITE_ARTIFACT_RENDERERS__',
+    '__PLITE_REAL_ENGINE_DIRECT__',
+    '__PLITE_LAYOUT_WIRE__',
+    '__PLITE_DRAWER_STATE__',
+    'mock-auth.session.v1',
+  ];
+  const darkHits = [];
+  for (const p of plugins) {
+    if (p.id === 'sdk') continue; // 契约常量的定义处，天然豁免
+    const dir = resolve(pluginsRoot, p.id);
+    const walk = (d) => {
+      for (const ent of readdirSync(d, { withFileTypes: true })) {
+        const sub = resolve(d, ent.name);
+        if (ent.isDirectory()) {
+          if (ent.name === 'dist' || ent.name === 'node_modules') continue;
+          walk(sub);
+        } else if (/\.(ts|tsx|mjs)$/.test(ent.name)) {
+          const text = stripComments(readFileSync(sub, 'utf8'));
+          for (const ch of DARK_CHANNELS) {
+            if (text.includes(ch)) darkHits.push(`plugins/${p.id}/${relative(pluginsRoot, sub)} → 裸通道字面量 ${ch}`);
+          }
+        }
+      }
+    };
+    walk(dir);
+  }
+  if (darkHits.length) {
+    fail(`暗通道违规：以下文件绕过 @sdk 契约直接硬编码跨插件通道名（先在 plugins/sdk/index.ts 登记，再 import 使用）：\n      ${darkHits.join('\n      ')}`);
+  }
+  ok(`暗通道门禁通过：插件源码无裸跨插件字面量（${DARK_CHANNELS.length} 个受保护通道）`);
+
+  // 死能力探测（host-slimming-report §3 闸 3）：provides 在 grants 无任何消费者
+  // 授权且宿主无引用 → 警告。面板/管理类能力由用户经 UI 调用,不在此列——
+  // 本检查若早两周上线,cap.ui.layout 的 2633 行当时就会被当众质疑（§2.1）。
+  const PANEL_CAP_HINTS = ['admin', 'panel', 'ui', 'mode', 'mobile', 'auth'];
+  const consumedBy = new Map(); // cap → [consumerIds]
+  for (const p of plugins) {
+    for (const cap of manifests.get(p.id).capabilities) {
+      if (!consumedBy.has(cap)) consumedBy.set(cap, []);
+      consumedBy.get(cap).push(p.id);
+    }
+  }
+  const deadCaps = [];
+  for (const p of plugins) {
+    for (const cap of manifests.get(p.id).provides) {
+      const consumers = (consumedBy.get(cap) ?? []).filter((id) => id !== p.id);
+      const looksLikePanelCap = PANEL_CAP_HINTS.some((h) => cap.includes(h));
+      if (consumers.length === 0 && !looksLikePanelCap) {
+        deadCaps.push(`${p.id} provides ${cap}：无任何插件消费（也非面板/管理类），疑似死能力`);
+      }
+    }
+  }
+  for (const d of deadCaps) console.warn(`  warn 死能力 ${d}`);
+  ok(`死能力探测完成${deadCaps.length ? `（${deadCaps.length} 条疑似死能力，见 warn）` : '：全部 provides 均有插件消费者'}`);
 
   return manifests;
 }

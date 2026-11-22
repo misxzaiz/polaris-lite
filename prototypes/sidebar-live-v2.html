@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>会话侧栏 v2 原型：刷新 / 执行中徽标 / 实时推流 / 稳定排序</title>
+<style>
+  /* ===== plite-tokens（静谧蓝白）真实值内联 ===== */
+  :root {
+    --bg: #ffffff; --bg-panel: #ffffff; --bg-hover: #f3f5f9; --bg-elevated: #ffffff;
+    --bg-translucent: rgba(255, 255, 255, 0.92); --bg-code: #f6f8fb;
+    --border: rgba(15, 23, 42, 0.075); --border-strong: rgba(29, 78, 216, 0.3);
+    --text: #101828; --text-soft: #384255; --text-dim: #5d6473; --text-faint: #858ca0;
+    --accent: #1d4ed8; --accent-rgb: 29, 78, 216; --accent-soft: rgba(29, 78, 216, 0.07);
+    --radius: 10px; --plite-radius-sm: 6px; --plite-h-md: 38px;
+    --plite-fs-xs: 11px; --plite-fs-sm: 12px; --plite-fs-md: 13px;
+    --plite-font-mono: 'SFMono-Regular', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+    --plite-font-sans: Inter, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    --plite-success: #1f7a4d; --plite-danger: #c0392f;
+    --plite-success-soft: rgba(31, 122, 77, 0.09);
+    --plite-shadow-1: 0 16px 40px rgba(15, 23, 42, 0.07);
+    --plite-dur: 180ms; --plite-dur-slow: 360ms; --plite-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--plite-font-sans); font-size: var(--plite-fs-md); }
+
+  .app { display: grid; grid-template-columns: 264px 1fr; height: 100vh; overflow: hidden; }
+
+  /* ================= 侧栏（对齐 chat.css 现有骨架 + 新增件） ================= */
+  .sidebar { background: var(--bg-panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .sess-head { display: flex; align-items: center; padding: 14px 14px 10px; flex-shrink: 0; }
+  .sess-head .tt { font-family: var(--plite-font-mono); font-size: var(--plite-fs-xs); letter-spacing: 0.14em; color: var(--text-faint); text-transform: uppercase; flex: 1; }
+  .sess-head-right { display: flex; align-items: center; gap: 8px; }
+
+  /* 同步状态点（既有） */
+  .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--plite-success); position: relative; }
+  .sync-dot.syncing { background: #d9a53f; animation: pulse 1.2s infinite; }
+  .sync-dot.offline { background: var(--text-faint); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ★ 新增：手动刷新按钮 */
+  .refresh-btn { border: 1px solid var(--border); background: var(--bg); width: 26px; height: 26px; border-radius: var(--plite-radius-sm);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); transition: all var(--plite-dur) var(--plite-ease); }
+  .refresh-btn:hover { color: var(--accent); border-color: var(--border-strong); background: var(--accent-soft); }
+  .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+  .refresh-btn:active { transform: scale(0.92); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sess-count { font-family: var(--plite-font-mono); font-size: var(--plite-fs-xs); letter-spacing: 0.06em; color: var(--text-faint); }
+
+  .sess-new { margin: 0 14px 10px; padding: 9px; border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    background: transparent; color: var(--accent); cursor: pointer; font-size: var(--plite-fs-md); font-family: inherit;
+    display: flex; align-items: center; justify-content: center; gap: 6px; transition: all var(--plite-dur) var(--plite-ease); }
+  .sess-new:hover { background: var(--accent-soft); }
+
+  .sess-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; min-height: 0; }
+  .sess-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius);
+    cursor: pointer; color: var(--text-soft); position: relative; transition: background var(--plite-dur) var(--plite-ease); }
+  .sess-item:hover { background: var(--bg-hover); color: var(--text); }
+  .sess-item.active { background: var(--accent-soft); color: var(--text); }
+  .sess-item.active::before { content: ''; position: absolute; left: 0; top: 20%; bottom: 20%; width: 2.5px;
+    background: var(--accent); border-radius: 2px; }
+  .sess-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--plite-fs-md); }
+
+  /* ★ 新增：执行中徽标（服务端运行态驱动；含其他设备发起的） */
+  .run-badge { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+    font-size: var(--plite-fs-xs); color: var(--accent); background: var(--accent-soft);
+    border: 1px solid rgba(var(--accent-rgb), 0.22); padding: 1.5px 7px; border-radius: 999px;
+    font-family: var(--plite-font-mono); letter-spacing: 0.04em; }
+  .run-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
+  /* 长时间无心跳（发起端疑似暴毙）：变灰提示 */
+  .run-badge.stale { color: var(--text-faint); background: transparent; border-color: var(--border); }
+  .run-badge.stale .dot { background: var(--text-faint); animation: none; }
+
+  .sess-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .msg-count { font-family: var(--plite-font-mono); font-size: var(--plite-fs-xs); color: var(--text-faint); }
+
+  /* ================= 主区：消息流 ================= */
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .main-head { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .main-head .nm { font-weight: 600; }
+  .live-tag { display: none; align-items: center; gap: 6px; font-size: var(--plite-fs-xs); color: var(--accent);
+    background: var(--accent-soft); border: 1px solid rgba(var(--accent-rgb), 0.22); border-radius: 999px; padding: 2px 9px; }
+  .live-tag.on { display: inline-flex; }
+  .live-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
+
+  .stream { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 14px; }
+  .bubble { max-width: 76%; }
+  .bubble.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid rgba(var(--accent-rgb), 0.14);
+    border-radius: 12px 12px 3px 12px; padding: 10px 14px; color: var(--text); }
+  .bubble.assistant { align-self: flex-start; padding: 2px 0; color: var(--text-soft); line-height: 1.75; white-space: pre-wrap; }
+  .bubble .cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent); border-radius: 1.5px;
+    vertical-align: -2px; animation: pulse 0.9s infinite; margin-left: 2px; }
+
+  /* 工具卡（对齐 ToolCard 收敛形态） */
+  .tool-card { align-self: flex-start; width: min(480px, 82%); border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-code); overflow: hidden; box-shadow: 0 1px 3px rgba(15,23,42,0.04); }
+  .tool-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .tool-head .ic { width: 20px; height: 20px; border-radius: 6px; background: rgba(var(--accent-rgb), 0.12); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+  .tool-head .nm { font-family: var(--plite-font-mono); font-size: var(--plite-fs-sm); color: var(--text-soft); flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool-status { font-size: var(--plite-fs-xs); font-family: var(--plite-font-mono); }
+  .tool-status.running { color: var(--accent); }
+  .tool-status.running::before { content: '●'; margin-right: 4px; animation: pulse 1.2s infinite; }
+  .tool-status.done { color: var(--plite-success); }
+  .tool-status.error { color: var(--plite-danger); }
+  .tool-body { padding: 8px 12px; font-family: var(--plite-font-mono); font-size: var(--plite-fs-sm); color: var(--text-dim);
+    max-height: 120px; overflow-y: auto; white-space: pre-wrap; display: none; }
+  .tool-body.show { display: block; }
+
+  /* 底部输入区（占位） */
+  .input-bar { border-top: 1px solid var(--border); padding: 14px 20px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; color: var(--text-faint); }
+  .input-box { flex: 1; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; font-size: var(--plite-fs-md); color: var(--text-faint); background: var(--bg); }
+
+  /* 演示控制条（原型专属，非产品件） */
+  .demo-bar { position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px; z-index: 10; }
+  .demo-btn { border: 1px solid var(--border); background: var(--bg-translucent); backdrop-filter: blur(8px);
+    box-shadow: var(--plite-shadow-1); border-radius: 999px; padding: 7px 14px; font-size: var(--plite-fs-sm);
+    color: var(--text-soft); cursor: pointer; font-family: inherit; transition: all var(--plite-dur) var(--plite-ease); }
+  .demo-btn:hover { color: var(--accent); border-color: var(--border-strong); }
+
+  .hint { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: var(--plite-fs-xs);
+    color: var(--text-faint); background: var(--bg-translucent); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 14px; pointer-events: none; opacity: 0; transition: opacity var(--plite-dur-slow); }
+  .hint.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ 侧栏：对话目录 v2 ============ -->
+  <aside class="sidebar">
+    <div class="sess-head">
+      <span class="tt">对话目录</span>
+      <span class="sess-head-right">
+        <span class="sync-dot" id="syncDot" title="已同步"></span>
+        <!-- ★ 新增：手动刷新 -->
+        <button class="refresh-btn" id="refreshBtn" title="立即刷新（对账服务端）" aria-label="刷新会话列表">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/>
+          </svg>
+        </button>
+        <span class="sess-count" id="sessCount">00</span>
+      </span>
+    </div>
+    <button class="sess-new">＋ 新会话</button>
+    <div class="sess-list" id="sessList"></div>
+  </aside>
+
+  <!-- ============ 主区：会话查看（含实时推流 overlay） ============ -->
+  <main class="main">
+    <div class="main-head">
+      <span class="nm" id="curName">—</span>
+      <span class="live-tag" id="liveTag"><span class="dot"></span><span id="liveLabel">执行中 · 电脑 · Chrome</span></span>
+    </div>
+    <div class="stream" id="stream"></div>
+    <div class="input-bar"><div class="input-box">给这条会话发消息…（本原型为只读观察端）</div></div>
+  </main>
+</div>
+
+<!-- 演示控制（原型专属） -->
+<div class="demo-bar">
+  <button class="demo-btn" id="demoRemote">模拟：另一台设备发来新消息</button>
+  <button class="demo-btn" id="demoStart">模拟：远端会话开始执行</button>
+  <button class="demo-btn" id="demoKill">模拟：发起端暴毙（20s 心跳超时）</button>
+</div>
+<div class="hint" id="hint"></div>
+
+<script>
+/* ================= mock 数据 ================= */
+let seq = 0;
+const now = Date.now();
+const sessions = [
+  { id: 's1', title: '侧栏实时状态改造', count: 12, lastActive: now - 2 * 60e3,
+    msgs: [
+      { role: 'user', text: '把执行中的会话在侧栏标出来，其他设备也能看到。' },
+      { role: 'assistant', text: '方案已定：agent-loop 向服务端登记生命周期，索引返回 running 表，侧栏出徽标。' },
+    ] },
+  { id: 's2', title: '端口占用排查', count: 8, lastActive: now - 46 * 60e3,
+    msgs: [
+      { role: 'user', text: '9825 起不来，帮我看下端口占用。' },
+      { role: 'assistant', text: '是上次没退干净的进程占着 9825，结束 PID 后恢复。' },
+    ] },
+  { id: 's3', title: '插件市场调研', count: 21, lastActive: now - 5 * 3600e3,
+    msgs: [
+      { role: 'user', text: '整理一下运行时扩展的市场分析。' },
+      { role: 'assistant', text: '已产出 runtime-extensions-and-market-final.md。' },
+    ] },
+  { id: 's4', title: '周末读书笔记', count: 3, lastActive: now - 26 * 3600e3,
+    msgs: [{ role: 'user', text: '记一下这周读的几本书。' }] },
+];
+/** 服务端 running 表（GET /api/chat/sessions 附带）：sessionId → { device, startedAt, lastBeat } */
+const running = new Map();
+let activeId = 's1';
+
+const $ = (id) => document.getElementById(id);
+const list = $('sessList'), stream = $('stream');
+
+function fmtCount(n) { return String(n).padStart(2, '0'); }
+function esc(s) { return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+/* ================= 侧栏渲染（最新对话在上；拉取/查看不再扰动顺序） ================= */
+function renderSidebar() {
+  const sorted = [...sessions].sort((a, b) => b.lastActive - a.lastActive);
+  list.innerHTML = sorted.map((s) => {
+    const r = running.get(s.id);
+    let badge = '';
+    if (r) {
+      const stale = Date.now() - r.lastBeat > 20e3;
+      badge = `<span class="run-badge${stale ? ' stale' : ''}" title="${stale ? '心跳超时，等待回收' : '由 ' + r.device + ' 发起 · 已执行 ' + Math.round((Date.now() - r.startedAt) / 1000) + 's'}">
+        <span class="dot"></span>执行中</span>`;
+    }
+    return `<div class="sess-item${s.id === activeId ? ' active' : ''}" data-id="${s.id}" onclick="openSession('${s.id}')">
+      <span class="nm">${esc(s.title)}</span>${badge}
+      <span class="sess-meta"><span class="msg-count">${s.count}</span></span>
+    </div>`;
+  }).join('');
+  $('sessCount').textContent = fmtCount(sessions.length);
+}
+
+/* ================= 主区渲染 ================= */
+function renderMain() {
+  const s = sessions.find((x) => x.id === activeId);
+  if (!s) { $('curName').textContent = '—'; stream.innerHTML = ''; return; }
+  $('curName').textContent = s.title;
+  const r = running.get(s.id);
+  $('liveTag').classList.toggle('on', !!r);
+  if (r) $('liveLabel').textContent = `执行中 · ${r.device} · 实时`;
+  stream.innerHTML = s.msgs.map((m) =>
+    m.role === 'user'
+      ? `<div class="bubble user">${esc(m.text)}</div>`
+      : `<div class="bubble assistant">${esc(m.text)}</div>`
+  ).join('') + s._overlay.join('');
+  stream.scrollTop = stream.scrollHeight;
+}
+
+function openSession(id) {
+  activeId = id;
+  renderSidebar(); renderMain();
+}
+
+/* ================= ★ Fix-B：手动刷新（立即对账，不等 30s 轮询） ================= */
+$('refreshBtn').onclick = () => {
+  const btn = $('refreshBtn'), dot = $('syncDot');
+  btn.classList.add('spinning'); dot.className = 'sync-dot syncing'; dot.title = '同步中…';
+  setTimeout(() => { // 模拟 pullNow() 完成
+    btn.classList.remove('spinning'); dot.className = 'sync-dot'; dot.title = '已同步';
+    showHint('已对账：列表与服务端一致');
+  }, 900);
+};
+
+/* ================= 演示 1：另一台设备发来新消息（触达后跳到最上） ================= */
+$('demoRemote').onclick = () => {
+  const s = sessions.find((x) => x.id === 's4');
+  s.lastActive = Date.now(); s.count += 1;
+  s.msgs.push({ role: 'assistant', text: '（来自手机的回复）这周读完了《设计中的设计》，下周开始《认知觉醒》。' });
+  renderSidebar();
+  if (activeId === 's4') renderMain();
+  showHint('手机端发来新消息 → 「周末读书笔记」跳到最上');
+};
+
+/* ================= 演示 2：远端会话开始执行（徽标 + SSE 推流 overlay） ================= */
+const STREAM_SCRIPT = [
+  { t: 'text', v: '收到，我来梳理一下端口的情况。\n\n' },
+  { t: 'tool', name: 'bash', cmd: 'netstat -ano | grep 9825' },
+  { t: 'text', v: '找到了占用进程：PID 4231（上次未退干净的宿主）。继续看它的工作目录：\n\n' },
+  { t: 'tool', name: 'bash', cmd: 'wmic process where processid=4231 get commandline' },
+  { t: 'text', v: '确认是残留实例，结束它并重启生产宿主即可。稍等，我验证一下端口已经释放——\n\n' },
+  { t: 'tool', name: 'bash', cmd: 'curl -s http://127.0.0.1:9825/api/health' },
+  { t: 'text', v: '端口已释放且宿主正常响应。整理成结论给你：\n\n1. 占用源：残留宿主进程 PID 4231\n2. 已结束并验证 9825 恢复服务\n3. 建议退出脚本里补 kill 兜底，避免复发。' },
+];
+let streamTimer = null;
+
+$('demoStart').onclick = () => {
+  if (running.has('s2')) return;
+  running.set('s2', { device: '电脑 · Chrome', startedAt: Date.now(), lastBeat: Date.now() });
+  const s2 = sessions.find((x) => x.id === 's2');
+  s2.lastActive = Date.now(); // 发起端真实对话变更 → 按新口径排最上
+  renderSidebar();
+  if (activeId === 's2') renderMain();
+  showHint('远端 loop 已登记 → 侧栏出现「执行中」徽标；点进去看实时推流');
+
+  // 心跳续期（模拟 agent-loop 每 5s 上报）
+  const hb = setInterval(() => {
+    const r = running.get('s2');
+    if (r) r.lastBeat = Date.now();
+    else { clearInterval(hb); return; }
+    renderSidebar();
+  }, 5000);
+
+  // 查看端 SSE overlay（仅当用户点开时才逐条出现 → openSession 里 lazily 播放）
+  $('demoStart').dataset.armed = '1';
+};
+
+/* overlay 播放器：打开执行中的会话时，模拟 SSE 扇出的 delta / 工具卡 */
+function playOverlay(session) {
+  stopOverlay(session);
+  session._overlay = [];
+  let si = 0, typing = null;
+  const step = () => {
+    if (si >= STREAM_SCRIPT.length) {
+      clearInterval(streamTimer); streamTimer = null;
+      finishOverlay(session); return;
+    }
+    const item = STREAM_SCRIPT[si++];
+    if (item.t === 'text') {
+      // delta 逐字推入（模拟 message.delta 批量扇出后的逐 token 渲染）
+      let i = 0;
+      const bubble = { html: `<div class="bubble assistant"><span class="txt"></span><span class="cursor"></span></div>` };
+      session._overlay.push(bubble);
+      renderMain();
+      const el = stream.querySelector('.bubble.assistant:last-child .txt');
+      typing = setInterval(() => {
+        el.textContent += item.v[i++] ?? '';
+        stream.scrollTop = stream.scrollHeight;
+        if (i >= item.v.length) { clearInterval(typing); typing = null; setTimeout(step, 350); }
+      }, 26);
+    } else {
+      // 工具卡：running → done（模拟 tool.card / tool.result 两段事件）
+      const card = { html: `
+        <div class="tool-card">
+          <div class="tool-head">
+            <span class="ic">❯</span><span class="nm">${esc(item.cmd)}</span>
+            <span class="tool-status running">running</span>
+          </div>
+          <div class="tool-body"></div>
+        </div>` };
+      session._overlay.push(card);
+      renderMain();
+      setTimeout(() => {
+        const cards = stream.querySelectorAll('.tool-card');
+        const c = cards[cards.length - 1];
+        const st = c.querySelector('.tool-status'); st.className = 'tool-status done'; st.textContent = 'done · 340ms';
+        c.querySelector('.tool-body').classList.add('show');
+        c.querySelector('.tool-body').textContent = '（stdout 已截断）TCP  127.0.0.1:9825  LISTENING  4231';
+        setTimeout(step, 420);
+      }, 1100);
+    }
+  };
+  streamTimer = setInterval(() => {}, 0); // 占位
+  step();
+}
+function stopOverlay(session) {
+  if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+  session._overlay = [];
+}
+function finishOverlay(session) {
+  // loop.done → 丢弃 overlay、拉最终落盘全文（发起端已推送完整消息）
+  running.delete('s2');
+  const s2 = sessions.find((x) => x.id === 's2');
+  s2.msgs.push({ role: 'assistant', text: '结论：占用源是残留宿主 PID 4231，已结束并验证 9825 恢复。建议退出脚本补 kill 兜底。' });
+  s2.count += 2; s2.lastActive = Date.now();
+  renderSidebar();
+  if (activeId === 's2') renderMain();
+  showHint('loop.done → overlay 收敛为落盘全文，徽标消失');
+}
+
+/* ================= 演示 3：发起端暴毙（心跳超时 → 徽标置灰 → 回收） ================= */
+$('demoKill').onclick = () => {
+  if (!running.has('s2')) return;
+  const r = running.get('s2');
+  r.lastBeat = Date.now() - 25e3; // 伪造超时
+  renderSidebar();
+  if (activeId === 's2') $('liveLabel').textContent = '执行中 · 心跳超时';
+  showHint('发起端失去心跳 → 徽标置灰（stale），看门狗 60s 后丢弃 overlay 并拉全文兜底');
+  setTimeout(() => {
+    running.delete('s2');
+    const s2 = sessions.find((x) => x.id === 's2');
+    if (s2._overlay) stopOverlay(s2);
+    renderSidebar();
+    if (activeId === 's2') renderMain();
+    showHint('运行态已回收：半截 overlay 被丢弃，回退到最后落盘版本');
+  }, 4000);
+};
+
+/* ================= 提示条 ================= */
+let hintTimer = null;
+function showHint(text) {
+  const h = $('hint');
+  h.textContent = text; h.classList.add('show');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => h.classList.remove('show'), 2600);
+}
+
+/* openSession 需要触达 overlay 播放（重定义，覆盖 inline onclick 的闭包前身） */
+window.openSession = function (id) {
+  activeId = id;
+  renderSidebar();
+  const s = sessions.find((x) => x.id === id);
+  if (running.has(id) && $('demoStart').dataset.armed === '1' && !streamTimer) {
+    renderMain();
+    playOverlay(s);
+    showHint('已订阅该会话的事件流：delta 与工具卡实时推入（overlay 不污染落盘数据）');
+  } else {
+    renderMain();
+  }
+};
+
+sessions.forEach((s) => { s._overlay = []; });
+renderSidebar();
+renderMain();
+showHint('原型：先点「模拟：远端会话开始执行」，再点侧栏第二条看实时推流');
+</script>
+</body>
+</html>

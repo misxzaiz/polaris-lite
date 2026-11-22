@@ -13,9 +13,10 @@ import { create } from 'zustand';
 import type { ChatMessage, ChatSession } from '@sdk';
 import type { Attachment } from './attachments';
 import { loadWorkspacePrefs } from './workspace-prefs';
+import { openLiveIfNeeded } from './liveOverlay';
 import {
   createSync, cacheGetAll, pullSession, pushSession, deleteSessionRemote,
-  type SyncHandle, type SessionSnapshot, type SyncStatus, type ConflictInfo,
+  type SyncHandle, type SessionSnapshot, type SyncStatus, type ConflictInfo, type LoopRunState,
 } from './sync';
 
 const STORAGE_KEY = 'chat-lite.sessions.v1';
@@ -28,76 +29,36 @@ export interface PendingSend {
   createdAt: number;
 }
 
-/** 工具调用卡（参考 Polaris ToolCallBlock 的收敛版） */
-export type ToolCardStatus = 'running' | 'done' | 'error' | 'denied' | 'awaiting' | 'resolved';
+// ---- 消息模型已上移 @sdk 契约(host-slimming-report §2.6/P1-3) ----
+// 此前这批类型是 chat-lite 私有(替换对话 UI 必须抄类型);现由宿主契约层定义,
+// 此处 re-export 保持文件内既有引用零改动。StoreMessage 保留为 chat-lite 别名
+// (它叠加了 overlayLive 的 declare 扩展,属本插件实现细节)。
+export type {
+  ToolCardStatus, ToolCardData, ToolCardMessage, InteractiveCardData, ArtifactCardData,
+  AsstBlock, AssistantBlocks, AssistantBlockMessage,
+} from '@sdk';
+import type {
+  ToolCardData as ToolCardDataT, ToolCardMessage as ToolCardMessageT,
+  InteractiveCardData as InteractiveCardDataT,
+  AsstBlock as AsstBlockT, AssistantBlockMessage as AssistantBlockMessageT,
+} from '@sdk';
 
-export interface ToolCardData {
-  callId: string;
-  name: string;
-  command?: string;
-  status: ToolCardStatus;
-  stdout?: string;
-  stderr?: string;
-  exitCode?: number;
-  durationMs?: number;
-  truncated?: boolean;
-  decision?: 'once' | 'always' | 'trust' | 'deny';
+type ToolCardData = ToolCardDataT;
+type ToolCardMessage = ToolCardMessageT;
+type InteractiveCardData = InteractiveCardDataT;
+type AsstBlock = AsstBlockT;
+type AssistantBlockMessage = AssistantBlockMessageT;
+
+/** 会话消息统一形态（chat-lite 别名;与 @sdk SessionStoreMessage 同构,
+ *  overlayLive 经下方 declare 合并扩展——不进契约,是本插件 live overlay 实现细节） */
+export type StoreMessage = ChatMessage | ToolCardMessageT | AssistantBlockMessageT;
+
+declare module '@sdk' {
+  interface ChatMessage {
+    /** live overlay 标记：跨设备实时查看的临时消息，不参与落盘同步（sync 守卫消费） */
+    overlayLive?: boolean;
+  }
 }
-
-/** role:'tool' 的消息形态（旧数据兼容；新编排输出改为 assistant.blocks 内嵌块） */
-export interface ToolCardMessage {
-  id: string;
-  role: 'tool';
-  content: string;
-  createdAt: number;
-  streaming?: boolean;
-  tool: ToolCardData;
-}
-
-/** assistant 消息的内容块（Polaris ContentBlock 收敛版）：按事件到达序追加，保序交错 */
-export type AsstBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string }
-  | { type: 'tool'; card: ToolCardData }
-  | { type: 'interactive'; card: InteractiveCardData }
-  | { type: 'artifact'; card: ArtifactCardData };
-
-/** 交互卡数据（AI 发起 question/form/confirm，用户作答后回填） */
-export interface InteractiveCardData {
-  callId: string;
-  kind: 'question' | 'form' | 'confirm';
-  title: string;
-  payload: Record<string, unknown>;
-  answer?: Record<string, unknown>;
-  status: 'awaiting' | 'answered';
-}
-
-/**
- * 通用产物块（第二个可视化插件起不再动 chat-lite）：渲染器由产物插件经
- * __PLITE_ARTIFACT_RENDERERS__ 登记（rendererType → 组件），BlockGroup 查表渲染；
- * data 是渲染器私有载荷（html-preview 存 previewId/url 等）。一次性落块，无回填流。
- */
-export interface ArtifactCardData {
-  callId: string;
-  rendererType: string;
-  title: string;
-  status: 'ready' | 'error';
-  data: Record<string, unknown>;
-}
-
-export interface AssistantBlocks {
-  blocks: AsstBlock[];
-}
-
-/**
- * 带 blocks 的 assistant 消息：核心 ChatMessage 的 chat-lite 私有扩展。
- * 不能写成 `ChatMessage & AssistantBlocks` 去做类型守卫——Core 的 role 联合不含 'tool'，
- * 与 ToolCardMessage 交叉会把 role 推断成 never，导致 m.tool 等属性全部不可达。
- */
-export type AssistantBlockMessage = ChatMessage & AssistantBlocks;
-
-/** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
-export type StoreMessage = ChatMessage | ToolCardMessage | AssistantBlockMessage;
 
 export function isToolCard(m: StoreMessage): m is ToolCardMessage {
   return (m as ToolCardMessage).role === 'tool' && !!(m as ToolCardMessage).tool;
@@ -108,11 +69,11 @@ export function hasBlocks(m: StoreMessage): m is AssistantBlockMessage {
 }
 
 /** 卡片数据体积上限（localStorage 1.5MB 全库额度；服务端输出 64KB 全量不留存） */
-const CARD_STORE_CAP = 16 * 1024;
+export const CARD_STORE_CAP = 16 * 1024;
 
 function trimCard(card: ToolCardData): ToolCardData {
   const cut = (s?: string) => (s && s.length > CARD_STORE_CAP ? `${s.slice(0, CARD_STORE_CAP)}\n…[已截断]` : s);
-  return { ...card, stdout: cut(card.stdout), stderr: cut(card.stderr) };
+  return { ...card, stdout: cut(card.stdout), stderr: cut(card.stderr), command: cut(card.command), argsJson: cut(card.argsJson) };
 }
 
 /** 会话的 store 形态：核心 ChatSession 的 role 不足以容纳工具卡，消息用 StoreMessage 放宽 */
@@ -150,6 +111,8 @@ interface SessionState {
   syncStatus: 'idle' | 'syncing' | 'offline' | 'conflict';
   /** 待用户决策的冲突（sessionId → 服务端版本；非空时输入区提示条） */
   conflicts: Record<string, { serverVersion: number }>;
+  /** 正在执行编排 loop 的会话表（服务端运行态；侧栏「执行中」徽标消费） */
+  runningLoops: Record<string, LoopRunState>;
   createSession: (title?: string) => string;
   setActive: (id: string) => void;
   renameSession: (id: string, title: string) => void;
@@ -160,6 +123,8 @@ interface SessionState {
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
+  /** 编辑重答/重新生成的破坏性截断：丢弃 msgId 及其之后的全部消息（配合 agent-loop reset 协议使用） */
+  truncateMessagesBefore: (sessionId: string, msgId: string) => void;
   /** assistant 块追加：delta 进末尾 text 块（无则新建）；tool 块直接追加。content 镜像同步。 */
   appendAssistantBlock: (sessionId: string, msgId: string, block: AsstBlock) => void;
   /** 按 callId 更新 assistant 消息内的工具块 */
@@ -242,6 +207,15 @@ function onSyncConflict(info: ConflictInfo): void {
   useSessionStore.setState({ conflicts: { ...st.conflicts, [info.sessionId]: { serverVersion: info.serverVersion } }, syncStatus: 'conflict' });
 }
 
+function onRunning(running: Record<string, LoopRunState>): void {
+  const cur = useSessionStore.getState().runningLoops;
+  // 引用相等即跳过（轮询每 30s 一次，无变化不触发订阅者重渲染）
+  if (cur === running) return;
+  const a = Object.keys(cur), b = Object.keys(running);
+  if (a.length === b.length && a.every((id) => cur[id]?.lastBeat === running[id]?.lastBeat && cur[id]?.phase === running[id]?.phase)) return;
+  useSessionStore.setState({ runningLoops: running });
+}
+
 /** 初始化同步层（模块加载即执行；登录前 pull 会 401，登录后由轮询/事件补齐） */
 function bootstrapSync(): void {
   if (typeof window === 'undefined') return;
@@ -249,6 +223,7 @@ function bootstrapSync(): void {
     applyServerSnapshot,
     applyTombstone,
     setStatus: setSyncStatus,
+    onRunning,
     onConflict: onSyncConflict,
     getState: syncState,
     isStreaming: (id) => {
@@ -269,6 +244,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   dirty: new Set<string>(),
   syncStatus: 'idle',
   conflicts: {},
+  runningLoops: {},
 
   createSession: (title) => {
     const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -288,6 +264,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setActive: (id) => {
     set({ activeId: id });
     scheduleSync();
+    // 跨设备实时查看：目标会话在执行中（服务端 running 表）→ 建立 live overlay 订阅
+    void openLiveIfNeeded(id).catch(() => undefined);
   },
 
   renameSession: (id, title) => {
@@ -360,6 +338,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     scheduleSync(); // 防抖：流式高频更新只会落一次（推送也只落一次）
   },
 
+  truncateMessagesBefore: (sessionId, msgId) => {
+    set((st) => ({
+      sessions: sortSessions(st.sessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        const idx = s.messages.findIndex((m) => m.id === msgId);
+        if (idx < 0) return s;
+        return touch({ ...s, messages: s.messages.slice(0, idx) });
+      })),
+    }));
+    dirty.add(sessionId);
+    scheduleSync();
+  },
+
   appendAssistantBlock: (sessionId, msgId, block) => {
     set((st) => ({
       sessions: sortSessions(st.sessions.map((s) => {
@@ -395,13 +386,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               }
               return { ...cur, blocks: [...blocks, block] };
             }
-            // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive/artifact 卡原样保留
+            // 非 text 块按自身类型入列：tool 卡做体积裁剪，interactive/artifact 卡原样保留，
+            // notice/truncated 为纯文本轻块
             const next: AsstBlock =
               block.type === 'tool'
                 ? { type: 'tool', card: trimCard(block.card) }
                 : block.type === 'interactive'
                   ? { type: 'interactive', card: block.card }
-                  : { type: 'artifact', card: block.card };
+                  : block.type === 'notice'
+                    ? { type: 'notice', text: block.text }
+                    : block.type === 'truncated'
+                      ? { type: 'truncated', text: block.text }
+                      : { type: 'artifact', card: block.card };
             return { ...cur, blocks: [...blocks, next] };
           }),
         });
@@ -572,6 +568,13 @@ export async function acceptServerVersion(sessionId: string): Promise<void> {
 /** 主动拉一次服务端对账（发送消息后等场景可调用；平时由 30s 轮询覆盖） */
 export async function pullNow(): Promise<void> {
   if (syncHandle) await syncHandle.pullNow();
+}
+
+/** 侧栏手动刷新：立即对账（pull 索引/增量 + running 表刷新）。返回是否触发了同步。 */
+export async function refreshNow(): Promise<boolean> {
+  if (!syncHandle) return false;
+  await syncHandle.pullNow();
+  return true;
 }
 
 /**

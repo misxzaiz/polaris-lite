@@ -59,12 +59,14 @@ async function adminApi<T>(path: string, body?: unknown): Promise<T> {
 function PluginList({ rows, onChanged }: { rows: PluginRow[]; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toggled, setToggled] = useState<string | null>(null);
 
   const toggle = async (row: PluginRow) => {
     setBusy(row.id);
     setError(null);
     try {
       await adminApi('/api/plugin-admin/set-enabled', { id: row.id, enabled: !row.enabled });
+      setToggled(`${row.name ?? row.id} 已${row.enabled ? '禁用' : '启用'}`);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -104,8 +106,14 @@ function PluginList({ rows, onChanged }: { rows: PluginRow[]; onChanged: () => v
           </div>
         </div>
       ))}
+      {toggled && (
+        <div className="pm-reload-row" role="status">
+          <span>{toggled}，重载后生效：</span>
+          <button type="button" className="pm-btn" onClick={() => window.location.reload()}>立即重载</button>
+        </div>
+      )}
       {error && <div className="pm-error" role="alert">{error}</div>}
-      <p className="pm-hint">开关写入 registry.json，<strong>刷新页面 / 重启应用后生效</strong>（插件在启动时装配）。</p>
+      <p className="pm-hint">开关写入 registry.json，<strong>重载应用后生效</strong>（插件在启动时装配）。</p>
     </div>
   );
 }
@@ -248,6 +256,7 @@ export function PluginManagerPanel() {
   const [tab, setTab] = useState<Tab>('plugins');
   const [rows, setRows] = useState<PluginRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState('');
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -277,6 +286,18 @@ export function PluginManagerPanel() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  /** 手动重扫工具表：广播 tool-registered，agent-loop 立即重新发现并重建工具快照。
+   *  适用：AI/面板刚改过 MCP、技能等，想不发消息就确认工具有没有同步。 */
+  const rescanTools = () => {
+    if (!api) return;
+    try {
+      api.emit('tool-registered', { source: 'plugin-manager', op: 'rescan' });
+      setFlash('已触发工具重新发现——AI 下一条消息即用最新工具表（MCP 面板可看各 server 状态）');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div className="pm-root" data-testid="plugin-manager">
       <div className="pm-tabs" role="tablist">
@@ -292,6 +313,15 @@ export function PluginManagerPanel() {
             {t.label}
           </button>
         ))}
+      </div>
+      <div className="pm-toolbar">
+        <button type="button" className="pm-btn" title="让 AI 的工具表重新发现一遍（不发消息也能同步 MCP/技能等变更）" onClick={rescanTools}>
+          ↻ 刷新工具表
+        </button>
+        <button type="button" className="pm-btn" title="整页重载：插件启停、商城装卸等所有「重载生效」的变更一次到位" onClick={() => window.location.reload()}>
+          ⟳ 重载应用
+        </button>
+        {flash && <span className="pm-flash" role="status">{flash}</span>}
       </div>
       <div className="pm-body">
         {error && <div className="pm-error" role="alert">{error}</div>}

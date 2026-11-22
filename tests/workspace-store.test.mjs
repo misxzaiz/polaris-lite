@@ -9,9 +9,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WorkspaceStore, WORKSPACE_STORAGE_KEY } from '../src/core/workspace/store.ts';
-import { createDefaultTree, replaceById } from '../src/core/workspace/treeOps.ts';
-import { findNode, validateWorkspace } from '../src/core/workspace/schema.ts';
+import { WorkspaceStore, WORKSPACE_STORAGE_KEY } from '../plugins/workspace-layout/store.ts';
+import { createDefaultTree, replaceById } from '../plugins/workspace-layout/treeOps.ts';
+import { findNode, validateWorkspace } from '../plugins/sdk/schema.ts';
 
 function fakePersistence(initial = {}) {
   const data = new Map(Object.entries(initial));

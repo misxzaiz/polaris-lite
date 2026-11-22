@@ -14,6 +14,7 @@
  *   message.done / stream.error / engine.status（冷启动等状态行，喂 chat-lite 看门狗）
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
+import { createSseReader, createInterruptMap } from '../engine-kit';
 
 const STREAM_URL = '/api/codebuddy/stream';
 const INTERRUPT_URL = '/api/codebuddy/interrupt';
@@ -27,7 +28,7 @@ interface ChatStartPayload {
   attachments?: { name?: string; mime?: string; content?: string; textContent?: string }[];
 }
 
-const running = new Map<string, () => void>();
+const running = createInterruptMap();
 
 const streamHandler: StreamCapabilityHandler = async (req, emit) => {
   const payload = (req.payload ?? {}) as ChatStartPayload;
@@ -59,23 +60,17 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
       return;
     }
 
-    // SSE 解析（与 real-engine 的中继路径同构）
+    // SSE 解析（engine-kit 共享 reader；服务端事件已是 { kind, payload } 形态）
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let buf = '';
+    const sse = createSseReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
+      for (const frame of sse.push(decoder.decode(value, { stream: true }))) {
+        if (!frame.data) continue;
         try {
-          const ev = JSON.parse(data) as { kind?: string; payload?: unknown };
+          const ev = JSON.parse(frame.data) as { kind?: string; payload?: unknown };
           if (ev.kind) emit({ kind: ev.kind, payload: ev.payload ?? {} });
         } catch { /* 跳过不完整行 */ }
       }

@@ -162,3 +162,35 @@
 - chat-store/server.mjs 当前有未提交 WIP（他人改动），Top1/Top2 动它需要先协调合并。
 - 非 bash 工具 argsJson 丢失是**数据面缺陷**，Top1 落地后自然修复（tool.calls 事件里有全文）；若等不及可单独小修 chat-lite 落卡回退逻辑（`command || argsJson`）——但那也是动 chat-lite。
 - 路径 A 的 chat-lite→transcript-share dispatch 依赖：探测不可用即隐藏按钮，不阻塞 chat-lite 主流程。
+
+---
+
+## 五、实施记录（2026-11-21，P1+P2 全部落地，commit 01fbc50）
+
+按本文档方案实施，全部完成：
+
+- **P1**：chat-lite `ShareEntry.tsx`（按钮+portal 浮层：链接/个人版 md/AI 分析版/吊销）；`/api/share/export` 端点；render 双投影（`renderHumanMarkdown` / `buildAiAnalysis`，schema `plite-transcript-ai-v1` + `deriveStats`）；`/markdown` 改个人版、新增 `/ai`；网页工具栏三链接。**实施时简化**：入口按钮走同源 HTTP 而非 cap 总线 dispatch——chat-lite 无需 grants/manifest 改动，耦合面更小（方案 §1.2 路径 A 的加强版）。
+- **P2**：#4 traceTap 补 resHeaders/响应侧模型名/error 帧/estimated；#1 live-event 镜像捕获（traceTap 拦 POST body，**chat-store 零改动**——比方案更优，绕开了 chat-store WIP 文件冲突）→ `/api/share/events` → events JSONL；#2 agent-loop mirrorLive 白名单放开 `context.*`；#3 `turnsBridge.ts` 读 ai-events IndexedDB（bySession 复合索引，60s 节流）→ `/api/share/turns`；#5 交互卡超时补 emit + interactive/artifact 渲染补全。
+- **验证**：transcript-share 12/12、全仓 307/307；dev 5000 真实对话 E2E——events 捕获 `context.snapshot`（白名单放开生效）、turns 自动同步 2 条、human md 统计头（4 条消息 · 2 轮 · 10 次工具 · 53.3k tokens）、AI 版 stats 推导 cacheHitRate=0.788（真实 usage）；9825 已更新。
+- **commit 纪律**：agent-loop/interactive-cards 为混合文件（用户 WIP + 我的 hunks），采用备份→重置→重放→提交→恢复流程，用户 WIP 完整保留在工作树未提交。
+
+## 六、入口位置修正（commit 5315e15）
+
+用户反馈：不要在输入框下新增独立按钮——放进**调谐抽屉**（展开后有工作目录/执行模式/待发队列的那个）里。
+
+- `ShareEntry`（按钮+portal 浮层）→ `ShareDrawerRows`（抽屉内联行组），与工作目录/执行模式/待发队列同款 `chat-assistant-row` 行结构：
+  - 「链接有效期」行（1h/24h/7d/30d chips）
+  - 「网页链接」行（生成并复制 + 打开链接）
+  - 「导出文件」行（个人版 .md / AI 分析版）
+  - 「活动链接（N）」行（摘要+剩余时长+吊销，有链接时才出现）
+  - 「状态」行（操作反馈，有消息时才出现）
+- 数据链与授权面不变（同源 HTTP）；portal/定位/点空白关闭逻辑全部移除（抽屉内联展开，无裁剪问题）。
+- 浏览器 E2E：抽屉六行齐全、生成链接/活动列表/吊销实测通过；9825 已更新。
+
+## 七、分享前预览（commit 后续追加）
+
+用户需求：分享前先看效果。实现：`/api/share/export` 新增 `format=html`——与正式分享页**同一渲染器**的会话门禁静态快照（`live:false`），**不创建 token、不落任何状态**（预览 N 次列表仍为空，测试断言保证）。ShareDrawer 抽屉新增「预览」行（"网页版效果"按钮，新开标签页）。原则：看到什么分享出去就是什么。
+
+## 八、个人版「点开显示不对」修复（commit 后续追加）
+
+根因：个人版按钮直接下载 .md 文件，点开是未渲染的 markdown 原文。修复：新增 `renderHumanHtml`（个人版投影的服务端直渲染 HTML，无 JS、暗色自适应）+ `format=human-html`；ShareDrawer「预览」行拆双 chip（个人版效果 / 网页完整版）；human-html 页面工具栏内含「下载 .md / AI 分析版」——**下载意图与预览意图分离**：想看效果点预览，要文件点下载。

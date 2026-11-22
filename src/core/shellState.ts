@@ -16,10 +16,38 @@ export type LayoutDrawer = 'none' | 'sidebar' | 'panel';
 let currentDrawer: LayoutDrawer = 'none';
 const drawerSubs = new Set<(d: LayoutDrawer) => void>();
 
+// 抽屉跨模块同步（P2-2 必修包修1）:布局插件经 stateBridge 只读镜像本状态。
+// 变更双向通知:本侧 setDrawer 派发事件(插件侧监听同步);插件侧 setDrawer 也派发,
+// 本侧监听同步——监听方**不得**再派发(防环;派发只发生在两侧 setDrawer 入口)。
+// 通道名 = @sdk CHANNEL_DRAWER_STATE / CHANNEL_DRAWER_EVENT,宿主侧就地字面量对齐。
+const DRAWER_EVENT = 'plite-drawer-changed';
+
+function mirrorDrawer(d: LayoutDrawer): void {
+  try {
+    (window as unknown as Record<string, unknown>)['__PLITE_DRAWER_STATE__'] = d;
+    window.dispatchEvent(new CustomEvent(DRAWER_EVENT, { detail: d }));
+  } catch { /* 非浏览器环境忽略 */ }
+}
+
+// 初始化即发布初值 + 监听插件侧变更(不得再派发,防环)
+if (typeof window !== 'undefined') {
+  try {
+    (window as unknown as Record<string, unknown>)['__PLITE_DRAWER_STATE__'] = currentDrawer;
+    window.addEventListener(DRAWER_EVENT, (e) => {
+      const d = (e as CustomEvent<LayoutDrawer>).detail;
+      if (d && d !== currentDrawer && ['none', 'sidebar', 'panel'].includes(d)) {
+        currentDrawer = d;
+        drawerSubs.forEach((fn) => fn(d));
+      }
+    });
+  } catch { /* 非浏览器环境忽略 */ }
+}
+
 export function setDrawer(d: LayoutDrawer): void {
   if (currentDrawer === d) return;
   currentDrawer = d;
   drawerSubs.forEach((fn) => fn(d));
+  mirrorDrawer(d);
 }
 
 export function getDrawer(): LayoutDrawer {

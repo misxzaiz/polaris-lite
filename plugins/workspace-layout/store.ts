@@ -13,8 +13,8 @@
  * 3. **先校验再渲染**：`applyTree` 收到的是活对象，可能带环或超深，必须在校验器里挡掉。
  * 4. **失败必回默认**：脏数据 → 备份原件 → 回落默认树 → 给一句提示，任何情况都不白屏。
  */
-import type { AnchorId, SplitDir, SplitSize, TabsNode, ViewLeaf, WorkspaceNode } from './schema.ts';
-import { WORKSPACE_LIMITS, findNode, validateWorkspace } from './schema.ts';
+import type { AnchorId, SplitDir, SplitSize, TabsNode, ViewLeaf, WorkspaceNode } from '../sdk/schema.ts';
+import { WORKSPACE_LIMITS, findNode, validateWorkspace } from '../sdk/schema.ts';
 import { isHostSlotView, slotViewType } from './hostViews.ts';
 import {
   addToTabs,
@@ -90,6 +90,8 @@ export class WorkspaceStore {
   private readonly debounceMs: number;
   private readonly isAliveViewType: (viewType: string) => boolean;
   private readonly knownViewTypes: () => Set<string> | undefined;
+  /** 恢复幂等标志(P2-2):restore 的时序不变量「restore → 变更」由 ensureRestored 机械化 */
+  private restored = false;
 
   constructor(opts: WorkspaceStoreOptions = {}) {
     this.persistence = opts.persistence ?? null;
@@ -154,7 +156,18 @@ export class WorkspaceStore {
    * 打开动作全部抹掉（实测：`open` 返回 ok，但界面上没有那个视图）。所以顺序只能是
    * **restore → 插件 setup → prune**。
    */
+  /** P2-2:restore 时序机械化——任何树变更前若尚未 restore,先恢复(幂等,单次开销)。
+   *  无持久化数据时不替换 state(保留当前树引用——「整体拒绝不改引用」的语义不受影响)。 */
+  private ensureRestored(): void {
+    if (this.restored) return;
+    this.restored = true;
+    const raw = this.persistence?.read(this.key) ?? null;
+    if (!raw) return;
+    this.restore();
+  }
+
   restore(): void {
+    this.restored = true;
     const raw = this.persistence?.read(this.key) ?? null;
     if (!raw) {
       this.state = { tree: createDefaultTree(), revision: 0, notice: null };
@@ -204,6 +217,7 @@ export class WorkspaceStore {
    * 折叠是幂等的：没有死视图时不动树、不写盘。
    */
   pruneDeadViews(): void {
+    this.ensureRestored();
     const collapsed = collapseTree(this.state.tree, (t) => this.isAliveViewType(t));
     if (!collapsed) {
       this.commitChecked(createDefaultTree(), '布局中的视图均已不可用，已恢复默认布局');
@@ -243,6 +257,7 @@ export class WorkspaceStore {
    * 移动端的抽屉按钮也会指向不存在的元素——表现为「插件说成功了，刷新就没了」。
    */
   apply(tree: unknown, opts: { requireKnownViews?: boolean; requireAllAnchors?: boolean } = {}): LayoutResult {
+    this.ensureRestored();
     // **深拷贝**：插件传进来的是活对象，applyTree 返回后它仍可能在用同一个引用
     // （切换透视时复用模板、往常量里 push 视图都是常见写法）。不克隆的话，宿主状态与
     // 校验时的快照会分叉——渲染器读到 `children[1] === undefined` 直接抛 TypeError，
@@ -287,6 +302,7 @@ export class WorkspaceStore {
    *   行为与结果不一致，用户会以为按钮坏了。
    */
   close(nodeId: string): LayoutResult {
+    this.ensureRestored();
     const node = findNode(this.state.tree, nodeId);
     if (!node) return { ok: false, error: `节点不存在：${nodeId}` };
     if (node.kind === 'anchor') return { ok: false, error: '锚点不可关闭（它是保留位置）' };
@@ -324,6 +340,7 @@ export class WorkspaceStore {
     viewType: string,
     opts: { id?: string; anchor?: AnchorId; where?: 'tab' | 'split-right' | 'split-bottom'; allowMultiple?: boolean } = {},
   ): LayoutResult {
+    this.ensureRestored();
     const where = opts.where ?? 'split-right';
     const anchor = opts.anchor ?? 'stream';
     const target = anchorNode(this.state.tree, anchor);
@@ -388,6 +405,7 @@ export class WorkspaceStore {
 
   /** 把已有视图拆到另一侧 */
   split(nodeId: string, dir: SplitDir, viewType: string, id?: string): LayoutResult {
+    this.ensureRestored();
     const leafId = id ?? nextNodeId(this.state.tree, `${sanitizeId(viewType)}-i`);
     const next = splitLeaf(this.state.tree, nodeId, dir, { kind: 'view', id: leafId, viewType });
     if (!next) return { ok: false, error: '拆分失败（目标不存在或 id 冲突）' };
@@ -398,6 +416,7 @@ export class WorkspaceStore {
 
   /** 移动节点到某个 tabs 组（拖 tab 用） */
   move(nodeId: string, tabsId: string, index: number): LayoutResult {
+    this.ensureRestored();
     const next = moveNodeToTabs(this.state.tree, nodeId, tabsId, index);
     if (!next) return { ok: false, error: '移动失败（会把节点拖进自己的子树，或目标不是 tabs 组）' };
     // 拖拽产生的结构必须仍然合法：tabs 拖进 tabs 会被校验器拒绝，宁可不动
@@ -418,6 +437,7 @@ export class WorkspaceStore {
 
   /** 恢复默认布局 */
   reset(): void {
+    this.ensureRestored();
     this.commit(createDefaultTree(), null);
   }
 

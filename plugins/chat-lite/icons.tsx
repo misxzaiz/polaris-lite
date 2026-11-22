@@ -81,3 +81,35 @@ export function ChevronRightIcon() {
 export function RefreshIcon() {
   return <Icon size={13}><path d="M20 12a8 8 0 1 1-2.34-5.66" {...stroke} /><path d="M20 4v4h-4" {...stroke} /></Icon>;
 }
+
+// ===== 消息操作条图标（P0/P1 消息操作） =====
+
+/** 编辑（铅笔） */
+export function EditIcon() {
+  return <Icon size={13}><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" {...stroke} /></Icon>;
+}
+
+/** 重发（追加新一轮的回环箭头） */
+export function ResendIcon() {
+  return <Icon size={13}><path d="M5 9h11a4 4 0 0 1 0 8H8" {...stroke} /><path d="m9 5-4 4 4 4" {...stroke} /></Icon>;
+}
+
+/** 重新生成（循环箭头） */
+export function RegenIcon() {
+  return <Icon size={13}><path d="M20 12a8 8 0 1 1-2.34-5.66" {...stroke} /><path d="M20 4v4h-4" {...stroke} /></Icon>;
+}
+
+/** 回填输入框（下箭头入托盘） */
+export function BackfillIcon() {
+  return <Icon size={13}><path d="M12 4v10m0 0 4-4m-4 4-4-4" {...stroke} /><path d="M5 19h14" {...stroke} /></Icon>;
+}
+
+/** 跳到本条开头（上箭头） */
+export function JumpIcon() {
+  return <Icon size={13}><path d="M12 19V5m0 0-6 6m6-6 6 6" {...stroke} /></Icon>;
+}
+
+/** 侧栏重命名（小铅笔） */
+export function PencilIcon() {
+  return <Icon size={14}><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" {...stroke} /></Icon>;
+}

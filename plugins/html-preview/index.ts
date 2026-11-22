@@ -6,13 +6,13 @@
  * - cap.tool.render：describe 动作向 agent-loop 提供工具描述；render 动作
  *   POST /api/preview/render（服务端扫描+落盘）→ 只回 previewId 引用 →
  *   emit artifact.created（chat-lite 通用 artifact 块渲染）；
- * - 渲染器登记：__PLITE_ARTIFACT_RENDERERS__['html-preview'] = PreviewCard
+ * - 渲染器登记：CHANNEL_ARTIFACT_RENDERERS(@sdk)['html-preview'] = PreviewCard
  *   （chat-lite 块渲染查表，本插件不进 chat-lite 源码）；
  * - panel 槽：预览应用架（服务端落盘实读，刷新不丢）。
  *
  * 服务端半边在 server.mjs（/api/preview/*），双入口由 server-registry 登记。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 import { PreviewCard } from './PreviewCard';
 import { HtmlPreviewPanel } from './Panel';
 import './panel.css';
@@ -111,9 +111,9 @@ export const htmlPreviewPlugin: LitePlugin = {
     api.registerCapability.register('cap.tool.render', createHandler());
     // artifact 渲染器登记（chat-lite BlockGroup 查表渲染；渲染器自带样式与组件）
     const w = window as unknown as Record<string, unknown>;
-    const registry = (w.__PLITE_ARTIFACT_RENDERERS__ ?? {}) as Record<string, unknown>;
+    const registry = (w[CHANNEL_ARTIFACT_RENDERERS] ?? {}) as Record<string, unknown>;
     registry['html-preview'] = PreviewCard;
-    w.__PLITE_ARTIFACT_RENDERERS__ = registry;
+    w[CHANNEL_ARTIFACT_RENDERERS] = registry;
   },
 };
 

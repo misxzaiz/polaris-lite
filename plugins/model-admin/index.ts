@@ -8,7 +8,8 @@
  *   浏览器只拿结论；内置知识表与结论合并仍在前端完成（表不需要 key）；
  * - 对引擎只暴露 masked 视图：引擎不再需要 key，它把 providerId 交给中继即可。
  *
- * cap.model.admin 动作：list / resolveActive / save / remove / setDefault / test / probe
+ * cap.model.admin 动作：list / resolveActive / save / remove / setDefault / test / probe /
+ * fetchModels（拉取上游 /models）/ revealKey（查看明文 Key，带护栏 + 审计）
  */
 import type { LitePlugin, SlotHostApi, CapabilityHandler } from '@sdk';
 import { ModelAdminPanel, setPanelApi } from './Panel';
@@ -26,8 +27,16 @@ export interface ModelCapabilities {
   effort: 'minimal' | 'low' | 'medium' | 'high' | null;
   /** 是否支持图片输入。缺省=未知 */
   vision: boolean;
-  /** 能力来源标记（自动识别结果的可信度追溯） */
-  detected?: 'builtin' | 'probe' | 'manual';
+  /** 工具调用支持（实测/catalog）。null=未知 */
+  tools?: boolean | null;
+  /** 思考可关（thinking:{type:'disabled'} 是否被接受）。null=未知 */
+  canDisableThinking?: boolean | null;
+  /** 思考与输出共享 max_tokens 预算（截断后可能空内容）。null=未知 */
+  reasoningEatsBudget?: boolean | null;
+  /** 能力来源标记（自动识别结果的可信度追溯；reveal=网关限值报错揭示，权威） */
+  detected?: 'builtin' | 'catalog' | 'probe' | 'reveal' | 'manual';
+  /** 最近一次识别时间（epoch ms；manual 编辑不清除——人工值的"来源"仍是 manual） */
+  detectedAt?: number;
 }
 
 export interface ModelInfo {
@@ -85,9 +94,50 @@ function broadcastChange(api: SlotHostApi, configs: PublicProvider[]): void {
   api.emit('model-config-changed', { configs, active });
 }
 
+export interface ProbeReport {
+  modelId: string;
+  notes: string[];
+  source: string;
+}
+
+/**
+ * 识别主流程（手动「一键识别/深度识别」与保存后自动识别共用）。
+ * deep=true 跑思考差分（~8k token/模型，按钮触发档）；浅层 ≤120 token/模型。
+ */
+async function runProbeFlow(
+  id: string | undefined,
+  deep: boolean,
+  live: boolean = true,
+  modelIds?: string[],
+): Promise<{ ok: boolean; error?: string; reports?: ProbeReport[]; catalogNotes?: string[]; configs?: PublicProvider[] }> {
+  if (!id) return { ok: false, error: 'id required' };
+  const { configs } = await callApi<{ configs: PublicProvider[] }>('/api/providers/list');
+  const target = configs.find((c) => c.id === id);
+  if (!target) return { ok: false, error: `provider not found: ${id}` };
+  if (!target.hasKey) return { ok: false, error: '该供应商未配置 API Key，跳过识别' };
+
+  const facts = await callApi<ProbeFacts>('/api/providers/probe', { id, live, deep, ...(modelIds?.length ? { modelIds } : {}) });
+  const mergedModels = target.models.map((m) => mergeModelCaps(m, facts));
+  const reports = mergedModels.map((r, i) => ({
+    modelId: target.models[i].id,
+    notes: r.notes,
+    source: r.model.capabilities.detected ?? 'builtin',
+  }));
+  const { configs: saved } = await callApi<{ configs: PublicProvider[] }>('/api/providers/save', {
+    config: { ...target, models: mergedModels.map((r) => r.model) },
+  });
+  if (hostApi) broadcastChange(hostApi, saved);
+  return { ok: true, reports, catalogNotes: facts.notes, configs: saved };
+}
+
+/** 单模型重探：只打指定模型的探针，返回事实（不落库——由调用方决定写回位置） */
+async function probeModels(id: string | undefined, modelIds: string[]): Promise<ProbeFacts> {
+  return callApi<ProbeFacts>('/api/providers/probe', { id, live: true, deep: false, modelIds });
+}
+
 function createAdminHandler(): CapabilityHandler {
   return async (req) => {
-    const payload = (req.payload ?? {}) as { id?: string; config?: ProviderConfig; live?: boolean };
+    const payload = (req.payload ?? {}) as { id?: string; config?: ProviderConfig; live?: boolean; deep?: boolean; modelIds?: string[]; baseURL?: string; apiKey?: string };
     try {
       switch (req.action) {
         case 'list':
@@ -107,6 +157,14 @@ function createAdminHandler(): CapabilityHandler {
           if (!incoming?.id) return { ok: false, error: 'config.id required' };
           const data = await callApi<{ configs: PublicProvider[] }>('/api/providers/save', { config: incoming });
           if (hostApi) broadcastChange(hostApi, data.configs);
+          // 自动识别（浅层，预算封顶 ≤120 token/模型）：保存成功后后台跑，完成后再次
+          // 广播——引擎据此拿到补齐的能力表（max_tokens 不再裸奔）。失败静默：识别是
+          // 增益不是门槛，面板可手动重试。
+          void runProbeFlow(incoming.id, false)
+            .then((r) => {
+              if (r.ok && hostApi && r.configs) broadcastChange(hostApi, r.configs);
+            })
+            .catch(() => { /* 自动识别失败不打扰用户 */ });
           return data;
         }
 
@@ -126,30 +184,25 @@ function createAdminHandler(): CapabilityHandler {
           // 连通性测试：服务端持 key 直连上游，前端只拿结论
           return await callApi<{ ok: boolean; text: string }>('/api/providers/test', { id: payload.id });
 
-        case 'probe': {
-          // 一键识别：服务端真实探测 → 前端「内置表 → 实测」合并 → 回写 models
-          const { configs } = await callApi<{ configs: PublicProvider[] }>('/api/providers/list');
-          const target = configs.find((c) => c.id === payload.id);
-          if (!target) return { ok: false, error: `provider not found: ${payload.id}` };
-
-          const facts = await callApi<ProbeFacts>('/api/providers/probe', {
+        case 'fetchModels':
+          // 拉取上游 /models：已存供应商只传 id（key 用存储值）；新建中传 baseURL + 表单 key
+          return await callApi<{ ids: string[] | null; count: number }>('/api/providers/fetch-models', {
             id: payload.id,
-            live: payload.live !== false,
+            baseURL: payload.baseURL,
+            apiKey: payload.apiKey,
           });
 
-          const mergedModels = target.models.map((m) => mergeModelCaps(m, facts));
-          const reports = mergedModels.map((r, i) => ({
-            modelId: target.models[i].id,
-            notes: r.notes,
-            source: r.model.capabilities.detected ?? 'builtin',
-          }));
+        case 'revealKey':
+          // 明文 Key 查看：服务端会话门禁 + PLITE_ALLOW_REVEAL 开关 + 审计；前端做 10s 自动隐藏
+          return await callApi<{ key: string }>('/api/providers/reveal-key', { id: payload.id });
 
-          const { configs: saved } = await callApi<{ configs: PublicProvider[] }>('/api/providers/save', {
-            config: { ...target, models: mergedModels.map((r) => r.model) },
-          });
-          if (hostApi) broadcastChange(hostApi, saved);
-          return { ok: true, reports, catalogNotes: facts.notes, configs: saved };
-        }
+        case 'probe':
+          // 一键识别 / 深度识别：服务端真实探测 → 前端「内置表 → 目录 → 实测 → 揭示」合并 → 回写 models
+          return await runProbeFlow(payload.id, payload.deep === true, payload.live !== false, payload.modelIds);
+
+        case 'probeModels':
+          // 单模型重探（逐模型抽屉）：只打指定模型，返回事实不落库
+          return { facts: await probeModels(payload.id, payload.modelIds ?? []) };
 
         default:
           return { ok: false, error: `unknown action: ${req.action}` };
@@ -165,7 +218,7 @@ export const modelAdminPlugin: LitePlugin = {
     id: 'model-admin',
     // name 为插件身份名（开发者视角）；用户可见的 tab 名由 slots[].title 给出
     name: '模型供应商管理',
-    version: '0.3.0',
+    version: '0.4.0',
     // 面板自身经总线调用本插件提供的 cap.model.admin（自调同样要过 gate，故需声明）
     capabilities: ['cap.model.admin'],
     provides: ['cap.model.admin'],

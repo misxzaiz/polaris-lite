@@ -1,0 +1,43 @@
+// 手动复现：双次安装冲突检查（P2 修复验证）
+const { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } = require('node:fs');
+const fs = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const crypto = require('node:crypto');
+const root = mkdtempSync(join(tmpdir(), 'mkdbg2-'));
+const dataDir = join(root, 'data');
+const marketDir = join(root, 'src');
+const repoRoot = join(root, 'repo');
+mkdirSync(join(repoRoot, 'public', 'plugins'), { recursive: true });
+mkdirSync(join(repoRoot, 'dist', 'plugins'), { recursive: true });
+const pkg = join(marketDir, 'hello-tool');
+mkdirSync(pkg, { recursive: true });
+const js = 'export default 1;';
+fs.writeFileSync(join(pkg, 'plugin.json'), JSON.stringify({ id: 'hello-tool', name: 'x', version: '0.1.0' }));
+fs.writeFileSync(join(pkg, 'plugin.js'), js);
+const sha = crypto.createHash('sha256').update(js).digest('hex');
+fs.writeFileSync(join(marketDir, 'index.json'), JSON.stringify({ name: 's', plugins: [{ id: 'hello-tool', name: 'x', version: '0.1.0', description: '', sha256: sha }] }));
+const origWrite = fs.writeFileSync;
+const origCopy = fs.copyFileSync;
+fs.copyFileSync = function (p, ...rest) { console.log('COPY:', String(p).slice(-60), '->', String(rest[0]).slice(-60)); return origCopy(p, ...rest); };
+fs.writeFileSync = function (p, ...rest) { console.log('WRITE:', String(p).slice(-70)); return origWrite(p, ...rest); };
+const { createServerPart } = require('D:/space/base/polaris-lite/plugins/plugin-market/server.mjs');
+const baseRegistry = { plugins: [{ id: 'builtin-x', module: '/plugins/builtin-x/plugin.js', enabled: true }] };
+origWrite(join(repoRoot, 'public', 'plugins', 'registry.json'), JSON.stringify(baseRegistry));
+origWrite(join(repoRoot, 'dist', 'plugins', 'registry.json'), JSON.stringify(baseRegistry));
+const mw = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir, repoRoot });
+const call = (p, b) => { const chunks = [Buffer.from(JSON.stringify(b))]; const res = { code: 0, body: '', writeHead(c) { this.code = c; return this; }, end(x) { this.body = x ?? ''; } }; return mw({ url: p, method: 'POST', headers: {}, on(ev, cb) { if (ev === 'data' && chunks.length) cb(chunks.shift()); if (ev === 'end') cb(); return this; } }, res, () => {}).then(() => { try { return JSON.parse(res.body); } catch { return null; } }); }
+(async () => {
+  await call('/api/market/sources', { name: 's', type: 'dir', ref: marketDir });
+  const i1 = await call('/api/market/install', { source: 's', id: 'hello-tool' });
+  console.log('i1:', JSON.stringify(i1));
+  const rc = readFileSync(join(repoRoot, 'public/plugins/registry.json'), 'utf8');
+  console.log('registry len:', rc.length, '| 含 hello-tool:', rc.includes('hello-tool'), '| 尾部:', rc.slice(-120));
+  const regNow = JSON.parse(readFileSync(join(repoRoot, 'public/plugins/registry.json'), 'utf8'));
+  console.log('registry after i1:', regNow.plugins.map(p => p.id).join(','));
+  const i2 = await call('/api/market/install', { source: 's', id: 'hello-tool' });
+  console.log('i2 (expect 400):', i2.status ?? 400, JSON.stringify(i2));
+  const i2b = await call('/api/market/install', { source: 's', id: 'hello-tool' });
+  console.log('i2 (expect 400 conflict):', JSON.stringify(i2b));
+  rmSync(root, { recursive: true, force: true });
+})();

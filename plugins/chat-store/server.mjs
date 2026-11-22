@@ -16,20 +16,38 @@
  * - 写操作落审计（JSON Lines），读不打点（轮询高频）。
  *
  * 端点：
- *   GET    /api/chat/sessions        → { sessions: [{id,title,createdAt,updatedAt,msgCount,lastMsgPreview,version,deletedAt?}] }
+ *   GET    /api/chat/sessions        → { sessions: [{id,title,createdAt,updatedAt,msgCount,lastMsgPreview,version,deletedAt?}], running: {<id>:{startedAt,device,phase,lastBeat}} }
  *                                       ?since=<ts> 增量：只回 updatedAt>since 的条目；tombstones 恒回全量
  *   GET    /api/chat/sessions/:id    → { session, version, updatedAt }
  *   PUT    /api/chat/sessions/:id    → body { session, baseVersion, force? }；版本不符 409
  *   DELETE /api/chat/sessions/:id    → 软删除（墓碑），物理文件保留待清理
+ *
+ * loop 运行态与实时推流（多设备「执行中」可见 + 跨设备实时查看）：
+ *   POST /api/chat/sessions/:id/loop-state → body { event:'start'|'heartbeat'|'done', device?, phase? }
+ *                                            agent-loop 上报生命周期；内存态不落盘
+ *                                            （宿主重启=所有 loop 已死，是合理语义）；
+ *                                            20s 无心跳由 GC 回收（发起端暴毙兜底）
+ *   POST /api/chat/sessions/:id/live-event → body { events:[{kind,payload}] }
+ *                                            发起端批量镜像编排事件（delta/工具卡/done…）
+ *   GET  /api/chat/sessions/:id/events     → SSE 订阅该会话的 live 事件流（15s ping 保活）
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const MAX_SESSION_BYTES = 4 * 1024 * 1024; // 单会话 4MB（附件 base64 大图可能到 MB 级）
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const PREVIEW_LEN = 60;
 /** 墓碑保留期：到期物理清理（进程内懒清理，命中即扫） */
 const TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** loop 心跳超时：超此未续期视为发起端已死，从运行表回收 */
+const LOOP_BEAT_TIMEOUT_MS = 20_000;
+/** SSE 保活 ping 间隔 */
+const SSE_PING_MS = 15_000;
+/** 单次 live-event 批量上报的事件数上限（防打爆；超出丢弃并计数） */
+const LIVE_EVENT_BATCH_MAX = 64;
+/** 单会话 live 事件订阅者上限（防同一会话被无限订阅） */
+const LIVE_SUBS_PER_SESSION_MAX = 32;
 
 /** 提取会话的展示字段（服务端不理解消息语义，只数条数与取首条 content 做预览） */
 function summarize(session) {
@@ -114,6 +132,39 @@ export function createServerPart(options = {}) {
     }
   }
 
+  // ---- loop 运行态（内存表；见文件头「loop 运行态与实时推流」注释） ----
+  /** sessionId → { startedAt, device, phase, lastBeat }；done/超时即回收 */
+  const runningLoops = new Map();
+  /** sessionId → Set<res(SSE)>；live 事件订阅者 */
+  const liveSubs = new Map();
+
+  function gcLoops() {
+    const now = Date.now();
+    for (const [id, st] of runningLoops) {
+      if (now - st.lastBeat > LOOP_BEAT_TIMEOUT_MS) runningLoops.delete(id);
+    }
+  }
+
+  function runningSnapshot() {
+    gcLoops();
+    const out = {};
+    for (const [id, st] of runningLoops) {
+      out[id] = { startedAt: st.startedAt, device: st.device, phase: st.phase, lastBeat: st.lastBeat };
+    }
+    return out;
+  }
+
+  /** live 事件扇出给该会话的所有 SSE 订阅者（连接断开即自清理） */
+  function fanoutLive(sessionId, events) {
+    const subs = liveSubs.get(sessionId);
+    if (!subs || subs.size === 0) return;
+    const frame = `event: live\ndata: ${JSON.stringify({ events })}\n\n`;
+    for (const res of [...subs]) {
+      try { res.write(frame); } catch { subs.delete(res); }
+    }
+    if (subs.size === 0) liveSubs.delete(sessionId);
+  }
+
   return async function chatStoreApi(req, res, next) {
     if (hardOff) return next?.();
     const [pathname] = (req.url ?? '').split('?');
@@ -168,7 +219,8 @@ export function createServerPart(options = {}) {
           .filter((r) => r.deletedAt)
           .map((r) => ({ id: String(r.session?.id ?? ''), deletedAt: r.deletedAt, version: r.version }))
           .filter((tb) => tb.id);
-        return sendJson(200, { sessions, tombstones });
+        // loop 运行态随索引下发（侧栏「执行中」徽标的数据源；全设备可见）
+        return sendJson(200, { sessions, tombstones, running: runningSnapshot() });
       }
 
       // ---- 单会话（:id）----
@@ -243,6 +295,86 @@ export function createServerPart(options = {}) {
         }
 
         return sendJson(405, { error: 'method not allowed' });
+      }
+
+      // ---- loop 运行态上报（agent-loop 发起端；内存态，见文件头） ----
+      const mState = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/loop-state$/);
+      if (mState && req.method === 'POST') {
+        const id = mState[1];
+        const { body: raw, tooLarge } = await readBody();
+        if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+        let body;
+        try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+        const event = String(body.event ?? '');
+        if (event !== 'start' && event !== 'heartbeat' && event !== 'done') {
+          return sendJson(400, { error: 'event must be start|heartbeat|done', code: 'BAD_REQUEST' });
+        }
+        if (event === 'start') {
+          runningLoops.set(id, {
+            startedAt: Date.now(),
+            device: String(body.device ?? '未知设备').slice(0, 40),
+            phase: String(body.phase ?? 'running').slice(0, 24),
+            lastBeat: Date.now(),
+          });
+          audit({ op: 'loop-start', sessionId: id });
+        } else if (event === 'heartbeat') {
+          const st = runningLoops.get(id);
+          if (st) { st.lastBeat = Date.now(); st.phase = String(body.phase ?? st.phase).slice(0, 24); }
+          // 未知 id 的心跳静默忽略（GC 已回收的不再复活，避免暴毙端复活假象）
+        } else {
+          runningLoops.delete(id);
+          audit({ op: 'loop-done', sessionId: id });
+        }
+        return sendJson(200, { ok: true });
+      }
+
+      // ---- live 事件批量镜像（发起端 → 服务端扇出；只透传不落盘不解释） ----
+      const mLive = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/live-event$/);
+      if (mLive && req.method === 'POST') {
+        const id = mLive[1];
+        const { body: raw, tooLarge } = await readBody();
+        if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+        let body;
+        try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+        const events = Array.isArray(body.events) ? body.events : [];
+        if (events.length === 0) return sendJson(200, { ok: true, delivered: 0 });
+        if (events.length > LIVE_EVENT_BATCH_MAX) {
+          return sendJson(413, { error: `too many events (max ${LIVE_EVENT_BATCH_MAX})`, code: 'TOO_MANY_EVENTS' });
+        }
+        // 事件透传给订阅端；只做形状钳制（kind 必须是字符串，payload 原样）
+        const clean = events
+          .filter((e) => e && typeof e.kind === 'string' && e.kind.length <= 64)
+          .slice(0, LIVE_EVENT_BATCH_MAX)
+          .map((e) => ({ kind: e.kind, payload: e.payload ?? {}, at: Date.now() }));
+        fanoutLive(id, clean);
+        return sendJson(200, { ok: true, delivered: clean.length });
+      }
+
+      // ---- live 事件 SSE 订阅（查看端；15s ping 保活，断开自清理） ----
+      const mEvents = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/events$/);
+      if (mEvents && req.method === 'GET') {
+        const id = mEvents[1];
+        let subs = liveSubs.get(id);
+        if (!subs) { subs = new Set(); liveSubs.set(id, subs); }
+        if (subs.size >= LIVE_SUBS_PER_SESSION_MAX) {
+          return sendJson(429, { error: 'too many subscribers', code: 'TOO_MANY_SUBSCRIBERS' });
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-store',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        subs.add(res);
+        const ping = setInterval(() => {
+          try { res.write(`event: ping\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`); } catch { /* 断开由 close 回收 */ }
+        }, SSE_PING_MS);
+        req.on('close', () => {
+          clearInterval(ping);
+          subs.delete(res);
+          if (subs.size === 0) liveSubs.delete(id);
+        });
+        return; // SSE 长连接由 res 持有
       }
 
       return sendJson(404, { error: 'not found' });

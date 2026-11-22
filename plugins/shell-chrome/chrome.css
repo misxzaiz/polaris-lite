@@ -1,0 +1,222 @@
+/**
+ * shell-chrome 插件样式：多面板 tab 条 chrome（迁自宿主 src/styles.css 283-497 段）。
+ * 基础结构(.slot-tabs/.sc-bar/.sc-tab 等)仍由宿主持有——WorkspaceTree 冻结段共用;
+ * 本文件只持 chrome 专属部分(sticky wrap/渐隐箭头/＋n/收纳菜单/置顶圆点/⟳)。
+ */
+/* ===== 多面板 Tab（横向滚动 + 溢出收纳，panel-tabs-schemes 方案 C） ===== */
+/* wrap 是滚动容器与收纳菜单的定位上下文：mask/箭头/＋n 都贴在它上面 */
+.sc-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: stretch;
+  min-height: 55px;
+  background: var(--bg-translucent);
+  border-bottom: 1px solid var(--border);
+}
+/* 左侧渐隐：能向左滚才出现（data-can-left 由 SlotOutlet 实测滚动几何写入） */
+.sc-wrap[data-can-left='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to right, var(--bg-translucent), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.sc-wrap[data-can-right='true']::after {
+  content: '';
+  position: absolute;
+  right: 34px;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  background: linear-gradient(to left, var(--bg-translucent), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+  display: flex;
+  min-height: 55px;
+  /* 右侧预留 ＋n 按钮的宽度：溢出时末位 tab 不被收纳按钮盖住
+     （scrollIntoView 对齐的是滚动容器边缘，按钮浮在容器上层） */
+  padding: 0 12px 0 12px;
+  margin-right: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  /* 工作区树 TabsView 没有外层 wrap（那是 SlotOutlet 专属），sticky 留在这里兜底：
+     在 SlotOutlet 里外层 wrap 已 sticky，这里的 sticky 落在不滚动容器内无害 */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-translucent);
+}
+/* 只有溢出（出现 ＋n）时才补右侧让位；无溢出时 tab 条吃到最右 */
+.sc-wrap[data-more='true'] /* ⟳ 刷新当前面板按钮：恒驻 tab 条右端（SlotOutlet 多 tab 槽），不参与横向滚动。
+   data-refresh 恒置 → tab 条右侧永久让出按钮宽度；溢出时再叠加 ＋n 的让位 */
+.sc-wrap[data-refresh='true'] .sc-bar { padding-right: 48px; }
+.sc-wrap[data-refresh='true'][data-more='true'] .sc-bar { padding-right: 88px; }
+.sc-wrap[data-refresh='true'][data-can-right='true']::after { right: 42px; }
+.sc-wrap[data-refresh='true'][data-more='true'][data-can-right='true']::after { right: 88px; }
+.sc-refresh {
+  flex: 0 0 auto;
+  width: 38px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--plite-dur) var(--plite-ease);
+}
+.sc-refresh:hover { color: var(--accent-bright); }
+.sc-refresh:active { transform: rotate(180deg); }
+.sc-tab {
+  position: relative;
+  /* 自然宽度：短名（2字）省空间，长名不截断——等分挤压在 9 面板时每格只剩 74px */
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 55px;
+  padding: 0 6px;
+  margin: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--plite-dur) var(--plite-ease);
+}
+.sc-tab::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform var(--plite-dur-slow) var(--plite-ease);
+}
+.sc-tab:hover { color: var(--text-dim); }
+.sc-tab.active { color: var(--accent-bright); }
+.sc-tab.active::after { transform: scaleX(1); }
+/* 置顶 tab 前的小圆点：不占额外宽度（::before 是绝对定位），标识「它在收藏里」 */
+.sc-tab.sc-pinned::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 14px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+/* ＋n 收纳入口：只在有溢出时由 JS 挂载，宽度恒定不参与滚动 */
+.sc-more {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--plite-dur) var(--plite-ease);
+}
+.sc-more:hover, .sc-more[aria-expanded='true'] { color: var(--accent-bright); }
+/* 收纳菜单：全量面板 + 搜索 + 置顶；绝对定位于 tab 条下方，宽度上限不超面板 */
+.sc-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-width: min(300px, 100%);
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--plite-shadow-2);
+}
+.sc-menu-search {
+  margin: 2px 2px 6px;
+  padding: 0 10px;
+  height: var(--plite-h-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-sm, 6px);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--plite-fs-sm);
+  outline: none;
+}
+.sc-menu-search:focus-visible { border-color: var(--accent); }
+.sc-menu-empty { padding: 10px; color: var(--text-faint); font-size: var(--plite-fs-sm); text-align: center; }
+.sc-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--plite-radius-sm, 6px);
+}
+.sc-menu-row.active { background: var(--accent-soft); }
+.sc-menu-item {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--plite-fs-md);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.sc-menu-item:hover { background: var(--bg-hover); }
+.sc-menu-row.active .sc-menu-item { color: var(--accent-bright); }
+.sc-menu-pin {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--plite-radius-sm, 6px);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.sc-menu-pin svg { width: 15px; height: 15px; }
+.sc-menu-pin:hover { background: var(--bg-hover); color: var(--text); }
+.sc-menu-pin.pinned { color: var(--accent-bright); }
+
+
+/* ===== 窄屏（迁自宿主 @media 段）：收纳菜单下拉加宽 =====
+   宿主此前用 position:fixed 的 bottom-sheet;插件 CSS 门禁禁止 fixed(会逃出窗格),
+   窄屏改用 absolute 全宽下拉(贴 wrap 定位上下文,不溢出抽屉),行为差异:菜单贴
+   tab 条下方而非屏幕底部——避开门禁红线,可访问性等价。 */
+@media (max-width: 768px) {
+  .sc-menu {
+    left: 0;
+    right: 0;
+    max-width: none;
+    max-height: 55vh;
+  }
+}

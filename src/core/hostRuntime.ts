@@ -14,8 +14,7 @@ import { SlotRegistry } from './slotRegistry';
 import type { CapResponse, LiteManifest, LitePlugin, SlotHostApi, WorkspaceApi } from './types';
 import { resolvePolicy, type EffectivePolicy } from './policy';
 import { setDrawer } from './shellState';
-import { CAP_UI_LAYOUT } from './workspace/layoutCap';
-import { viewRegistry } from './workspace/viewRegistry';
+import { CAP_UI_LAYOUT, viewRegistry } from './workspace/contract';
 
 interface RegisteredPlugin {
   manifest: LiteManifest;
@@ -59,6 +58,8 @@ export class HostRuntime {
 
   /** 视图声明被拒的记录（启动时由调用方展示，避免「插件没生效但没人知道」） */
   private viewWarnings: string[] = [];
+  /** 插件装配健康位（false = 有插件加载失败;布局插件据此跳过孤儿视图折叠,P2-2） */
+  private pluginLoadHealthy = true;
 
   /** 注册插件（构建期静态 import，或运行时动态注册均可）；重复注册幂等跳过。
    *  policy 缺省时按 manifest 自声明解析（unlisted 语义），由调用方负责告警。 */
@@ -68,6 +69,8 @@ export class HostRuntime {
     const effective = policy ?? resolvePolicy(plugin.manifest, null);
     this.plugins.set(id, { manifest: plugin.manifest, instance: plugin, policy: effective });
     this.slots.register(id, plugin.manifest.contributes?.slots ?? []);
+    // 容器贡献（tab 条 chrome 等）走同一注册表;SlotOutlet 查用,无注册回退内置简版
+    this.slots.registerContainers(id, plugin.manifest.contributes?.containers ?? []);
 
     // 视图声明走独立注册表（布局树只能引用注册过的 viewType）。
     // 注册失败必须可见：视图没登记时，插件声明的工作区会静默变成空壳。
@@ -93,6 +96,15 @@ export class HostRuntime {
   }
 
   /** 有效权限表（cap.meta 自省用：面板可以看到「申请了但被收紧」的项） */
+  /** 装配健康位写入（main.tsx 在 loadExternalPlugins 后调用） */
+  setPluginLoadHealth(ok: boolean): void {
+    this.pluginLoadHealthy = ok;
+  }
+
+  get isPluginLoadHealthy(): boolean {
+    return this.pluginLoadHealthy;
+  }
+
   policyTable(): EffectivePolicy[] {
     return [...this.plugins.values()].map((p) => p.policy);
   }
@@ -183,6 +195,9 @@ export class HostRuntime {
         openDrawer: (which) => {
           setDrawer(which);
         },
+      },
+      overlay: {
+        root: () => document.getElementById('plite-overlay-root'),
       },
     };
 

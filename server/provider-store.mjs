@@ -58,6 +58,14 @@ function normalize(input, prev) {
             effort: m?.capabilities?.effort ?? null,
             vision: m?.capabilities?.vision === true,
             ...(m?.capabilities?.detected ? { detected: m.capabilities.detected } : {}),
+            ...(m?.capabilities?.detectedAt ? { detectedAt: m.capabilities.detectedAt } : {}),
+            // 布尔三态字段（true/false 写回，null/缺省不落）
+            ...(m?.capabilities?.tools === true || m?.capabilities?.tools === false
+              ? { tools: m.capabilities.tools } : {}),
+            ...(m?.capabilities?.canDisableThinking === true || m?.capabilities?.canDisableThinking === false
+              ? { canDisableThinking: m.capabilities.canDisableThinking } : {}),
+            ...(m?.capabilities?.reasoningEatsBudget === true || m?.capabilities?.reasoningEatsBudget === false
+              ? { reasoningEatsBudget: m.capabilities.reasoningEatsBudget } : {}),
           },
         }))
         .filter((m) => m.id)

@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>消息操作 · 交互原型 v1 — chat-lite</title>
+<style>
+/* ===== 设计令牌（与 src/plite-tokens.css 同值） ===== */
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --bg-panel: #ffffff; --bg-hover: #f3f5f9; --bg-elevated: #ffffff;
+  --bg-translucent: rgba(255, 255, 255, 0.92); --bg-code: #f6f8fb;
+  --border-rgb: 15, 23, 42;
+  --border: rgba(15, 23, 42, 0.075);
+  --border-strong: rgba(29, 78, 216, 0.3);
+  --text: #101828; --text-soft: #384255; --text-dim: #5d6473; --text-faint: #858ca0;
+  --accent-rgb: 29, 78, 216; --accent: #1d4ed8; --accent-bright: #3d6cf0;
+  --accent-soft: rgba(29, 78, 216, 0.07); --on-accent: #ffffff;
+  --mask-bg: rgba(15, 23, 42, 0.3);
+  --radius: 10px;
+  --plite-fs-md: 13px; --plite-font-sans: Inter, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --plite-font-mono: 'SFMono-Regular', 'Cascadia Code', Consolas, monospace;
+  --plite-success: #1f7a4d; --plite-success-soft: rgba(31, 122, 77, 0.09);
+  --plite-danger: #c0392f; --plite-danger-soft: rgba(192, 57, 47, 0.09);
+  --plite-focus-ring: 0 0 0 3px rgba(29, 78, 216, 0.16);
+  --plite-shadow-1: 0 16px 40px rgba(15, 23, 42, 0.07);
+  --plite-shadow-2: 0 6px 20px rgba(15, 23, 42, 0.05);
+  --plite-dur: 180ms; --plite-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+body[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0b0d; --bg-panel: #111114; --bg-hover: #19191d; --bg-elevated: #151518;
+  --bg-translucent: rgba(17, 17, 20, 0.96); --bg-code: #09090b;
+  --border-rgb: 230, 220, 200;
+  --border: rgba(230, 220, 200, 0.11);
+  --border-strong: rgba(210, 180, 126, 0.28);
+  --text: #ece9e2; --text-soft: #b8b2a8; --text-dim: #a29d94; --text-faint: #79746c;
+  --accent-rgb: 199, 166, 107; --accent: #c7a66b; --accent-bright: #e0c28c;
+  --accent-soft: rgba(199, 166, 107, 0.1); --on-accent: #17130d;
+  --mask-bg: rgba(0, 0, 0, 0.74);
+  --plite-success: #83aa90; --plite-success-soft: rgba(131, 170, 144, 0.1);
+  --plite-danger: #d17b72; --plite-danger-soft: rgba(209, 123, 114, 0.1);
+  --plite-focus-ring: 0 0 0 3px rgba(199, 166, 107, 0.18);
+  --plite-shadow-1: 0 18px 50px rgba(0, 0, 0, 0.36);
+  --plite-shadow-2: 0 8px 26px rgba(0, 0, 0, 0.16);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+/* 节流环境降级：CSS 过渡时间线冻结时（启动探测发现），瞬时到终值保证功能正确 */
+html.no-anim *, html.no-anim *::before, html.no-anim *::after { transition: none !important; animation: none !important; }
+.chat-stream, .chat-session-list { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.chat-stream::-webkit-scrollbar, .chat-session-list::-webkit-scrollbar { width: 5px; }
+.chat-stream::-webkit-scrollbar-thumb, .chat-session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+body {
+  font-family: var(--plite-font-sans); font-size: 14px;
+  background: var(--bg); color: var(--text);
+  transition: background var(--plite-dur), color var(--plite-dur);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+button { font-family: inherit; cursor: pointer; }
+
+/* ===== 原型顶栏（非产品 UI，仅演示控制） ===== */
+.proto-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--bg-panel); font-size: 12px; color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.proto-bar b { color: var(--accent); font-weight: 600; }
+.proto-bar .spacer { flex: 1; }
+.proto-btn {
+  border: 1px solid var(--border-strong); background: var(--accent-soft); color: var(--accent);
+  border-radius: 6px; padding: 4px 10px; font-size: 12px; letter-spacing: 0.04em;
+  transition: all var(--plite-dur);
+}
+.proto-btn:hover { background: rgba(var(--accent-rgb), 0.14); }
+.proto-btn.on { background: var(--accent); color: var(--on-accent); }
+.proto-hint { font-size: 11px; color: var(--text-faint); }
+
+/* ===== 三栏壳 ===== */
+.shell { display: flex; flex: 1; min-height: 0; }
+
+/* ===== 侧栏：对话目录 ===== */
+.chat-sessions {
+  width: 252px; flex: 0 0 auto; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--bg-panel);
+  padding: 16px 12px; overflow: hidden;
+}
+.chat-sessions-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 10px 12px; color: var(--text-faint); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+}
+.chat-session-new {
+  width: 100%; height: 40px; margin: 0 0 14px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: rgba(var(--accent-rgb), 0.035); color: var(--accent);
+  font-size: 12px; letter-spacing: 0.08em;
+  transition: background var(--plite-dur), border-color var(--plite-dur);
+}
+.chat-session-new:hover { background: var(--accent-soft); border-color: var(--accent); }
+
+.chat-session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.chat-session-item {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  min-height: 42px; padding: 9px 9px 9px 12px;
+  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+  color: var(--text-soft); transition: all var(--plite-dur);
+}
+.chat-session-item:hover { color: var(--text); background: var(--bg-hover); }
+.chat-session-item.active {
+  color: var(--accent); background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.22);
+}
+.chat-session-item .title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px;
+}
+.chat-session-count {
+  flex: 0 0 auto; font-family: var(--plite-font-mono); font-size: 10px;
+  color: var(--text-faint); border: 1px solid var(--border); border-radius: 9px; padding: 1px 6px;
+}
+.chat-session-actions { display: none; align-items: center; gap: 2px; flex: 0 0 auto; }
+.chat-session-item:hover .chat-session-count { display: none; }
+.chat-session-item:hover .chat-session-actions { display: flex; }
+.chat-sact {
+  width: 24px; height: 24px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-dim);
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  transition: all var(--plite-dur);
+}
+.chat-sact:hover { background: rgba(var(--accent-rgb), 0.12); color: var(--accent); }
+.chat-sact.danger:hover { background: var(--plite-danger-soft); color: var(--plite-danger); }
+.chat-session-confirm { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.chat-session-confirm button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-dim);
+  border-radius: 6px; padding: 2px 8px; font-size: 11px;
+}
+.chat-session-confirm button.danger { color: var(--plite-danger); border-color: rgba(192, 57, 47, 0.4); }
+.chat-rename-input {
+  flex: 1; min-width: 0; height: 24px; padding: 0 6px; font-size: 12px;
+  border: 1px solid var(--accent); border-radius: 6px; background: var(--bg);
+  color: var(--text); outline: none; box-shadow: var(--plite-focus-ring);
+}
+.chat-sessions-empty { padding: 30px 10px; text-align: center; color: var(--text-faint); font-size: 12px; line-height: 1.8; }
+
+/* ===== 主列：消息流 ===== */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+/* 消息流区域：滚动胶囊锚定在这里（贴消息流底部，不压输入框） */
+.stream-area { position: relative; flex: 1; min-height: 0; display: flex; }
+.chat-stream { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+.chat-conversation {
+  max-width: 860px; margin: 0 auto; padding: 28px 28px 20px;
+  display: flex; flex-direction: column; gap: 26px;
+}
+.chat-msg { display: flex; gap: 14px; width: 100%; min-width: 0; position: relative; }
+.chat-msg.user { align-self: flex-end; flex-direction: row-reverse; width: auto; max-width: 78%; }
+/* 编辑态：气泡撑满整行，编辑框不再跟着原消息长度坍缩 */
+.chat-msg.editing { width: 100%; max-width: 100%; }
+.chat-avatar {
+  width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 50%;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-hover); color: var(--text-dim); font-size: 13px;
+}
+.chat-msg.assistant .chat-avatar { color: var(--accent); border-color: var(--border-strong); }
+.chat-msg.user .chat-avatar { background: var(--accent-soft); color: var(--accent); }
+.chat-bubble-col { min-width: 0; display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.chat-bubble {
+  min-width: 0; padding: 3px 0; color: var(--text); line-height: 1.85;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 14px;
+}
+.chat-msg.user .chat-bubble {
+  padding: 10px 15px; border: 1px solid rgba(var(--accent-rgb), 0.13);
+  border-radius: 13px 3px 13px 13px; background: rgba(var(--accent-rgb), 0.09); line-height: 1.7;
+}
+.msg-tag {
+  align-self: flex-start; font-size: 10px; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid rgba(var(--accent-rgb), 0.2);
+  border-radius: 4px; padding: 1px 6px; margin-bottom: 2px; letter-spacing: 0.05em;
+}
+.chat-msg.user .msg-tag { align-self: flex-end; }
+.cursor { display: inline-block; width: 1px; height: 15px; background: var(--accent-bright); vertical-align: text-bottom; margin-left: 4px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 代码块示意 */
+.codeblock {
+  font-family: var(--plite-font-mono); font-size: 12px; line-height: 1.7;
+  background: var(--bg-code); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin: 8px 0; overflow-x: auto; white-space: pre; color: var(--text-soft);
+}
+.inline-code { font-family: var(--plite-font-mono); font-size: 12.5px; background: var(--bg-code); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+
+/* 工具组示意（折叠） */
+.tc-group { margin: 8px 0; }
+.tc-group-summary {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel);
+  padding: 7px 11px; font-size: 12px; color: var(--text-dim);
+  transition: all var(--plite-dur);
+}
+.tc-group-summary:hover { border-color: var(--border-strong); color: var(--text); }
+.tc-group-chip { font-size: 10px; padding: 1px 7px; border-radius: 8px; background: var(--plite-success-soft); color: var(--plite-success); }
+.tc-group-count { color: var(--text-faint); font-size: 11px; }
+.tc-tool-list { border: 1px solid var(--border); border-radius: 8px; margin-top: 6px; overflow: hidden; }
+.tc-tool-item {
+  display: flex; gap: 8px; align-items: baseline; padding: 7px 11px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.tc-tool-item:last-child { border-bottom: none; }
+.tc-tool-name { color: var(--accent); font-family: var(--plite-font-mono); font-size: 11px; flex: 0 0 auto; }
+.tc-tool-cmd { font-family: var(--plite-font-mono); color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-notice { font-size: 11.5px; color: var(--text-faint); margin: 4px 0; }
+
+/* ===== 新交互 ①：消息悬浮操作条 ===== */
+.msg-actions {
+  display: flex; align-items: center; gap: 2px;
+  opacity: 0; pointer-events: none; visibility: hidden; transform: translateY(2px);
+  transition: opacity var(--plite-dur), transform var(--plite-dur), visibility var(--plite-dur);
+}
+.chat-msg:hover .msg-actions, .msg-actions:focus-within { opacity: 1; pointer-events: auto; visibility: visible; transform: none; }
+.chat-msg.user .msg-actions { flex-direction: row; justify-content: flex-end; }
+.chat-msg.streaming .msg-actions { display: none; }
+.msg-act {
+  display: flex; align-items: center; gap: 4px;
+  border: none; background: transparent; border-radius: 6px;
+  padding: 3px 8px; font-size: 11.5px; color: var(--text-faint);
+  transition: all var(--plite-dur);
+}
+.msg-act:hover { background: var(--bg-hover); color: var(--accent); }
+.msg-act.danger:hover { color: var(--plite-danger); background: var(--plite-danger-soft); }
+.msg-act.done { color: var(--plite-success); }
+.msg-act svg { width: 13px; height: 13px; }
+/* 「跳到本条开头」：仅超过一屏的长消息显示（renderStream 实测后加 msg-long） */
+.msg-act.jump { display: none; }
+.chat-msg.msg-long .msg-act.jump { display: flex; }
+
+/* ===== 新交互：编辑态 ===== */
+.edit-box { width: 100%; }
+.edit-box textarea {
+  width: 100%; min-height: 84px; resize: vertical;
+  border: 1px solid var(--accent); border-radius: 10px 3px 10px 10px;
+  background: var(--bg); color: var(--text); padding: 10px 13px;
+  font-family: inherit; font-size: 14px; line-height: 1.7; outline: none;
+  box-shadow: var(--plite-focus-ring);
+}
+.edit-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.edit-btns button {
+  border-radius: 7px; padding: 5px 13px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-dim);
+  transition: all var(--plite-dur);
+}
+.edit-btns button:hover { border-color: var(--border-strong); color: var(--text); }
+.edit-btns button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.edit-btns button.primary:hover { background: var(--accent-bright); }
+.edit-confirm {
+  margin-top: 8px; padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+  background: var(--plite-danger-soft); border: 1px solid rgba(192, 57, 47, 0.35); color: var(--plite-danger);
+  display: flex; align-items: center; gap: 10px;
+}
+.edit-confirm button {
+  border-radius: 6px; padding: 3px 10px; font-size: 11.5px; flex: 0 0 auto;
+  border: 1px solid rgba(192, 57, 47, 0.4); background: var(--bg); color: var(--plite-danger);
+}
+.edit-confirm button.go { background: var(--plite-danger); color: #fff; }
+
+/* ===== 新交互 ⑤⑥：滚动导航 ===== */
+.scroll-pill {
+  position: absolute; left: 50%; transform: translateX(-50%) translateY(6px);
+  bottom: 14px; z-index: 5;
+  display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--bg-translucent); backdrop-filter: blur(6px);
+  color: var(--accent); font-size: 12px; padding: 6px 14px;
+  box-shadow: var(--plite-shadow-2);
+  opacity: 0; pointer-events: none; visibility: hidden; transition: all var(--plite-dur);
+}
+.scroll-pill.show { opacity: 1; pointer-events: auto; visibility: visible; transform: translateX(-50%); }
+.scroll-pill:hover { background: var(--accent-soft); }
+.scroll-pill .fresh {
+  background: var(--accent); color: var(--on-accent); border-radius: 999px;
+  font-size: 10px; padding: 1px 7px; font-family: var(--plite-font-mono);
+}
+.to-top {
+  position: absolute; right: 22px; bottom: 14px; z-index: 5;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg-translucent);
+  color: var(--text-dim); display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--plite-shadow-2); opacity: 0; pointer-events: none; visibility: hidden; transition: all var(--plite-dur);
+}
+.to-top.show { opacity: 1; pointer-events: auto; visibility: visible; }
+.to-top:hover { color: var(--accent); border-color: var(--border-strong); }
+
+/* ===== 手机端形态（真实窄视口 ≤768px 由 JS 自动套用同款类；断点与 chat.css 一致） ===== */
+.drawer-mask { display: none; }
+.mobile-topbar { display: none; }
+body.phone-mode .shell {
+  position: relative;
+  max-width: 402px; width: 100%;
+  margin: 0 auto; border: 1px solid var(--border-strong); border-radius: 22px;
+  overflow: hidden; box-shadow: var(--plite-shadow-1);
+  background: var(--bg);
+}
+/* 侧栏 → 抽屉（用 left 位移而非 transform：transform 在部分 WebView/预览环境不渲染，left 兼容性最稳） */
+body.phone-mode .chat-sessions {
+  position: absolute; left: -110%; top: 0; bottom: 0; z-index: 30; width: 78%;
+  visibility: hidden;
+  transition: left 260ms var(--plite-ease), visibility 260ms;
+  box-shadow: var(--plite-shadow-1);
+}
+body.phone-mode .shell.drawer-open .chat-sessions { left: 0; visibility: visible; }
+body.phone-mode .drawer-mask {
+  display: block; position: absolute; inset: 0; z-index: 25;
+  background: var(--mask-bg); opacity: 0; pointer-events: none; transition: opacity var(--plite-dur);
+}
+body.phone-mode .shell.drawer-open .drawer-mask { opacity: 1; pointer-events: auto; }
+/* 顶栏（汉堡 + 当前会话名） */
+body.phone-mode .mobile-topbar {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-bottom: 1px solid var(--border); background: var(--bg-panel);
+}
+body.phone-mode .mt-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; color: var(--text-soft);
+}
+body.phone-mode .burger {
+  width: 32px; height: 32px; flex: 0 0 auto;
+  border: 1px solid var(--border); border-radius: 9px; background: transparent;
+  color: var(--text-dim); font-size: 15px; display: flex; align-items: center; justify-content: center;
+}
+body.phone-mode .burger:hover { color: var(--accent); border-color: var(--border-strong); }
+/* 触屏无 hover：消息操作条常显 + 图标化（只留图标）；时间戳常显 */
+body.phone-mode .msg-actions { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+body.phone-mode .msg-act { padding: 3px 7px; }
+body.phone-mode .msg-act .lbl { display: none; }
+/* 侧栏操作恒显（同 chat.css:405 先例） */
+body.phone-mode .chat-session-actions { display: flex; }
+body.phone-mode .chat-session-count { display: none; }
+/* 布局收敛 */
+body.phone-mode .chat-conversation { padding: 18px 14px 14px; gap: 22px; }
+body.phone-mode .chat-msg { gap: 10px; }
+body.phone-mode .chat-msg.user { max-width: 90%; }
+body.phone-mode .chat-avatar { width: 28px; height: 28px; font-size: 12px; }
+body.phone-mode .chat-input-wrap { padding: 10px 12px 12px; }
+body.phone-mode .chat-input-hint { display: none; }
+body.phone-mode .note-legend { left: 12px; right: 12px; width: auto; }
+body.phone-mode .proto-hint { display: none; }
+
+/* ===== 输入区 ===== */
+.chat-input-wrap { border-top: 1px solid var(--border); background: var(--bg-panel); padding: 12px 28px 14px; }
+.chat-input-bar {
+  max-width: 860px; margin: 0 auto;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--bg);
+  padding: 10px 14px 8px; transition: border-color var(--plite-dur), box-shadow var(--plite-dur);
+}
+.chat-input-bar:focus-within { border-color: var(--border-strong); box-shadow: var(--plite-focus-ring); }
+.chat-textarea {
+  width: 100%; border: none; background: transparent; resize: none; outline: none;
+  color: var(--text); font-family: inherit; font-size: 14px; line-height: 1.6;
+  min-height: 24px; max-height: 160px;
+}
+.chat-textarea::placeholder { color: var(--text-faint); }
+.chat-input-btns { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.chat-input-hint { margin-right: auto; font-size: 10px; color: var(--text-faint); letter-spacing: 0.04em; }
+.chat-send {
+  width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--accent-soft); color: var(--accent);
+  display: flex; align-items: center; justify-content: center; transition: all var(--plite-dur);
+}
+.chat-send:hover { background: var(--accent); color: var(--on-accent); }
+.chat-send.stop { background: var(--plite-danger-soft); border-color: rgba(192, 57, 47, 0.4); color: var(--plite-danger); }
+
+/* ===== Toast 与标注图例 ===== */
+.toast-wrap { position: fixed; bottom: 112px; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.toast {
+  background: var(--text); color: var(--bg); border-radius: 999px;
+  padding: 7px 16px; font-size: 12px; box-shadow: var(--plite-shadow-1);
+  animation: toast-in 240ms var(--plite-ease);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.note-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; font-size: 9.5px;
+  background: var(--accent); color: var(--on-accent);
+  vertical-align: middle; margin-left: 4px; cursor: help;
+  opacity: 0; pointer-events: none; transition: opacity var(--plite-dur);
+  flex: 0 0 auto;
+}
+body.show-notes .note-chip { opacity: 1; pointer-events: auto; }
+.note-legend {
+  position: fixed; top: 52px; right: 16px; z-index: 60; width: 330px;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 12px;
+  box-shadow: var(--plite-shadow-1); padding: 14px 16px; display: none;
+  font-size: 12px; line-height: 1.7; color: var(--text-soft);
+}
+body.show-notes .note-legend { display: block; }
+.note-legend h4 { font-size: 11px; color: var(--accent); letter-spacing: 0.1em; margin-bottom: 8px; }
+.note-legend p { margin: 5px 0; }
+.note-legend b { color: var(--accent); font-weight: 600; }
+.note-legend .dim { color: var(--text-faint); font-size: 11px; }
+
+/* 流式重试横幅示意 */
+.stream-retry-banner {
+  display: flex; align-items: center; gap: 9px; margin: 10px auto 0; width: fit-content;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-panel);
+  padding: 6px 14px; font-size: 11.5px; color: var(--text-dim);
+}
+.spinner { width: 11px; height: 11px; border: 1.5px solid var(--border-strong); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body data-theme="light">
+
+<div class="proto-bar">
+  <b>消息操作 · 交互原型 v1</b>
+  <span class="proto-hint">所有交互均可真点：悬浮消息 / 滚动 / 侧栏悬浮 / 发送。AI 回复为模拟流。</span>
+  <span class="spacer"></span>
+  <button class="proto-btn" id="btnPhone" onclick="togglePhone()">手机预览</button>
+  <button class="proto-btn on" id="btnNotes" onclick="toggleNotes()">标注 开</button>
+  <button class="proto-btn" id="btnTheme" onclick="toggleTheme()">曜石黑</button>
+</div>
+
+<div class="shell">
+  <div class="drawer-mask" onclick="closeDrawer()"></div>
+  <!-- ===== 侧栏 ===== -->
+  <aside class="chat-sessions">
+    <div class="chat-sessions-head">
+      <span>对话目录</span>
+      <span id="sessCount">05</span>
+    </div>
+    <button class="chat-session-new" onclick="toast('原型示意：新建会话')">＋ 新会话</button>
+    <div class="chat-session-list" id="sessionList"></div>
+  </aside>
+
+  <!-- ===== 主列 ===== -->
+  <main class="main">
+    <!-- 手机端顶栏：汉堡开抽屉 + 当前会话名（桌面隐藏） -->
+    <div class="mobile-topbar">
+      <button class="burger" onclick="openDrawer()" title="对话目录" aria-label="打开对话目录">☰</button>
+      <span class="mt-title" id="mtTitle"></span>
+    </div>
+    <div class="stream-area">
+      <div class="chat-stream" id="stream">
+        <div class="chat-conversation" id="conversation"></div>
+      </div>
+
+      <!-- ⑤ 回到底部胶囊：悬浮在消息流底部之上、输入框之外 -->
+      <button class="scroll-pill" id="pillBottom" onclick="scrollToBottom(true)">
+        <span id="pillText">回到底部</span><span class="fresh" id="pillFresh" style="display:none">+3</span>
+        <span class="note-chip" data-note="5" style="background:var(--text);color:var(--bg)">⑤</span>
+      </button>
+      <!-- ⑥ 回到顶部 -->
+      <button class="to-top" id="btnTop" onclick="document.getElementById('stream').scrollTo({top:0,behavior:'smooth'})" title="回到顶部">
+        ↑<span class="note-chip" data-note="6" style="position:absolute;top:-6px;right:-6px">⑥</span>
+      </button>
+    </div>
+
+    <div class="chat-input-wrap">
+      <div class="chat-input-bar">
+        <textarea class="chat-textarea" id="input" rows="1"
+          placeholder="向 Polaris 提问，或记录一个想法…"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doSend();}"></textarea>
+        <div class="chat-input-btns">
+          <span class="chat-input-hint">Enter 发送 · Shift + Enter 换行</span>
+          <button class="chat-send" id="btnSend" onclick="doSend()" title="发送">➤</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<div class="note-legend" id="legend">
+  <h4>本次新增交互标注（v1 原型）</h4>
+  <p><b>① 消息悬浮操作条</b> — 悬浮任意消息出现。用户消息：复制 / 编辑 / 重发；AI 消息：复制 / 重新生成。<span class="dim">流式生成中自动隐藏。</span></p>
+  <p><b>② 编辑（仅最后一轮）</b> — 截断重答：该轮之后的消息被移除并重新生成。<span class="dim">实现版有红色二次确认（原型已演示），且会同步抹掉所有设备上的旧尾巴。</span></p>
+  <p><b>③ 重发（任意历史消息）</b> — 追加新一轮，不破坏历史，<span class="dim">零协议改动、成本低。</span></p>
+  <p><b>④ 复制只取正文</b> — 不含思考块、工具卡、运行提示行。<span class="dim">点复制看 toast 提示实际取到的内容。</span></p>
+  <p><b>⑤ 回到底部胶囊</b> — 滚离底部出现；流式期间显示「有新内容 N 条」。</p>
+  <p><b>⑥ 回到顶部</b> — 长会话快速导航。</p>
+  <p><b>⑦ 跳到本条开头</b> — 长消息（超过大半屏）的操作条里多一个「开头」：点击把<b>这条消息</b>的开头对齐到视口顶部——不是回到会话最顶部；短消息不显示。</p>
+  <p><b>⑧ 侧栏悬浮重命名</b> — 悬浮 ✎ 或双击标题；排序保持现网口径（最后活跃时间）。</p>
+  <p><b>⑨ 手机端</b> — ≤768px（与现网断点一致）自动生效，桌面点「手机预览」可试：侧栏改<b>抽屉</b>（顶部 ☰），触屏无 hover → <b>操作条常显图标化</b>、侧栏操作恒显。实现版可复用现有 useSessionSwipe 滑切手势。</p>
+  <p class="dim">试试：悬浮任意消息 → 点「编辑」体验截断重答 → 流式期间往上滚看 ⑤ → 滚到顶看 ⑥。</p>
+</div>
+
+<script>
+'use strict';
+/* ================= 假数据 ================= */
+const now = Date.now();
+let sessions = [
+  { id: 's1', title: '消息操作交互方案讨论', lastActiveAt: now - 6e5, messages: [] },
+  { id: 's2', title: 'agent-loop shadow 复位协议', lastActiveAt: now - 36e5, messages: [] },
+  { id: 's3', title: '面板刷新三层机制排查', lastActiveAt: now - 82e5, messages: [] },
+  { id: 's4', title: 'transcript-share 分享链接', lastActiveAt: now - 2e8, messages: [] },
+  { id: 's5', title: 'apk-release-guide 校对', lastActiveAt: now - 3e8, messages: [] },
+];
+let activeId = 's1';
+let streaming = false;
+
+const M = (role, content, extra) => ({ id: 'm' + Math.random().toString(36).slice(2, 9), role, content, ts: Date.now(), ...extra });
+
+sessions[0].messages = [
+  M('user', '对话里的消息想支持复制、编辑、重发，AI 的消息也要能复制和重新生成，从哪入手？', { ts: now - 54e5 }),
+  M('assistant',
+    '建议分两层做：\n\n复制是纯 UI 层，任何消息都能加，成本低；编辑重答涉及 agent-loop 的 shadow transcript，需要先补一个复位协议。',
+    { ts: now - 53e5, tools: [
+      { name: 'grep', cmd: 'grep -n "shadow" agent-loop/index.ts | head -20', status: 'done' },
+      { name: 'read', cmd: 'read plugins/agent-loop/index.ts (§584-605)', status: 'done' },
+    ] }),
+  M('user', 'shadow 那边具体是什么问题？', { ts: now - 50e5 }),
+  M('assistant',
+    'shadow transcript 每个会话只在首次播种时读客户端传来的 history（agent-loop/index.ts:584-605），之后每次 start 只是把新 prompt 追加到尾部。\n\n也就是说：截断历史后重发，模型实际看到的上下文仍然是旧尾巴——旧的对话加上新消息叠加在一起，直到刷新页面才重新播种。所以编辑重答需要给 agent-loop 加一个 reset 动作，清掉旧 shadow 按新历史重播。',
+    { ts: now - 49e5 }),
+  M('user', '明白了，那重发呢？', { ts: now - 46e5 }),
+  M('assistant',
+    '重发最简单：追加新一轮，不截断任何东西，直接把旧文本再走一次 sendUserMessage 就是了，零协议改动，任意历史消息都可用。\n\n真正需要协议配合的只有「编辑原消息并截断重答」和「重新生成」这两个破坏性操作。\n\n先把重发的落点说清楚，三个要点：\n\n1. 消息原文直接复用，不重新拼接历史——发送链路自己会取当前可见历史，语义与手动重打一遍完全一致；\n\n2. agent-loop 对每次 start 只做 shadow.push(prompt)，追加式语义天然兼容，不需要动协议；\n\n3. user.prompt 广播带新的 messageId，ai-events 的轮次归因不受影响；UserPromptSubmit 钩子照常跑，deny 拦截路径也照常生效。\n\n编辑重答则不同：它要截断可见历史，而 agent-loop 的 shadow transcript 每会话只在首次播种时读客户端 history，之后一直自持。所以需要给它加一个 reset 动作——清掉该会话的旧 shadow，按截断后的历史重新播种。守卫条件是 running.has(sessionId) 时必须拒绝，编排进行中截断 shadow 会把在途轮次的上下文撕碎。\n\n最后是附件：已存储的用户消息不带附件（附件只进了 dispatch payload），重发带附件的旧消息会丢附件。v1 先存附件名单并在重发时提示，彻底方案要动 ChatMessage 结构和服务端 4MB 上限的配额设计，放 P2。这条消息比较长，正好可以试试操作条里的「开头」——点一下就回到本条消息的开头。',
+    { ts: now - 45e5, notice: '[已自动续写 1/3 · 思考耗尽预算，已引导直出结论]' }),
+];
+
+sessions[1].messages = [
+  M('user', 'reset 动作的守卫条件怎么定？'),
+  M('assistant', 'running.has(sessionId) 时必须拒绝——编排进行中截断 shadow 会把在途轮次的上下文撕碎。空闲时清 Map 里该会话的值即可，下次 start 自然按新 history 重新播种。'),
+];
+sessions[2].messages = [M('user', '侧栏刷新后徽标不消失'), M('assistant', '轮询每 30s 拉一次 running 表，引用相等即跳过，心跳超时 20s 后徽标转 stale 态。')];
+sessions[3].messages = [M('user', '分享链接打开 404'), M('assistant', 'token 过期三出口：手动撤销 / 有效期到 / 会话删除，任一命中都返回 404。')];
+sessions[4].messages = [M('user', '签名版本号对不上'), M('assistant', 'apk 用 v2 签名方案，minSdk 24+ 才启用，检查 build.gradle 的 signingConfigs。')];
+
+/* ================= 模拟回复池 ================= */
+const REPLIES = [
+  '这个方向可行。原型里你能点到的交互，实现时的落点是：\n\n· 悬浮操作条挂在气泡列下方，流式中隐藏；\n· 复制按 text 块拼接，与发送历史同一口径；\n· 编辑只开放最后一轮，更早的消息走「回填输入框」。\n\n你可以先把这版交互过一遍，不顺手的地方直接说。',
+  '补充一个细节：截断重答是破坏性操作，会同步抹掉其他设备上的旧尾巴，所以确认条上写了「从所有设备移除」。如果你觉得太重，也可以退一档：只允许编辑、不自动重答，改完由用户自己点发送。',
+  '关于复制的内容口径，我建议过滤三类东西：思考块（过程不是结论）、工具卡（输出另有复制入口）、运行提示行（[运行提示] 开头的软提示）。这样复制出来的文本直接可以粘贴到别处用。',
+];
+
+/* ================= 工具函数 ================= */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const session = () => sessions.find((s) => s.id === activeId);
+const activeSession = () => session();
+
+function toast(text) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = text;
+  $('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 300ms'; }, 1900);
+  setTimeout(() => t.remove(), 2300);
+}
+
+async function copyText(text, label) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* file:// 兜底 */ }
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+  }
+  toast(ok ? `${label}（${text.length} 字）` : '复制失败（浏览器限制）');
+}
+
+/* ================= 侧栏渲染 ================= */
+function renderSidebar() {
+  // 排序与现网同口径：按最后活跃时间倒序（sortSessions 权威）
+  const list = [...sessions].sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
+  $('sessionList').innerHTML = list.map((s) => {
+        const cls = s.id === activeId ? ' active' : '';
+        if (renameId === s.id) {
+          return `<div class="chat-session-item${cls}" onclick="event.stopPropagation()">
+            <input class="chat-rename-input" id="rn-${s.id}" value="${esc(s.title)}"
+              onkeydown="if(event.key==='Enter')saveRename('${s.id}');if(event.key==='Escape')cancelRename()"
+              onblur="saveRename('${s.id}')">
+          </div>`;
+        }
+        if (delId === s.id) {
+          return `<div class="chat-session-item${cls}" onclick="event.stopPropagation()">
+            <span class="title">${esc(s.title)}</span>
+            <span class="chat-session-confirm"><span>删除？</span>
+              <button class="danger" onclick="delSession('${s.id}')">确认</button>
+              <button onclick="delId=null;renderSidebar()">取消</button>
+            </span>
+          </div>`;
+        }
+        return `<div class="chat-session-item${cls}" onclick="setActive('${s.id}')" ondblclick="startRename('${s.id}')">
+          <span class="title">${esc(s.title)}</span>
+          <span class="chat-session-count">${s.messages.length}</span>
+          <span class="chat-session-actions">
+            <button class="chat-sact" title="重命名（双击标题同效）" onclick="event.stopPropagation();startRename('${s.id}')">✎</button>
+            <button class="chat-sact" title="工作目录" onclick="event.stopPropagation();toast('原型示意：打开工作目录选择器')">⌂</button>
+            <button class="chat-sact danger" title="删除会话" onclick="event.stopPropagation();delId='${s.id}';renderSidebar()">✕</button>
+          </span>
+        </div>`;
+      }).join('');
+  // 手机端顶栏的当前会话名 + 头部计数
+  const mt = $('mtTitle');
+  if (mt) mt.textContent = session()?.title ?? '';
+  const sc = $('sessCount');
+  if (sc) sc.textContent = String(sessions.length).padStart(2, '0');
+}
+
+let renameId = null;
+let delId = null;
+function startRename(id) { renameId = id; renderSidebar(); const inp = $('rn-' + id); if (inp) { inp.focus(); inp.select(); } }
+function saveRename(id) {
+  if (renameId !== id) return;
+  const inp = $('rn-' + id);
+  const v = inp ? inp.value.trim() : '';
+  const s = sessions.find((x) => x.id === id);
+  if (s && v && v !== s.title) { s.title = v; s.lastActiveAt = Date.now(); toast('已重命名'); }
+  renameId = null; renderSidebar();
+}
+function cancelRename() { renameId = null; renderSidebar(); }
+function delSession(id) {
+  sessions = sessions.filter((s) => s.id !== id);
+  if (activeId === id) activeId = sessions[0]?.id ?? null;
+  delId = null; renderSidebar(); renderStream();
+  toast('已删除会话');
+}
+function setActive(id) {
+  activeId = id; renameId = null; delId = null;
+  if (document.body.classList.contains('phone-mode')) closeDrawer(); // 手机端：选完会话收抽屉
+  renderSidebar(); renderStream(); $('stream').scrollTop = $('stream').scrollHeight;
+}
+
+/* ================= 消息渲染 ================= */
+const ICONS = {
+  copy: '<svg viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" stroke="currentColor" stroke-width="1.5"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  resend: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 9h12a4 4 0 0 1 0 8H9" stroke="currentColor" stroke-width="1.5"/><path d="m8 5-4 4 4 4" stroke="currentColor" stroke-width="1.5"/></svg>',
+  regen: '<svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.5"/><path d="M20 4v4h-4" stroke="currentColor" stroke-width="1.5"/></svg>',
+  backfill: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 5v10m0 0 4-4m-4 4-4-4" stroke="currentColor" stroke-width="1.5"/><path d="M5 19h14" stroke="currentColor" stroke-width="1.5"/></svg>',
+  jump: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+};
+
+function renderContent(m) {
+  let html = esc(m.content).replace(/`([^`]+)`/g, '<span class="inline-code">$1</span>');
+  if (m.code) html += `\n<div class="codeblock">${esc(m.code)}</div>`;
+  return html.replace(/\n/g, '<br>');
+}
+
+function renderStream() {
+  const s = session();
+  const conv = $('conversation');
+  if (!s || s.messages.length === 0) {
+    conv.innerHTML = '<div style="padding:60px 0;text-align:center;color:var(--text-faint);font-size:13px">从一个想法开始，这里会留下你的思考轨迹。</div>';
+    return;
+  }
+  const lastMsg = s.messages[s.messages.length - 1];
+  const lastUserId = [...s.messages].reverse().find((m) => m.role === 'user')?.id;
+  let replyIdx = 0;
+
+  conv.innerHTML = s.messages.map((m) => {
+    const isUser = m.role === 'user';
+    const streamingCls = m.streaming ? ' streaming' : '';
+    // 操作条内容：流式中不渲染按钮；编辑态替换为编辑框
+    let actionBar = '';
+    if (editing && editing.id === m.id) {
+      return `<div class="chat-msg user editing${streamingCls}" data-mid="${m.id}">
+        <div class="chat-avatar">你</div>
+        <div class="chat-bubble-col">
+          <div class="edit-box">
+            <textarea id="ed-${m.id}">${esc(editing.draft ?? m.content)}</textarea>
+            ${editing.confirm ? `
+              <div class="edit-confirm">
+                <span>⚠ 保存后会截断此轮之后的消息，并从<b>所有设备</b>上移除。</span>
+                <button class="go" onclick="editSave('${m.id}', true)">确认截断并重答</button>
+                <button onclick="editing.confirm=false;renderStream()">再想想</button>
+              </div>` : `
+              <div class="edit-btns">
+                <button onclick="editCancel()">取消</button>
+                <button onclick="editSave('${m.id}', false)">保存并重答</button>
+              </div>`}
+          </div>
+        </div>
+      </div>`;
+    }
+    if (!m.streaming) {
+      const acts = [];
+      if (isUser) {
+        // ② 编辑：只有最后一轮的用户消息可编辑（截断重答）
+        if (m.id === lastUserId) {
+          acts.push(`<button class="msg-act" title="编辑并重答（截断此轮之后）" onclick="editStart('${m.id}')">${ICONS.edit}<span class="note-chip" data-note="2">②</span><span class="lbl">编辑</span></button>`);
+        } else {
+          acts.push(`<button class="msg-act" title="回填输入框（更早的消息不截断，取回再编辑发送）" onclick="backfill('${m.id}')">${ICONS.backfill}<span class="note-chip" data-note="2">②</span><span class="lbl">回填</span></button>`);
+        }
+        // ③ 重发：任意历史消息可用（追加新一轮）
+        acts.push(`<button class="msg-act" title="重发（追加新一轮，保留历史）" onclick="resend('${m.id}')">${ICONS.resend}<span class="note-chip" data-note="3">③</span><span class="lbl">重发</span></button>`);
+      } else {
+        // ⑦ 跳到本条开头：按钮始终渲染，renderStream 末尾实测高度后仅长消息显示
+        acts.push(`<button class="msg-act jump" title="跳到本条消息的开头（长消息才有）" onclick="jumpToStart('${m.id}')">${ICONS.jump}<span class="note-chip" data-note="7">⑦</span><span class="lbl">开头</span></button>`);
+        // 重新生成：只有最后一条 AI 消息可重新生成
+        if (m === lastMsg) {
+          acts.push(`<button class="msg-act" title="重新生成（同提示词重答）" onclick="regenerate()">${ICONS.regen}<span class="note-chip" data-note="2">②</span><span class="lbl">重新生成</span></button>`);
+        }
+      }
+      // ④ 复制：只取正文
+      acts.unshift(`<button class="msg-act" title="复制" onclick="copyMsg('${m.id}')"><span class="copy-ic">${ICONS.copy}</span><span class="note-chip" data-note="4">④</span><span class="lbl">复制</span></button>`);
+      actionBar = `<div class="msg-actions">${acts.join('')}</div>`;
+    }
+    const tag = m.resent ? '<span class="msg-tag">重发</span>' : '';
+    // 工具组示意（折叠）
+    let toolHtml = '';
+    if (m.tools) {
+      toolHtml = `<div class="tc-group">
+        <button class="tc-group-summary" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span>⚙ 工具调用</span><span class="tc-group-chip">全部完成</span><span class="tc-group-count">${m.tools.length} 项 · 点击查看</span>
+          <span class="note-chip" data-note="4">④</span>
+        </button>
+        <div class="tc-tool-list" style="display:none">
+          ${m.tools.map((t) => `<div class="tc-tool-item"><span class="tc-tool-name">${esc(t.name)}</span><span class="tc-tool-cmd">${esc(t.cmd)}</span></div>`).join('')}
+        </div>
+      </div>`;
+    }
+    const noticeHtml = m.notice ? `<div class="tc-notice">${esc(m.notice)}</div>` : '';
+    return `<div class="chat-msg ${m.role}${streamingCls}" data-mid="${m.id}">
+      <div class="chat-avatar">${isUser ? '你' : '✦'}</div>
+      <div class="chat-bubble-col">
+        ${tag}
+        ${isUser ? '' : toolHtml}
+        <div class="chat-bubble${isUser ? '' : ' md'}">${renderContent(m)}${m.streaming ? '<span class="cursor"></span>' : ''}</div>
+        ${noticeHtml}
+        ${actionBar}
+      </div>
+    </div>`;
+  }).join('');
+
+  // 编辑态自动聚焦
+  if (editing) {
+    const ta = $('ed-' + editing.id);
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      if (editing.autoGrow) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+      ta.oninput = () => {
+        if (editing) editing.draft = ta.value; // 草稿进状态：确认条出现重建 DOM 时不丢
+        ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px';
+      };
+    }
+  }
+  // ⑦ 长消息标记：超过大半屏的 AI 消息才显示「开头」按钮（短消息点了没意义）
+  const streamH = $('stream').clientHeight;
+  conv.querySelectorAll('.chat-msg.assistant').forEach((el) => {
+    el.classList.toggle('msg-long', el.getBoundingClientRect().height > streamH * 0.6);
+  });
+  updatePills();
+}
+
+/** ⑦ 跳到这条消息的开头：消息顶部对齐视口顶部（不是回到会话最顶部） */
+function jumpToStart(id) {
+  const el = document.querySelector(`.chat-msg[data-mid="${id}"]`);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ================= 操作实现 ================= */
+let editing = null; // {id, confirm}
+
+function copyMsg(id) {
+  const s = session();
+  const m = s.messages.find((x) => x.id === id);
+  if (!m) return;
+  copyText(m.content, m.role === 'user' ? '已复制原文' : '已复制正文（不含思考/工具块/提示）');
+  // 打勾反馈（同 markdown.tsx 代码块复制的 CheckIcon 模式）：只改按钮自身，不全量重渲
+  const btn = document.querySelector(`.chat-msg[data-mid="${id}"] .msg-act[title="复制"]`);
+  if (btn) {
+    btn.classList.add('done');
+    const ic = btn.querySelector('.copy-ic');
+    if (ic) ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    setTimeout(() => {
+      btn.classList.remove('done');
+      if (ic) ic.innerHTML = ICONS.copy;
+    }, 1200);
+  }
+}
+
+function editStart(id) {
+  if (streaming) { toast('等当前回复结束（或点停止）再编辑'); return; } // 流式中编辑会撕裂在途轮次
+  const m = session().messages.find((x) => x.id === id);
+  editing = { id, confirm: false, draft: m ? m.content : '' };
+  renderStream();
+}
+function editCancel() { editing = null; renderStream(); }
+function editSave(id, confirmed) {
+  const s = session();
+  const idx = s.messages.findIndex((x) => x.id === id);
+  if (idx < 0) return;
+  if (!confirmed) { editing.confirm = true; renderStream(); return; } // 先出示红色确认条
+  const text = ((editing && editing.draft) ?? '').trim(); // 草稿取自状态（确认条重建 DOM 后仍在）
+  if (!text) { toast('内容为空'); return; }
+  // 截断：该用户消息之后的全部移除（实现版 = truncateMessagesFrom + agent-loop reset）
+  s.messages = s.messages.slice(0, idx + 1);
+  s.messages[idx].content = text;
+  s.messages[idx].ts = Date.now();
+  editing = null;
+  s.lastActiveAt = Date.now();
+  toast('已截断此轮之后的消息，正在重答…');
+  renderSidebar(); renderStream();
+  startStream();
+}
+
+function resend(id) {
+  const s = session();
+  const m = s.messages.find((x) => x.id === id);
+  if (!m) return;
+  if (streaming) { toast('等当前回复结束（或点停止）再重发'); return; }
+  s.messages.push(M('user', m.content, { resent: true })); // 追加新一轮，历史原样保留
+  s.lastActiveAt = Date.now();
+  toast('已重发（追加新一轮，历史保留）');
+  renderSidebar();
+  renderStream();
+  startStream(true);
+}
+
+function regenerate() {
+  const s = session();
+  if (streaming) { toast('等当前回复结束（或点停止）再重新生成'); return; }
+  const last = s.messages[s.messages.length - 1];
+  if (!last || last.role !== 'assistant') return;
+  Object.assign(last, { content: '', streaming: true, ts: Date.now(), tools: null, notice: null, code: null });
+  toast('已重新生成（同提示词重答，替换本轮回复）');
+  renderStream();
+  startStreamInto(last);
+}
+
+function backfill(id) {
+  const s = session();
+  const m = s.messages.find((x) => x.id === id);
+  if (!m) return;
+  $('input').value = m.content;
+  $('input').focus();
+  toast('已回填输入框（未发送）');
+}
+
+/* ================= 假流式 ================= */
+let streamCtl = null; // 当前模拟流控制柄（「停止」用）
+
+function startStream(skipFirst) {
+  const s = session();
+  const msg = M('assistant', '', { streaming: true });
+  s.messages.push(msg);
+  s.lastActiveAt = Date.now();
+  renderStream();
+  startStreamInto(msg, skipFirst);
+}
+
+function startStreamInto(msg, skipFirst) {
+  streaming = true;
+  const s = session();
+  const full = REPLIES[Math.floor(Math.random() * REPLIES.length)];
+  let i = skipFirst ? 6 : 0;
+  if (!atBottom) hiddenCount += 1; // 滚离底部期间到达的新内容按「条」计数
+  $('btnSend').textContent = '■'; $('btnSend').classList.add('stop'); $('btnSend').onclick = stopStream;
+  const timer = setInterval(() => {
+    i += 3;
+    msg.content = full.slice(0, i);
+    renderStream();
+    // 贴底跟随（同 MessageStream 的 atBottom 语义）：在底部就跟着走
+    if (atBottom) streamEl.scrollTop = streamEl.scrollHeight;
+    updatePills();
+    if (i >= full.length) { clearInterval(timer); finish(); }
+  }, 30);
+  function finish() {
+    msg.content = full; msg.streaming = false; streaming = false;
+    $('btnSend').textContent = '➤'; $('btnSend').classList.remove('stop'); $('btnSend').onclick = doSend;
+    renderSidebar(); renderStream();
+    if (atBottom) streamEl.scrollTop = streamEl.scrollHeight;
+    updatePills();
+    streamCtl = null;
+  }
+  streamCtl = { timer, msg };
+}
+
+/** 流式「停止」：保留已生成的部分，不补完全文（与按钮文案一致） */
+function stopStream() {
+  if (!streamCtl) return;
+  clearInterval(streamCtl.timer);
+  streamCtl.msg.streaming = false;
+  streaming = false;
+  $('btnSend').textContent = '➤'; $('btnSend').classList.remove('stop'); $('btnSend').onclick = doSend;
+  renderSidebar(); renderStream();
+  if (atBottom) streamEl.scrollTop = streamEl.scrollHeight;
+  updatePills();
+  toast('已停止（保留已生成的部分）');
+  streamCtl = null;
+}
+
+function doSend() {
+  const ta = $('input');
+  const text = ta.value.trim();
+  if (!text || streaming) return;
+  const s = session();
+  s.messages.push(M('user', text));
+  s.lastActiveAt = Date.now();
+  ta.value = '';
+  renderSidebar(); renderStream();
+  startStream();
+}
+
+/* ================= 滚动导航 ================= */
+let atBottom = true;
+let hiddenCount = 0;
+const streamEl = $('stream');
+streamEl.addEventListener('scroll', () => {
+  const el = streamEl;
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+  atBottom = distance < 80;
+  if (atBottom) hiddenCount = 0;
+  updatePills();
+}, { passive: true });
+
+function updatePills() {
+  // 实时重算贴底状态（布局变化如切手机形态不触发 scroll 事件，atBottom 会陈旧）
+  const distance = streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight;
+  atBottom = distance < 80;
+  if (atBottom) hiddenCount = 0;
+  const far = streamEl.scrollTop > 400;
+  $('btnTop').classList.toggle('show', far);
+  const showPill = !atBottom || hiddenCount > 0;
+  $('pillBottom').classList.toggle('show', showPill);
+  $('pillText').textContent = hiddenCount > 0 ? '回到底部 · 有新内容' : '回到底部';
+  const fresh = $('pillFresh');
+  fresh.style.display = hiddenCount > 0 ? '' : 'none';
+  fresh.textContent = '+' + hiddenCount;
+}
+window.addEventListener('resize', updatePills);
+function scrollToBottom(user) {
+  streamEl.scrollTo({ top: streamEl.scrollHeight, behavior: 'smooth' });
+  hiddenCount = 0;
+  setTimeout(updatePills, 350);
+}
+
+/* ================= 原型控制 ================= */
+function toggleTheme() {
+  const body = document.body;
+  const nowDark = body.dataset.theme === 'dark';
+  body.dataset.theme = nowDark ? 'light' : 'dark';
+  $('btnTheme').textContent = nowDark ? '曜石黑' : '静谧蓝白'; // 按钮语义 = 点击后切换到的主题
+}
+function toggleNotes() {
+  document.body.classList.toggle('show-notes');
+  const on = document.body.classList.contains('show-notes');
+  $('btnNotes').classList.toggle('on', on);
+  $('btnNotes').textContent = on ? '标注 关' : '标注 开';
+}
+
+/* ---- 手机形态 ---- */
+function togglePhone() {
+  const on = document.body.classList.toggle('phone-mode');
+  $('btnPhone').classList.toggle('on', on);
+  $('btnPhone').textContent = on ? '桌面预览' : '手机预览';
+  if (!on) closeDrawer();
+  requestAnimationFrame(updatePills); // 布局重排后重算贴底状态
+}
+/* 抽屉开合：JS inline 直接驱动终态。不依赖 class+transition——被节流的预览环境里
+   transition 会冻结在起点（时间线不推进），class 方案的终值永远到不了；inline 瞬时可靠。 */
+function setDrawer(open) {
+  const d = document.querySelector('.chat-sessions');
+  const m = document.querySelector('.drawer-mask');
+  d.style.transition = 'none';
+  d.style.left = open ? '0' : '-110%';
+  d.style.visibility = open ? 'visible' : 'hidden';
+  m.style.transition = 'none';
+  m.style.opacity = open ? '1' : '0';
+  m.style.pointerEvents = open ? 'auto' : 'none';
+  document.querySelector('.shell').classList.toggle('drawer-open', open);
+}
+function openDrawer() { setDrawer(true); }
+function closeDrawer() { setDrawer(false); }
+
+/* ================= 启动 ================= */
+renderSidebar();
+renderStream();
+// 启动定位到底（后台标签页里 smooth 滚动会被节流，强制 instant）
+streamEl.style.scrollBehavior = 'auto';
+streamEl.scrollTop = streamEl.scrollHeight;
+updatePills(); // 同步算一次贴底状态（scroll 事件异步派发，后台预览页可能延迟）
+document.body.classList.add('show-notes');
+// 真实窄视口自动进入手机形态（断点与 chat.css 一致：≤768px）
+if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+  document.body.classList.add('phone-mode');
+  $('btnPhone').classList.add('on');
+  $('btnPhone').textContent = '桌面预览';
+}
+// CSS 过渡时间线健康探测：后台/被节流的预览环境里 transition 的 currentTime 会冻结在 0，
+// computed 永远停在过渡起点（抽屉滑入/遮罩/胶囊显隐全部失效）。不健康则全局禁用过渡，
+// class 切换立即到终值；真实浏览器探测通过，动画照常保留。
+(function probeTimeline() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;opacity:0;transition:opacity 40ms linear;pointer-events:none;';
+  document.body.appendChild(probe);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    probe.style.opacity = '1';
+    setTimeout(() => {
+      const ok = parseFloat(getComputedStyle(probe).opacity) > 0.5;
+      probe.remove();
+      if (!ok) document.documentElement.classList.add('no-anim');
+    }, 80);
+  }));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+/**
+ * workspace-layout 插件样式(迁自宿主 src/styles.css 工作区树段,P2-2)。
+ * 壳层级规则(body 滚动锁/窄屏 fixed 抽屉)归宿主——插件门禁红线,见宿主同名标记段。
+ */
+/* ===== 工作区树：split / pane / splitter ===== */
+.ws-root,
+.ws-split {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.ws-root { flex-direction: column; }
+.ws-split-row { flex-direction: row; }
+.ws-split-col { flex-direction: column; }
+
+.ws-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  /* 窗格是最后一道裁切：任何内容都不许越过窗格边界跑到别的窗格/视口上。
+     实测没有这条时，输入区内容比窗格高会整块溢出，发送按钮落到视口外且无法点击
+     （窗格 152px / 内容 284px → 按钮 bottom 851，视口只有 748）。 */
+  overflow: hidden;
+}
+
+/* 分隔条占 0 宽（不改变既有 1px 细线视觉），靠伪元素扩出 9px 命中区 */
+.ws-splitter {
+  position: relative;
+  flex: 0 0 0;
+  z-index: 3;
+  touch-action: none;
+  outline: none;
+}
+.ws-splitter[data-dir='row'] { cursor: col-resize; }
+.ws-splitter[data-dir='col'] { cursor: row-resize; }
+.ws-splitter::before {
+  content: '';
+  position: absolute;
+}
+.ws-splitter[data-dir='row']::before { top: 0; bottom: 0; left: -4px; width: 9px; }
+.ws-splitter[data-dir='col']::before { left: 0; right: 0; top: -4px; height: 9px; }
+.ws-splitter::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  transition: background var(--plite-dur) var(--plite-ease);
+}
+.ws-splitter[data-dir='row']::after { top: 0; bottom: 0; left: 0; width: 1px; }
+.ws-splitter[data-dir='col']::after { left: 0; right: 0; top: 0; height: 1px; }
+.ws-splitter:hover::after,
+.ws-splitter:focus-visible::after { background: var(--accent); }
+.ws-splitter:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* 窗格关闭按钮：默认隐形，悬停/聚焦才出现，避免干扰插件内容 */
+.ws-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-translucent);
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--plite-dur) var(--plite-ease), color var(--plite-dur), border-color var(--plite-dur);
+  backdrop-filter: blur(8px);
+}
+.ws-pane:hover > .ws-close,
+.ws-close:focus-visible { opacity: 1; }
+.ws-close:hover { color: var(--text); border-color: var(--border-strong); }
+.ws-close svg { width: 13px; height: 13px; }
+
+/* 没有 hover 的设备（触屏平板 > 断点）上，hover 揭示等于永不显示 —— 直接常驻 */
+@media (hover: none) {
+  .ws-close { opacity: 1; }
+}
+[data-drop-before='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+}
+.ws-drop-tail {
+  display: block;
+  width: 2px;
+  margin: 8px 0;
+  background: var(--accent);
+}
+
+/* 锚点显式子树的容器（预设用） */
+.ws-anchor-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 宿主槽位视图（host.slot.<anchor>）作为 tabs 窗格时的容器：
+   必须撑满，否则 SlotOutlet 里的 tabbody 拿不到高度，面板内容会被压成一行 */
+.ws-slot-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}

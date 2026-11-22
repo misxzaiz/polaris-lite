@@ -17,7 +17,7 @@ import {
   findNode,
   findParent,
   collectViewTypes,
-} from '../src/core/workspace/schema.ts';
+} from '../plugins/sdk/schema.ts';
 
 /** 构造一棵合法的三层树：split(row) → [view, tabs[view, view]] */
 function validTree() {
@@ -348,7 +348,7 @@ import {
   countViewType,
   anchorNode,
   nextNodeId,
-} from '../src/core/workspace/treeOps.ts';
+} from '../plugins/workspace-layout/treeOps.ts';
 
 const allAlive = () => true;
 

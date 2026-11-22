@@ -1,4 +1,19 @@
 /**
+ * 宿主槽位视图(host.slot.*)——迁入 workspace-layout 插件(P2-2)。
+ * viewRegistry 实例由插件 setup 时注入(核心不再暴露单例给插件)。
+ */
+/** 插件侧所需的最小注册接口(核心 viewRegistry 满足它;避免 import 宿主实现) */
+export interface SlotViewRegistrar {
+  register(def: { viewType: string; pluginId: string; component: string; title: string; defaultAnchor?: import('../sdk/schema.ts').AnchorId }): boolean;
+}
+
+let hostViewRegistry: SlotViewRegistrar | null = null;
+/** 宿主 viewRegistry 实例由插件 setup 注入(核心在装配时把注册表交过来) */
+export function setHostViewRegistry(reg: SlotViewRegistrar): void {
+  hostViewRegistry = reg;
+}
+
+/**
  * 宿主自有视图：把四个锚点的「槽位内容」也注册成树里的**视图**。
  *
  * 为什么需要它：锚点的渲染规则是「有 children 就渲染 children，没有才渲染 SlotOutlet」。
@@ -15,9 +30,8 @@
  * 保留命名空间：`host.` 前缀不分配给任何插件（插件 viewType 必须 `<pluginId>.<local>`，
  * 而 `host` 由宿主占用）。`host.slot.*` 永远在线，所以永远不会被 pruneDeadViews 折叠。
  */
-import type { AnchorId } from './schema.ts';
-import { ANCHOR_IDS, HOST_SLOT_VIEW_PREFIX } from './schema.ts';
-import { viewRegistry } from './viewRegistry.ts';
+import type { AnchorId } from '../sdk/schema.ts';
+import { ANCHOR_IDS, HOST_SLOT_VIEW_PREFIX } from '../sdk/schema.ts';
 
 /** 宿主在视图注册表里的 pluginId（不是插件，不参与 grants / 生命周期） */
 export const HOST_PLUGIN_ID = 'host';
@@ -52,8 +66,9 @@ export function anchorOfSlotView(viewType: string): AnchorId | null {
  * 幂等：重复调用不会产生重复项（注册表对同 viewType 幂等拒绝）。
  */
 export function registerHostSlotViews(): void {
+  if (!hostViewRegistry) throw new Error('hostViews: viewRegistry 未注入(setHostViewRegistry 先于注册调用)');
   for (const anchor of ANCHOR_IDS) {
-    viewRegistry.register({
+    hostViewRegistry.register({
       viewType: slotViewType(anchor),
       pluginId: HOST_PLUGIN_ID,
       // 宿主组件不由插件模块导出；LeafView 走专门分支渲染，这里的名字只用于诊断

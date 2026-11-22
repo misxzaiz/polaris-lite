@@ -20,7 +20,8 @@
  * - running map 按 sessionId::messageId 精确中断（并发流互不误伤）；
  * - 中断路径必须补发 message.done，否则 UI 的「停止」按钮永远不回位。
  */
-import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
+import { CHANNEL_REAL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi, type StreamCapabilityHandler } from '@sdk';
+import { buildUsagePayload, createSseReader, isUpstreamDisconnectFrame, aggregateToolCallDelta, classifyLimitError, type WireUsage as KitWireUsage } from '../engine-kit';
 
 const RELAY_URL = '/api/model-relay'; // 宿主内嵌中继（同源；会话 cookie 自动携带）
 const DIRECT_CONFIG_URL = '/api/providers/direct-config';
@@ -33,21 +34,6 @@ interface ModelCaps {
 }
 
 /** ai.usage 事件载荷（spec：docs/context-insight-plan.md §4.1；v2 增缓存字段） */
-interface AiUsagePayload {
-  sessionId: string;
-  messageId: string;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  /** 命中缓存读取的输入 token（供应商按更低单价计费）；网关未回时缺省 */
-  cachedTokens?: number;
-  /** 写入缓存的输入 token（缓存创建）；部分网关回 prompt_cache_miss_tokens */
-  cacheCreationTokens?: number;
-  durationMs: number;
-  model?: string;
-  contextWindow?: number;
-  estimated?: boolean;
-}
 
 /**
  * OpenAI 兼容 usage 块（流末帧；字段名按协议，camelCase 由本层转换）。
@@ -55,27 +41,8 @@ interface AiUsagePayload {
  * 兼容 DeepSeek/GLM 变体 `prompt_cache_hit_tokens`；缓存写入取
  * `prompt_tokens_details.cache_creation_tokens` / 变体 `prompt_cache_miss_tokens`。
  */
-interface WireUsage {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number; cache_creation_tokens?: number };
-  prompt_cache_hit_tokens?: number;
-  prompt_cache_miss_tokens?: number;
-}
+type WireUsage = KitWireUsage;
 
-/** 上下文估算：Σ消息字符 ÷ 4（中英混合保守近似，对齐 simple_ai CHARS_PER_TOKEN） */
-function estimateTokens(messages: { content: unknown; tool_calls?: unknown }[]): number {
-  let chars = 0;
-  for (const m of messages) {
-    if (typeof m.content === 'string') chars += m.content.length;
-    else if (Array.isArray(m.content)) {
-      for (const p of m.content as { text?: string }[]) chars += typeof p?.text === 'string' ? p.text.length : 0;
-    }
-    if (m.tool_calls !== undefined) chars += JSON.stringify(m.tool_calls).length;
-  }
-  return Math.ceil(chars / 4);
-}
 
 /** 引擎视角的供应商（masked：服务端只回这些字段，无 apiKey） */
 interface ActiveProvider {
@@ -252,7 +219,7 @@ async function streamDirect(
     // 断尾守卫同中继路径——没有 [DONE] 也没有 finish_reason 就是断流，不装正常）
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
-    let buf = '';
+    const sse = createSseReader();
     let sawDoneMarker = false;
     let streamedChars = 0;
     for (;;) {
@@ -262,14 +229,10 @@ async function streamDirect(
       }
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') { sawDoneMarker = true; continue; }
+      for (const frame of sse.push(decoder.decode(value, { stream: true }))) {
+        if (frame.done) { sawDoneMarker = true; continue; }
+        const data = frame.data;
+        if (!data) continue;
         try {
           const json = JSON.parse(data);
           const choice = json.choices?.[0];
@@ -282,7 +245,7 @@ async function streamDirect(
             streamedChars += delta.length;
             emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
           }
-          if (choice?.finish_reason) sawDoneMarker = true;
+          if (choice?.finish_reason) { sawDoneMarker = true; sse.markDone(); }
         } catch { /* 跳过不完整行 */ }
       }
     }
@@ -293,7 +256,7 @@ async function streamDirect(
       });
       return;
     }
-    emitUsage(streamKey, sessionId, messageId, messages, wireUsage, responseModel, caps?.maxInputTokens, startedAt, emit);
+    emit({ kind: 'ai.usage', payload: buildUsagePayload({ sessionId, messageId, messages, wireUsage, model: responseModel, maxInputTokens: caps?.maxInputTokens, startedAt }) });
     emit({ kind: 'message.done', payload: { sessionId, messageId } });
   } catch (err) {
     if (cancelled) {
@@ -325,29 +288,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 /** 拒绝 stream_options 的供应商方言（400 实测后拉黑，本会话不再发送） */
 const streamOptionsBlocked = new Set<string>();
 
-/** 从限值报错文案里解析数字上限（与 server/providers-api.mjs parseLimitFromError 同语义） */
-function parseLimitFromError(text: string): number | null {
-  const patterns = [
-    /between\s+\d+\s+and\s+(\d+)/i,
-    /at\s+most\s+(\d+)/i,
-    /(?:maximum|limit|max)[^\d]{0,24}(\d{3,})/i,
-  ];
-  for (const re of patterns) {
-    const m = String(text ?? '').match(re);
-    const v = m ? Number(m[1]) : NaN;
-    if (Number.isFinite(v) && v > 0) return v;
-  }
-  return null;
-}
 
-/** 限值报错分类：输出上限 vs 输入上下文（写回能力表的字段不同） */
-function classifyLimitError(msg: string): { kind: 'output' | 'input' | null; limit: number | null } {
-  const limit = parseLimitFromError(msg);
-  if (!limit) return { kind: null, limit: null };
-  if (/output|completion|max[_ ]?tokens/i.test(msg)) return { kind: 'output', limit };
-  if (/context|prompt|input|too long/i.test(msg)) return { kind: 'input', limit };
-  return { kind: null, limit };
-}
 
 /** 运行时自愈回填（服务端 note-probe；失败静默——自愈是增益不是门槛） */
 async function noteProbeLimits(providerId: string, modelId: string, patch: { maxOutputTokens?: number; maxInputTokens?: number }): Promise<void> {
@@ -379,61 +320,6 @@ function buildCapabilityParams(provider: ActiveProvider): Record<string, unknown
   out.max_tokens = caps && caps.maxOutputTokens > 0 ? caps.maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS;
   if (caps?.effort) out.reasoning_effort = caps.effort;
   return out;
-}
-
-/** 统一 emit ai.usage：真实 usage 优先，缺失时按 messages 估算（estimated 标记） */
-function emitUsage(
-  _streamKey: string,
-  sessionId: string,
-  messageId: string,
-  messages: { content: unknown; tool_calls?: unknown }[],
-  wireUsage: WireUsage | null,
-  model: string | undefined,
-  maxInputTokens: number | undefined,
-  startedAt: number,
-  emit: (ev: { kind: string; payload: unknown }) => void,
-): void {
-  const durationMs = Date.now() - startedAt;
-  const contextWindow = maxInputTokens && maxInputTokens > 0 ? maxInputTokens : undefined;
-  if (wireUsage && (wireUsage.prompt_tokens !== undefined || wireUsage.completion_tokens !== undefined)) {
-    const inputTokens = Math.max(0, Number(wireUsage.prompt_tokens ?? 0));
-    const outputTokens = Math.max(0, Number(wireUsage.completion_tokens ?? 0));
-    const total = Number(wireUsage.total_tokens ?? inputTokens + outputTokens);
-    // 缓存字段提取链对齐 simple_ai stream.rs：标准 details 优先，DeepSeek/GLM 变体兜底；
-    // 网关未回时缺省（0 视为「无数据」不 emit，避免把缓存占比误置 0%）。
-    const cached = Number(
-      wireUsage.prompt_tokens_details?.cached_tokens ?? wireUsage.prompt_cache_hit_tokens ?? 0,
-    );
-    const cacheCreation = Number(
-      wireUsage.prompt_tokens_details?.cache_creation_tokens ?? wireUsage.prompt_cache_miss_tokens ?? 0,
-    );
-    const payload: AiUsagePayload = {
-      sessionId, messageId,
-      inputTokens,
-      outputTokens,
-      totalTokens: Math.max(0, Number.isFinite(total) ? total : inputTokens + outputTokens),
-      ...(Number.isFinite(cached) && cached > 0 ? { cachedTokens: Math.floor(cached) } : {}),
-      ...(Number.isFinite(cacheCreation) && cacheCreation > 0 ? { cacheCreationTokens: Math.floor(cacheCreation) } : {}),
-      durationMs,
-      ...(model ? { model } : {}),
-      ...(contextWindow ? { contextWindow } : {}),
-    };
-    emit({ kind: 'ai.usage', payload });
-    return;
-  }
-  // 无 usage：字符估算兜底（水位仍可用，精度降级并明示）
-  const est = estimateTokens(messages);
-  const payload: AiUsagePayload = {
-    sessionId, messageId,
-    inputTokens: est,
-    outputTokens: 0,
-    totalTokens: est,
-    durationMs,
-    estimated: true,
-    ...(model ? { model } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
-  };
-  emit({ kind: 'ai.usage', payload });
 }
 
 const streamHandler: StreamCapabilityHandler = async (req, emit) => {
@@ -641,7 +527,7 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
 
       const reader = resp.body!.getReader();
       const decoder = new TextDecoder();
-      let buf = '';
+      const sse = createSseReader();
       // 工具调用聚合：按 OpenAI 规范 delta.tool_calls 可能分片（index 维度拼接
       // id / function.name / function.arguments），也可能整块一次到齐（MOSI 实测）。
       // 每次尝试独立聚合——断流尝试的半截 tool_calls 不跨尝试拼接（协议不成对）。
@@ -659,19 +545,15 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
         }
         const { done, value } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() ?? '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const data = trimmed.slice(5).trim();
-          if (data === '[DONE]') { sawDoneMarker = true; continue; }
+        for (const frame of sse.push(decoder.decode(value, { stream: true }))) {
+          if (frame.done) { sawDoneMarker = true; continue; }
+          const data = frame.data;
+          if (!data) continue;
           try {
             const json = JSON.parse(data);
             // 中继注入的上游断流错误帧（relay-core 对 text/event-stream 追加）：
             // 进入重试流程，不装正常结束
-            if (json.error && typeof json.error === 'object' && json.error.code === 'UPSTREAM_DISCONNECTED') {
+            if (isUpstreamDisconnectFrame(json)) {
               broke = true;
               break pump;
             }
@@ -692,18 +574,8 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
               emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
             }
             // 工具调用增量聚合（index 维度）
-            const tcs = choice?.delta?.tool_calls;
-            if (Array.isArray(tcs)) {
-              for (const tc of tcs) {
-                const idx = Number(tc?.index ?? 0);
-                const slot = toolAcc.get(idx) ?? { id: '', name: '', arguments: '' };
-                if (tc.id) slot.id = slot.id || String(tc.id);
-                if (tc.function?.name) slot.name += String(tc.function.name);
-                if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
-                toolAcc.set(idx, slot);
-              }
-            }
-            if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDoneMarker = true; }
+            aggregateToolCallDelta(toolAcc, choice?.delta?.tool_calls);
+            if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDoneMarker = true; sse.markDone(); }
           } catch { /* 跳过不完整行 */ }
         }
       }
@@ -722,7 +594,7 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
           emit({ kind: 'tool.calls', payload: { sessionId, messageId, toolCalls } });
         }
         // ai.usage：优先真实 usage；供应商不回时按本次 messages 估算兜底（estimated 标记）
-        emitUsage(streamKey, sessionId, messageId, attemptMessages, wireUsage, responseModel, activeCaps(provider)?.maxInputTokens, startedAt, emit);
+        emit({ kind: 'ai.usage', payload: buildUsagePayload({ sessionId, messageId, messages: attemptMessages, wireUsage, model: responseModel, maxInputTokens: activeCaps(provider)?.maxInputTokens, startedAt }) });
         // length 截断时聚合中的半截 tool_calls 上报编排层（不再静默丢弃）：
         // 模型想调工具的意图是重要信号，编排层据此自动 nudge 重试
         const partialToolCalls = finishReason && finishReason !== 'tool_calls' ? toolAcc.size : 0;
@@ -835,9 +707,9 @@ export const realEnginePlugin: LitePlugin = {
     api.registerCapability.registerStreaming('cap.ai.chat', streamHandler);
     api.registerCapability.register('cap.ai.chat.interrupt', interruptHandler);
 
-    // 独立档配置操作桥（standalone-mode 面板按钮调用；同 __FILE_BROWSER_COMPOSE__ 先例：
+    // 独立档配置操作桥（standalone-mode 面板按钮调用；同 CHANNEL_FILE_BROWSER_COMPOSE(@sdk) 先例：
     // 经受限 window 通道而非跨插件 cap——这是「数据搬运动作」而非可声明能力）
-    (window as unknown as Record<string, unknown>).__REAL_ENGINE_DIRECT__ = {
+    (window as unknown as Record<string, unknown>)[CHANNEL_REAL_ENGINE_DIRECT] = {
       /** 用户显式同意：拉当前供应商直连配置存本机 localStorage */
       save: fetchAndStoreDirectConfig,
       /** 清除本机直连配置 */

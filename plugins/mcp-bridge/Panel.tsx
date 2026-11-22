@@ -67,6 +67,13 @@ export function McpPanel() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // AI 在聊天里（mcp_server_add/remove）或本面板在别的动作后增删了 server →
+  // tool-registered 事件驱动刷新：面板开着时状态徽标/工具清单即时可见，不用手动刷。
+  useEffect(() => {
+    const off = api?.listen('tool-registered', () => { void refresh(); });
+    return () => off?.();
+  }, [refresh]);
+
   const addServer = async () => {
     if (!form.name.trim() || !form.command.trim()) return;
     setBusy(true);
@@ -113,6 +120,16 @@ export function McpPanel() {
       <div className="mcp-tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'servers'} className={tab === 'servers' ? 'mcp-tab active' : 'mcp-tab'} onClick={() => setTab('servers')}>服务器</button>
         <button role="tab" aria-selected={tab === 'about'} className={tab === 'about' ? 'mcp-tab active' : 'mcp-tab'} onClick={() => setTab('about')}>说明</button>
+        <button
+          type="button"
+          className="mcp-btn"
+          style={{ flex: 'none', padding: '5px 10px' }}
+          disabled={busy}
+          title="重新拉取所有 server 状态与工具清单（连接状态、工具有没有生效，一看便知）"
+          onClick={() => { void refresh(); }}
+        >
+          ↻ 刷新
+        </button>
       </div>
 
       {error && <div className="mcp-error">{error}</div>}

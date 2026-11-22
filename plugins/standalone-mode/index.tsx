@@ -13,7 +13,7 @@
  *   不可达判定保守（连续 2 次失败才切 standalone，防 Wi-Fi 抖动误切）。
  */
 import { useEffect, useState } from 'react';
-import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { CHANNEL_REAL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 
 type ModeStatus = 'connected' | 'standalone' | 'unknown';
 
@@ -117,7 +117,7 @@ interface DirectBridge {
 }
 function directBridge(): DirectBridge | null {
   if (typeof window === 'undefined') return null;
-  const b = (window as unknown as Record<string, unknown>).__REAL_ENGINE_DIRECT__;
+  const b = (window as unknown as Record<string, unknown>)[CHANNEL_REAL_ENGINE_DIRECT];
   return typeof b === 'object' && b !== null ? (b as DirectBridge) : null;
 }
 

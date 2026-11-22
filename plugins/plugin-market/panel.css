@@ -4,7 +4,8 @@
 .mk-tab { flex: 1; padding: 5px 0; border: 1px solid var(--border); background: transparent; color: var(--text-dim, var(--text)); border-radius: 6px; cursor: pointer; font-size: 12px; }
 .mk-tab.active { background: var(--bg-hover, var(--border)); color: var(--text); font-weight: 600; }
 .mk-error { border: 1px solid #d64545; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #d64545; word-break: break-all; }
-.mk-flash { border: 1px solid #4caf7d; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #4caf7d; }
+.mk-flash { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border: 1px solid #4caf7d; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; color: #4caf7d; }
+.mk-reload-btn { margin-left: auto; }
 .mk-empty { color: var(--text-dim, var(--text)); padding: 10px 4px; line-height: 1.7; }
 .mk-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
 .mk-item-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

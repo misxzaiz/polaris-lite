@@ -115,6 +115,10 @@ const isMain = (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLT
   || !!process.env.PM2_HOME;
 if (isMain) {
   const port = Number(process.env.PORT ?? 9825);
-  createProdServer({ secureCookies: process.env.PLITE_COOKIE_SECURE === '1' })
+  createProdServer({
+    secureCookies: process.env.PLITE_COOKIE_SECURE === '1',
+    // 上游策略默认不限制（http/私网均可）；PLITE_UPSTREAM_STRICT=1 恢复旧白名单模式。
+    policyOptions: { strict: process.env.PLITE_UPSTREAM_STRICT === '1' },
+  })
     .listen(port, () => console.log(`[polaris-lite] prod server on http://127.0.0.1:${port}`));
 }

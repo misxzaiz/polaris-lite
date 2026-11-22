@@ -10,11 +10,9 @@ import { createRoot } from 'react-dom/client';
 import { host } from '@/core/hostRuntime';
 import { SlotLayout } from '@/core/SlotLayout';
 import { installMetaCapability } from '@/core/metaCapability';
-import { installLayoutCapability } from '@/core/workspace/layoutCap';
-import { registerHostSlotViews } from '@/core/workspace/hostViews';
-import { workspaceStore, viewRegistry } from '@/core/workspace/hostStore';
+import { viewRegistry } from '@/core/workspace/viewRegistry';
 import { pushNotice } from '@/core/shellState';
-import { loadExternalPlugins } from '@/core/externalPlugins';
+import { getRuntimeComponent, loadExternalPlugins } from '@/core/externalPlugins';
 import '@/plite-tokens.css';
 import '@/styles.css';
 
@@ -37,22 +35,13 @@ async function bootstrap(): Promise<void> {
   (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT_DOM__ =
     (reactDomMod as unknown as { default?: unknown }).default ?? reactDomMod;
 
-  // 1. 安装核心内建能力（meta 与 layout 都是核心自有 cap，不属于任何业务插件）
+  // 1. 安装核心内建能力（meta 是核心自有 cap；布局能力已随 workspace-layout 插件走,P2-2）
   //    meta 传入视图/槽位注册表：describe 返回 views 与 slots 清单（自省型面板的免授权数据源）
   installMetaCapability(host.bus, () => host.policyTable(), viewRegistry, host.slots);
-  // 布局能力走总线：授权、归属校验、审计都复用既有机制，不开第二写通道
-  installLayoutCapability(host.bus, { store: workspaceStore, registry: viewRegistry });
-  // 宿主槽位视图（host.slot.<anchor>）：把四个锚点原有的槽位内容变成可被布局树引用的视图，
-  // 否则预设一旦给锚点写了 children，面板里的槽位面板就整片消失。必须在 restore 之前注册。
-  registerHostSlotViews();
 
-  // 2. 先恢复工作区布局，再加载插件——顺序不能反。
-  //    插件在 setup() 里就会调 cap.ui.layout 装配自己的视图；若 restore 放在插件之后，
-  //    restore 会整体替换树，把这些「刚打开」的视图全部抹掉（表现为 open 返回 ok 但界面没有）。
-  //    此阶段只做「读 + 校验」，折叠死视图留给插件加载后的 pruneDeadViews()。
-  workspaceStore.restore();
-
-  // 3. 外部注册：registry 决定「装哪些」，grants 决定「能干什么」（发现失败不阻断壳渲染）
+  // 2. 外部注册：registry 决定「装哪些」，grants 决定「能干什么」（发现失败不阻断壳渲染）
+  //    workspace-layout 插件的 setup 注册 cap.ui.layout；restore/prune 在其 LayoutRoot
+    //    容器 wiring 时进行（SlotLayout 渲染前,插件已全部装配完,时序等价旧流程）。
   const { loaded, failed, policyWarnings } = await loadExternalPlugins(
     '/plugins/registry.json',
     '/grants.json',
@@ -69,16 +58,41 @@ async function bootstrap(): Promise<void> {
   }
   console.info(`[polaris-lite] ${loaded.length} external plugin(s) loaded:`, loaded);
 
-  // 4. 视图注册表已齐 → 折叠孤儿视图（插件下线/禁用后留下的空洞）。
-  //    但有插件加载失败时**必须跳过**：那些插件的视图此刻只是「未注册」，
-  //    prune 会把它们判成死视图删掉并立刻落盘——用户修好插件也回不来了。
-  if (failed.length === 0) {
-    workspaceStore.pruneDeadViews();
-  } else {
-    console.warn('[polaris-lite] 有插件加载失败，跳过孤儿视图折叠，避免误删它们的布局位');
+  // 3. 插件装配健康位：布局插件的孤儿视图折叠依赖它（加载失败必须跳过 prune,
+  //    否则失败插件的「未注册视图」会被判死并落盘——用户修好插件也回不来了）。
+  host.setPluginLoadHealth(failed.length === 0);
+
+  // 3.5 layout-root 容器 wiring（P2-2 必修包修4）:在渲染前、全部插件 setup 后调用。
+  //    此前放在 SlotLayout 渲染体内（wiredRef 锁存,setup 被静默跳过时无重试无告警）——
+  //    移到装配链后时序确定,且 wire 缺失（容器声明了但 setup 未挂通道）可以当众报出。
+  //    通道名 = @sdk CHANNEL_LAYOUT_WIRE,宿主侧就地字面量对齐（arch 门禁:核心不 import 插件）。
+  {
+    const container = host.slots.resolveContainer('layout-root');
+    if (container) {
+      const wire = (window as unknown as Record<string, unknown>)['__PLITE_LAYOUT_WIRE__'] as
+        | ((args: unknown) => void)
+        | undefined;
+      if (typeof wire === 'function') {
+        wire({
+          registerView: (def: { viewType: string; pluginId: string; component: string; title: string; defaultAnchor?: 'sidebar' | 'stream' | 'input' | 'panel' }) =>
+            viewRegistry.register(def),
+          getView: (viewType: string) => viewRegistry.get(viewType),
+          listViews: () => viewRegistry.list(),
+          resolveComponent: (viewType: string) => {
+            const def = viewRegistry.get(viewType);
+            return def ? getRuntimeComponent(def.pluginId, def.component) : undefined;
+          },
+          pluginsFailed: !host.isPluginLoadHealthy,
+        });
+      } else {
+        showBootNotice('布局容器异常', [
+          `${container.pluginId} 声明了 layout-root 容器但 setup 未挂载 wiring 通道——本次启动回退固定四槽`,
+        ]);
+      }
+    }
   }
 
-  // 5. 渲染壳层（内部按工作区树渲染四个锚点）
+  // 4. 渲染壳层（布局主体委托 layout-root 容器;无插件时回退固定四槽）
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <SlotLayout />

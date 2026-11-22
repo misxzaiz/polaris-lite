@@ -35,7 +35,8 @@ test('chat-lite 必须消费 message.reasoning 并落 thinking 块', () => {
   assert.match(chatSrc, /message\.reasoning/, 'chat-lite 必须处理 message.reasoning 事件');
   assert.match(chatSrc, /pushReasoning/, '思考增量必须经 rAF 合并缓冲');
   assert.match(chatSrc, /type: 'thinking'/, '思考文本必须落 thinking 块');
-  assert.match(storeSrc, /\| \{ type: 'thinking'; text: string \}/, 'AsstBlock 联合必须含 thinking 块');
+  const typesSrc = readFileSync(resolve(root, 'src/core/types.ts'), 'utf8');
+  assert.match(typesSrc, /\| \{ type: 'thinking'; text: string \}/, 'AsstBlock 联合必须含 thinking 块(契约层)');
   assert.match(blockSrc, /ThinkingBlock/, 'BlockGroup 必须渲染思考块');
   // 思考期间也是活跃信号：message.reasoning 分支必须续期看门狗（长思考不误报）
   const branch = chatSrc.slice(chatSrc.indexOf("envelope.kind === 'message.reasoning'"), chatSrc.indexOf("envelope.kind === 'message.reasoning'") + 300);

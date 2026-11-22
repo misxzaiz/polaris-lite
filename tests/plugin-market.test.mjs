@@ -32,7 +32,7 @@ function tempEnv(t) {
   // 因此本测试**只测不落 registry 的路径**？不行——install 必然写。
   // 折中：install 用「id 与已注册冲突」分支验证拒绝；正常 install 的 registry 断言改验
   // dataDir/plugins 落盘 + 二次 install 冲突。真实 registry 双写由 E2E 冒烟覆盖。
-  const mw = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir, repoRoot: root });
+  const mw = createServerPart({ getSession: () => ({ user: { name: 't' } }), dataDir, repoRoot });
   const call = async (path, body) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
     const res = { code: 0, body: '', writeHead(c) { this.code = c; return this; }, end(b) { this.body = b ?? ''; } };

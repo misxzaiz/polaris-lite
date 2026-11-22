@@ -8,10 +8,10 @@
  * - 状态变化经 auth-changed 广播。
  */
 import { useState } from 'react';
-import type { AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { KEY_MOCK_AUTH_SESSION, type AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import './auth.css';
 
-const SESSION_KEY = 'mock-auth.session.v1';
+const SESSION_KEY = KEY_MOCK_AUTH_SESSION;
 /** 与宿主 server/auth-session.mjs 的 TTL 保持一致（12h） */
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 let hostApi: SlotHostApi | null = null;
@@ -152,10 +152,25 @@ function AuthBrand() {
 }
 
 function LoginForm() {
+  const [mode, setMode] = useState<'password' | 'tempToken'>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [tempToken, setTempToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const applyServerSession = (data: { user?: { name: string }; expiresAt?: number }) => {
+    // 服务端会话已签发（cookie）。镜像到 sessionStorage 供壳层门禁/欢迎语使用。
+    const ttl = 12 * 60 * 60 * 1000;
+    writeSession({
+      user: { id: `u-${data.user!.name}`, name: data.user!.name, roles: ['owner'] },
+      token: `server-${Date.now().toString(36)}`,
+      issuedAt: data.expiresAt ? data.expiresAt - ttl : Date.now(),
+    });
+    notifyChanged();
+    invalidateServerAuth();
+    // 壳层 useAuthGate 收到 auth-changed 后自动放行
+  };
 
   const submit = async () => {
     if (busy) return;
@@ -164,10 +179,11 @@ function LoginForm() {
     try {
       // 密码直接经 HTTPS/同源 POST 提交；服务端用 scrypt 加盐哈希存储。
       // （此前前端先做 md5，等于把"可重放的静态凭据"当密码用，且 md5 对安全性零收益）
+      // 临时凭证模式：服务端校验 tempToken 后签发同样的会话 cookie（权限等同密码登录）。
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(mode === 'tempToken' ? { tempToken: tempToken.trim() } : { username, password }),
       });
       const data = (await res.json()) as { ok?: boolean; status?: string; user?: { name: string }; expiresAt?: number; error?: { message?: string } };
       if (!res.ok || data.ok === false || data.status !== 'authenticated') {
@@ -175,21 +191,14 @@ function LoginForm() {
         setBusy(false);
         return;
       }
-      // 服务端会话已签发（cookie）。镜像到 sessionStorage 供壳层门禁/欢迎语使用。
-      const ttl = 12 * 60 * 60 * 1000;
-      writeSession({
-        user: { id: `u-${data.user!.name}`, name: data.user!.name, roles: ['owner'] },
-        token: `server-${Date.now().toString(36)}`,
-        issuedAt: data.expiresAt ? data.expiresAt - ttl : Date.now(),
-      });
-      notifyChanged();
-      invalidateServerAuth();
-      // 壳层 useAuthGate 收到 auth-changed 后自动放行
+      applyServerSession(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');
     }
     setBusy(false);
   };
+
+  const canSubmit = mode === 'tempToken' ? tempToken.trim().length >= 16 : !!username && password.length >= 4;
 
   // 已登录（session 镜像）时显示欢迎 + 修改账号密码 + 登出按钮
   const sess = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(SESSION_KEY) : null;
@@ -216,32 +225,57 @@ function LoginForm() {
       <AuthBrand />
       <div className="auth-title">欢迎回来</div>
       <div className="auth-sub">进入你的私人智能空间。首次登录将创建唯一管理员账号。</div>
-      <label className="auth-field">
-        <span>账号</span>
-        <input
-          className="auth-input"
-          placeholder="用户名"
-          autoComplete="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-        />
-      </label>
-      <label className="auth-field">
-        <span>密码</span>
-        <input
-          className="auth-input"
-          type="password"
-          placeholder="至少 4 位字符"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-        />
-      </label>
+      {mode === 'password' ? (
+        <>
+          <label className="auth-field">
+            <span>账号</span>
+            <input
+              className="auth-input"
+              placeholder="用户名"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+          </label>
+          <label className="auth-field">
+            <span>密码</span>
+            <input
+              className="auth-input"
+              type="password"
+              placeholder="至少 4 位字符"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            />
+          </label>
+        </>
+      ) : (
+        <label className="auth-field">
+          <span>临时凭证</span>
+          <input
+            className="auth-input"
+            placeholder="粘贴签发的临时凭证 Token"
+            autoComplete="off"
+            spellCheck={false}
+            value={tempToken}
+            onChange={(e) => setTempToken(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+          />
+          <span className="auth-temp-hint">在「账号 → 临时凭证」面板签发；有效期与账号密码登录相同（12 小时会话）。</span>
+        </label>
+      )}
       {error && <div className="auth-error">{error}</div>}
-      <button className="auth-submit" onClick={submit} disabled={busy || !username || password.length < 4}>
+      <button className="auth-submit" onClick={submit} disabled={busy || !canSubmit}>
         {busy ? '正在验证…' : '进入 Polaris'}
+      </button>
+      <button
+        type="button"
+        className="auth-switch"
+        onClick={() => { setMode(mode === 'password' ? 'tempToken' : 'password'); setError(''); }}
+      >
+        {mode === 'password' ? '使用临时凭证登录' : '返回账号密码登录'}
       </button>
     </div>
   );
@@ -398,12 +432,25 @@ function ChangeCredentialsPanel() {
 /**
  * 临时访问凭证面板（账号 Tab）：
  * 给 AI / 外部脚本签发短时效 Bearer token，用于无 cookie 环境访问 127.0.0.1 的本地 API
- * （/api/fs/*、/api/tool/exec 等）。服务端签发（/api/auth/temp-credential，30 分钟、
- * 仅回环 IP、重启即失效），本面板只做「一键签发 + 展示 + 复制现成调用示例」。
+ * （/api/fs/*、/api/tool/exec 等）。服务端签发（/api/auth/temp-credential，默认 30 分钟、
+ * 可选 5 分钟 ~ 24 小时、仅回环 IP、重启即失效），本面板做「选时长签发 + 展示 + 复制
+ * 现成调用示例 + 吊销 + 列出在效凭证」。
  */
+interface TempTokenItem { tokenDigest: string; expiresAt: number; remainMs: number }
+
+const TEMP_TTL_CHOICES = [
+  { label: '5 分钟', ms: 5 * 60 * 1000 },
+  { label: '30 分钟', ms: 30 * 60 * 1000 },
+  { label: '2 小时', ms: 2 * 60 * 60 * 1000 },
+  { label: '8 小时', ms: 8 * 60 * 60 * 1000 },
+  { label: '24 小时', ms: 24 * 60 * 60 * 1000 },
+];
+
 function TempCredentialPanel() {
   const [token, setToken] = useState('');
   const [expiresAt, setExpiresAt] = useState(0);
+  const [ttlMs, setTtlMs] = useState(30 * 60 * 1000);
+  const [items, setItems] = useState<TempTokenItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [copied, setCopied] = useState('');
@@ -413,18 +460,51 @@ function TempCredentialPanel() {
     setBusy(true);
     setErr('');
     try {
-      const res = await fetch('/api/auth/temp-credential', { method: 'POST' });
+      const res = await fetch('/api/auth/temp-credential', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttlMs }),
+      });
       const data = (await res.json()) as { ok?: boolean; token?: string; expiresAt?: number; error?: { message?: string } };
       if (!res.ok || data.ok === false || !data.token) {
         setErr(data.error?.message ?? '签发失败');
       } else {
         setToken(data.token);
-        setExpiresAt(data.expiresAt ?? Date.now() + 30 * 60 * 1000);
+        setExpiresAt(data.expiresAt ?? Date.now() + ttlMs);
+        void refreshList();
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : '签发失败');
     }
     setBusy(false);
+  };
+
+  const refreshList = async () => {
+    try {
+      const res = await fetch('/api/auth/temp-credential/list', { cache: 'no-store' });
+      const data = (await res.json()) as { ok?: boolean; items?: TempTokenItem[] };
+      if (res.ok && data.ok) setItems(data.items ?? []);
+    } catch { /* 面板内非关键信息，失败静默 */ }
+  };
+
+  const revoke = async (tok?: string) => {
+    setErr('');
+    try {
+      const res = await fetch('/api/auth/temp-credential/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tok ?? token }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: { message?: string } };
+      if (!res.ok || data.ok === false) {
+        setErr(data.error?.message ?? '吊销失败');
+        return;
+      }
+      if (!tok) { setToken(''); setExpiresAt(0); }
+      void refreshList();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '吊销失败');
+    }
   };
 
   const copy = async (text: string, label: string) => {
@@ -447,11 +527,24 @@ function TempCredentialPanel() {
       <h3>临时访问凭证</h3>
       <div className="auth-chg">
         <div className="auth-temp-desc">
-          给 AI 或本机脚本发一把「临时钥匙」：30 分钟有效、仅限 127.0.0.1 本机访问、重启即失效；
+          给 AI 或本机脚本发一把「临时钥匙」：可选 5 分钟 ~ 24 小时有效期、仅限 127.0.0.1 本机访问、重启即失效；
           泄露也不会波及你的登录账号。携带方式：<code>Authorization: Bearer &lt;token&gt;</code>。
         </div>
+        <label className="auth-field">
+          <span>有效期</span>
+          <select
+            className="auth-input"
+            value={ttlMs}
+            onChange={(e) => setTtlMs(Number(e.target.value))}
+            data-testid="temp-ttl-select"
+          >
+            {TEMP_TTL_CHOICES.map((c) => (
+              <option key={c.ms} value={c.ms}>{c.label}</option>
+            ))}
+          </select>
+        </label>
         <button className="auth-submit" onClick={issue} disabled={busy}>
-          {busy ? '签发中…' : token ? '重新签发' : '签发临时凭证（30 分钟）'}
+          {busy ? '签发中…' : token ? '重新签发' : `签发临时凭证（${TEMP_TTL_CHOICES.find((c) => c.ms === ttlMs)?.label ?? '30 分钟'}）`}
         </button>
         {err && <div className="auth-error">{err}</div>}
         {token && (
@@ -466,7 +559,32 @@ function TempCredentialPanel() {
             <button className="auth-submit auth-temp-copy" onClick={() => void copy(curlExample, 'curl')}>
               {copied === 'curl' ? '已复制' : '复制 curl 示例'}
             </button>
+            <button className="auth-submit auth-temp-copy" onClick={() => void revoke()}>
+              吊销当前凭证
+            </button>
           </>
+        )}
+        <div className="auth-temp-desc">在效凭证（本页签发的可见摘要）：</div>
+        {items.length === 0 ? (
+          <div className="auth-temp-meta">暂无在效凭证</div>
+        ) : (
+          <ul className="auth-temp-list">
+            {items.map((it) => (
+              <li key={it.tokenDigest} className="auth-temp-item">
+                <code>{it.tokenDigest}</code>
+                <span>剩 {Math.max(0, Math.ceil(it.remainMs / 60000))} 分钟</span>
+                <button
+                  type="button"
+                  className="auth-temp-revoke"
+                  onClick={() => { setToken(''); void revoke(it.tokenDigest); }}
+                  title="按摘要吊销需整段 token；此处仅展示，吊销以「吊销当前凭证」为准"
+                  disabled
+                >
+                  已在效
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

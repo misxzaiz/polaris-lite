@@ -73,6 +73,43 @@
 }
 .auth-temp-meta { color: var(--text-faint); font-size: 10.5px; }
 .auth-temp-copy { min-height: 34px; }
+/* 登录页：临时凭证模式提示与「切换登录方式」 */
+.auth-temp-hint { color: var(--text-faint); font-size: 10.5px; line-height: 1.6; }
+.auth-switch {
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 2px;
+}
+.auth-switch:hover { color: var(--accent-bright); }
+/* 在效凭证摘要列表 */
+.auth-temp-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.auth-temp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+.auth-temp-item code { flex: 1; font-family: var(--plite-font-mono); color: var(--text-soft); }
+.auth-temp-item span { color: var(--text-faint); }
+.auth-temp-revoke {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  padding: 3px 8px;
+}
 .auth-temp-curl {
   margin: 0;
   padding: 9px 11px;

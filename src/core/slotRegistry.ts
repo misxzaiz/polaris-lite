@@ -1,7 +1,7 @@
 /**
  * 槽位注册表：插件声明填哪个槽，核心据此渲染四槽布局。
  */
-import type { SlotDescriptor, SlotId } from './types';
+import type { ContainerDescriptor, SlotDescriptor, SlotId } from './types';
 
 export interface SlotEntry extends SlotDescriptor {
   pluginId: string;
@@ -41,8 +41,13 @@ export function orderEntriesByUserOrder(entries: SlotEntry[], orderKey: string[]
   return [...inOrder.map((x) => x.e), ...rest.map((x) => x.e)];
 }
 
+export interface ContainerEntry extends ContainerDescriptor {
+  pluginId: string;
+}
+
 export class SlotRegistry {
   private slots = new Map<SlotId, SlotEntry[]>();
+  private containers = new Map<ContainerDescriptor['container'], ContainerEntry[]>();
 
   register(pluginId: string, descriptors: SlotDescriptor[]): void {
     for (const d of descriptors) {
@@ -58,6 +63,27 @@ export class SlotRegistry {
     for (const [slot, list] of this.slots) {
       this.slots.set(slot, list.filter((e) => e.pluginId !== pluginId));
     }
+    for (const [kind, list] of this.containers) {
+      this.containers.set(kind, list.filter((e) => e.pluginId !== pluginId));
+    }
+  }
+
+  /** 容器贡献登记（host-slimming-report §7.2：tab 条 chrome 可由插件渲染） */
+  registerContainers(pluginId: string, descriptors: ContainerDescriptor[]): void {
+    for (const d of descriptors) {
+      const list = this.containers.get(d.container) ?? [];
+      if (!list.some((e) => e.pluginId === pluginId && e.component === d.component)) {
+        list.push({ ...d, pluginId });
+      }
+      this.containers.set(d.container, list);
+    }
+  }
+
+  /** 取某类容器的最优贡献（order 最小者）；无插件贡献时 undefined → 宿主回退内置 */
+  resolveContainer(kind: ContainerDescriptor['container']): ContainerEntry | undefined {
+    const list = this.containers.get(kind) ?? [];
+    if (list.length === 0) return undefined;
+    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
   }
 
   resolve(slot: SlotId): SlotEntry | undefined {

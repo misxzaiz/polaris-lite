@@ -10,8 +10,8 @@
  * - 任何收敛路径都必须补发 settle，否则输入框永远停在「停止」态；
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
-import type { LitePlugin, SlotHostApi, ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { CHANNEL_FILE_BROWSER_COMPOSE, KEY_MOCK_AUTH_SESSION, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
+import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, CARD_STORE_CAP, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
@@ -23,8 +23,7 @@ import './chat.css';
 // 上下文透视：状态条 + 详情抽屉样式（spec docs/context-insight-plan.md）
 import './context.css';
 
-/** 与 mock-auth 的会话镜像键保持一致（跨插件约定） */
-const MOCK_AUTH_SESSION_KEY = 'mock-auth.session.v1';
+/** 与 mock-auth 的会话镜像键：经 @sdk 契约登记（暗通道收编） */
 
 /**
  * 看门狗只是「疑似卡住」的软提示阈值，不是超时上限，更不是收敛信号。
@@ -108,7 +107,7 @@ export const chatLitePlugin: LitePlugin = {
   setup(api) {
     hostApi = api;
     // 跨插件输入注入通道（file-browser「发到对话」等使用；经本函数保证走合法发送路径）
-    (window as unknown as Record<string, unknown>).__FILE_BROWSER_COMPOSE__ = (text: string) => requestCompose(text);
+    (window as unknown as Record<string, unknown>)[CHANNEL_FILE_BROWSER_COMPOSE] = (text: string) => requestCompose(text);
     // 交互卡事件是 interactive-cards 直发（不走 cap.agent.loop:event 流通道），必须挂全局监听。
     // 事件载荷带 sessionId/messageId（agent-loop ask 时透传），按「会话+消息」双过滤落块，
     // 与流事件同一防串台纪律；store 查不到目标消息时自然 no-op（无主事件丢弃）。
@@ -160,7 +159,7 @@ export const chatLitePlugin: LitePlugin = {
       else if (p?.status === 'connected') setOfflineMode(false);
     });
     // 通用产物事件（html-preview 等产物插件直发）：一次性落块，无回填流；
-    // 渲染器由产物插件经 __PLITE_ARTIFACT_RENDERERS__ 登记，chat-lite 只认
+    // 渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记，chat-lite 只认
     // {rendererType, callId, title, data} 契约——第二个产物插件起零改动。
     api.listen('artifact.created', (envelope: unknown) => {
       const ev = envelope as { source?: string; payload?: Record<string, unknown> };
@@ -306,6 +305,9 @@ function handleToolEvent(
   const st = useSessionStore.getState();
   // 工具阶段（执行/审批）无 delta 流，用长看门狗并逐事件续期，避免误杀在途编排
   armPhaseWatchdog();
+  // patchCard 路径不过 trimCard（appendAssistantBlock 才过）——argsJson 在此手动裁剪
+  const capArgs = (raw?: string): string | undefined =>
+    raw ? (raw.length > CARD_STORE_CAP ? `${raw.slice(0, CARD_STORE_CAP)}…[已截断]` : raw) : undefined;
   const patchCard = (callId: string, patch: (card: ToolCardData) => ToolCardData): void => {
     // 新版：块内嵌于 assistant 消息；旧版（历史会话）：独立 tool 卡消息
     const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
@@ -325,20 +327,29 @@ function handleToolEvent(
     const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
     const exists = msg && hasBlocks(msg) && msg.blocks.some((b) => b.type === 'tool' && b.card.callId === callId);
     if (!exists) {
-      // 新块（tool.card 先到即建 running 卡）
+      // 新块（tool.card 先到即建 running 卡）。
+      // command 兜底（2026-11-21）：旧版 loop 对语义工具发空串 command——`?? ` 不会
+      // 跳过空串，摘要永远空白；改用 `||` 让空串落到 argsJson（ArgsBlock 可折叠细看）。
       st.appendAssistantBlock(sid, assistantId, {
         type: 'tool',
         card: {
           callId,
           name: inner.name ?? 'tool',
-          command: inner.command ?? inner.argsJson,
+          command: inner.command || inner.argsJson,
+          argsJson: inner.argsJson,
           status: kind === 'tool.card' ? 'running' : 'awaiting',
         },
       });
       return;
     }
     if (kind === 'tool.approval.required') {
-      patchCard(callId, (c) => ({ ...c, status: 'awaiting' }));
+      patchCard(callId, (c) => ({
+        ...c,
+        status: 'awaiting',
+        // 审批事件同样带 display 摘要与原始参数（建卡先于审批到达时在此补齐细节）
+        ...(inner.command ? { command: inner.command } : {}),
+        ...(inner.argsJson ? { argsJson: capArgs(inner.argsJson) } : {}),
+      }));
     }
     return;
   }
@@ -356,6 +367,9 @@ function handleToolEvent(
     patchCard(inner.callId ?? '', (c) => ({
       ...c,
       status: inner.status ?? 'error',
+      // 终态摘要回填（2026-11-21）：loop 在 tool.result 里带 display 摘要——
+      // 建卡阶段没收到 command（旧会话/异常路径）时在这里补齐
+      ...(inner.command ? { command: inner.command } : {}),
       stdout: inner.stdout,
       stderr: inner.stderr,
       exitCode: inner.exitCode,
@@ -622,7 +636,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       const detail = (inner as { message?: string }).message ?? '';
       // 会话过期（服务端 401）：清本地镜像并回到登录视图（自动跳登录，无需手动登出）
       if (detail.includes('登录已过期') || detail.includes('SESSION_REQUIRED')) {
-        sessionStorage.removeItem(MOCK_AUTH_SESSION_KEY);
+        sessionStorage.removeItem(KEY_MOCK_AUTH_SESSION);
         window.location.reload();
         return;
       }
@@ -666,6 +680,80 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   });
+}
+
+// ===== 消息操作（P0/P1）：复制口径 / 重发 / 编辑重答 / 重新生成 =====
+
+/** assistant 消息的可见正文：text 块拼接（与发送历史同一口径），缺省回退 content 镜像。
+ *  思考/工具卡/轻提示不进正文；[运行提示] 空闲软提示与流错误也是 text 块，随正文一并复制。 */
+export function assistantVisibleText(m: StoreMessage): string {
+  if (isToolCard(m)) return m.content;
+  if (hasBlocks(m)) return m.blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n') || m.content;
+  return m.content;
+}
+
+/** 会话是否有在途流（本端 UI 视角） */
+function isSessionStreaming(sid: string): boolean {
+  return useSessionStore.getState().sessions
+    .find((s) => s.id === sid)?.messages.some((m) => !isToolCard(m) && m.streaming) ?? false;
+}
+
+/** 重发：任意历史用户消息，追加新一轮。不截断、不改协议——shadow 是追加式语义，天然兼容。 */
+export function resendMessage(sessionId: string, msgId: string): void {
+  const st = useSessionStore.getState();
+  const msg = st.sessions.find((s) => s.id === sessionId)?.messages.find((m) => m.id === msgId);
+  if (!msg || isToolCard(msg) || msg.role !== 'user' || !msg.content.trim()) return;
+  // 流式中不并发开流：走既有排队机制（流结束后自动派发），与「排队」按钮同语义
+  if (isSessionStreaming(sessionId)) {
+    enqueuePending(msg.content);
+    return;
+  }
+  if (st.activeId !== sessionId) st.setActive(sessionId);
+  void sendUserMessage(msg.content);
+}
+
+/** 截断重答共用路径：shadow 复位（loop 模式）→ 截断 msgId 及其后全部 → 按同一提示词重新提交。
+ *  用户消息以新 id 重新入列（user.prompt 广播/钩子语义与手打重发完全一致）；代价：shadow 复位
+ *  丢弃压缩摘要，上下文按可见历史重播——与刷新页面同代价，仅截断路径发生。 */
+async function resubmitFrom(sid: string, userMsgId: string, prompt: string): Promise<void> {
+  const useLoop = await detectLoop();
+  if (useLoop && hostApi) {
+    try {
+      await hostApi.dispatch({ target: 'cap.agent.loop', action: 'reset', payload: { sessionId: sid } });
+    } catch { /* loop 不可用：直通模式无 shadow，无需复位 */ }
+  }
+  const store = useSessionStore.getState();
+  store.expirePendingApprovals(sid);
+  store.truncateMessagesBefore(sid, userMsgId);
+  await sendUserMessage(prompt);
+}
+
+/** 编辑重答：仅对最后一轮用户消息开放（文本可改）。截断该轮回复并以新文本重新提交。 */
+export async function editResendLast(sessionId: string, msgId: string, newText: string): Promise<void> {
+  const st = useSessionStore.getState();
+  const session = st.sessions.find((s) => s.id === sessionId);
+  const msg = session?.messages.find((m) => m.id === msgId);
+  if (!session || !msg || isToolCard(msg) || msg.role !== 'user') return;
+  const text = newText.trim();
+  if (!text) return;
+  const idx = session.messages.findIndex((m) => m.id === msgId);
+  // 仅最后一轮：之后不允许再有任何用户消息（更早的消息只有「回填」）
+  if (session.messages.slice(idx + 1).some((m) => !isToolCard(m) && m.role === 'user')) return;
+  if (isSessionStreaming(sessionId)) return;
+  await resubmitFrom(sessionId, msgId, text);
+}
+
+/** 重新生成：替换最后一条 assistant 回复（同提示词重答）。仅当末条是 assistant 且空闲。 */
+export async function regenerateLast(sessionId: string): Promise<void> {
+  const st = useSessionStore.getState();
+  const session = st.sessions.find((s) => s.id === sessionId);
+  if (!session || isSessionStreaming(sessionId)) return;
+  const n = session.messages.length;
+  const last = session.messages[n - 1];
+  const prev = session.messages[n - 2];
+  if (!last || isToolCard(last) || last.role !== 'assistant' || last.streaming) return;
+  if (!prev || isToolCard(prev) || prev.role !== 'user') return;
+  await resubmitFrom(sessionId, prev.id, prev.content);
 }
 
 /** 中断当前会话在途流；loop 存在时中断整个编排（引擎流+工具+审批），否则直接打断引擎 */

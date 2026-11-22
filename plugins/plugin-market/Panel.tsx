@@ -49,6 +49,7 @@ export function MarketPanel() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState('');
+  const [needsReload, setNeedsReload] = useState(false);
   const [form, setForm] = useState({ name: '', ref: '' });
   const [armRemove, setArmRemove] = useState<string | null>(null);
 
@@ -69,8 +70,9 @@ export function MarketPanel() {
   const install = async (source: string, id: string) => {
     setBusy(id);
     try {
-      const r = await api<{ note?: string }>('/api/market/install', { source, id });
-      setFlash(`已安装 ${id}${r.note ? `（${r.note}）` : ''}`);
+      await api('/api/market/install', { source, id });
+      setFlash(`已安装 ${id}，重载后可用`);
+      setNeedsReload(true);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -82,8 +84,9 @@ export function MarketPanel() {
   const uninstall = async (id: string) => {
     setBusy(id);
     try {
-      const r = await api<{ note?: string }>('/api/market/uninstall', { id });
-      setFlash(`已卸载 ${id}${r.note ? `（${r.note}）` : ''}`);
+      await api('/api/market/uninstall', { id });
+      setFlash(`已卸载 ${id}，重载后移除`);
+      setNeedsReload(true);
       setArmRemove(null);
       await refresh();
     } catch (e) {
@@ -134,7 +137,16 @@ export function MarketPanel() {
       </div>
 
       {error && <div className="mk-error">{error}</div>}
-      {flash && <div className="mk-flash">{flash}</div>}
+      {flash && (
+        <div className="mk-flash">
+          {flash}
+          {needsReload && (
+            <button type="button" className="mk-btn primary mk-reload-btn" onClick={() => window.location.reload()}>
+              ⟳ 重载应用
+            </button>
+          )}
+        </div>
+      )}
 
       {tab === 'store' && (
         <div>
@@ -191,7 +203,7 @@ export function MarketPanel() {
               </div>
             </div>
           ))}
-          {installedItems.length > 0 && <div className="mk-hint">启停请到「插件」管理面板；安装/卸载后刷新页面生效。</div>}
+          {installedItems.length > 0 && <div className="mk-hint">启停请到「插件」管理面板；安装/卸载后点上方「⟳ 重载应用」生效。</div>}
         </div>
       )}
 

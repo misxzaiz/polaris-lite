@@ -21,6 +21,7 @@ import {
   UsageAccumulator, estimateTokens, compactShadow,
   type NonStreamComplete, type UsageSample,
 } from './context-compact';
+import { summarizeToolCall } from './tool-summary';
 
 // 轮次/工具调用数量上限：应用户要求移除（曾为 8 轮 / 16 次）——任务时长靠用户
 // 「停止」即时收敛与单条命令超时兜底。
@@ -117,12 +118,20 @@ function flushLive(sessionId: string): void {
   const t = liveTimers.get(sessionId);
   if (t) { clearTimeout(t); liveTimers.delete(sessionId); }
   if (!buf || buf.length === 0) return;
+  // 批量上限（服务端 >64 整批 413）：超出部分不能静默丢——塞回缓冲并尽快续传，
+  // 否则查看端会永久缺一段事件（工具卡/审批卡在时间线上开天窗）。
   void fetch(LIVE_EVENT_URL(sessionId), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({ events: buf.slice(0, LIVE_BATCH_MAX) }),
   }).catch(() => undefined);
+  if (buf.length > LIVE_BATCH_MAX) {
+    liveBuffers.set(sessionId, buf.slice(LIVE_BATCH_MAX));
+    if (!liveTimers.has(sessionId)) {
+      liveTimers.set(sessionId, setTimeout(() => flushLive(sessionId), LIVE_FLUSH_MS));
+    }
+  }
 }
 
 /** 编排事件镜像：只镜像查看端关心的流式语义事件；done 类事件即时刷出。
@@ -227,15 +236,22 @@ async function discoverTools(): Promise<void> {
     const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
     const caps = (res.data?.capabilities ?? []).filter((c) => c.startsWith('cap.tool.') || c === 'cap.interactive');
     try { localStorage.setItem('mcp-debug-discover-caps', JSON.stringify({ at: new Date().toISOString(), caps })); } catch { /* 忽略 */ }
+    // 对账式替换：先收集全部 describe 结果，最后一口气 clear+set。此前只 set 不删，
+    // MCP server / 工具插件被移除或禁用后，旧工具名会残留进模型工具表直到刷新页面
+    // （模型仍能看到并调用，执行时才报「工具未注册」）。收集完再同步整块替换：
+    // loop 执行期 tools.get 是活查询，边 await 边清会留下半空 Map 窗口。
+    const collected: ToolDescriptorProto[] = [];
     for (const cap of caps) {
       const r = await hostApi.dispatch<{ descriptor?: ToolDescriptorProto; descriptors?: ToolDescriptorProto[] }>({ target: cap, action: 'describe' });
       // A1 兼容两种 describe 形态：单 descriptor（存量插件）与聚合 descriptors 数组
       // （如 mcp-bridge 的 cap.tool.mcp 一次返回全部 MCP 工具）。单形态视作长度 1 数组。
       const list = r.data?.descriptor ? [r.data.descriptor] : (r.data?.descriptors ?? []);
       for (const d of list) {
-        if (d?.name) tools.set(d.name, d);
+        if (d?.name) collected.push(d);
       }
     }
+    tools.clear();
+    for (const d of collected) tools.set(d.name, d);
     console.log('[agent-loop][discover] tools=', [...tools.keys()].join(','));
   } catch (e) {
     try { localStorage.setItem('mcp-debug-discover', 'discoverTools 错误: ' + (e instanceof Error ? e.message : String(e))); } catch { /* 忽略 */ }
@@ -277,6 +293,9 @@ async function decideApproval(
   callId: string,
   call: ToolCallProto,
   command: string,
+  /** 白名单键：「总是允许该前缀」按此存取与匹配（bash=原始命令；语义工具=`name action`/工具名）。
+   *  与 command（展示摘要）分离——审批卡要给用户看细节，白名单要跨调用稳定。 */
+  approvalKey: string,
   emit: (ev: { kind: string; payload: unknown }) => void,
   assistantId: string,
   aborted: () => boolean,
@@ -297,10 +316,10 @@ async function decideApproval(
   const trusted = sessionTrustedTools.get(sessionId);
   if (trusted?.has(call.name)) return 'ok';
   const allow = sessionAllow.get(sessionId);
-  if (allow && [...allow].some((p) => command === p || command.startsWith(`${p} `))) return 'ok';
+  if (allow && [...allow].some((p) => approvalKey === p || approvalKey.startsWith(`${p} `))) return 'ok';
   // allowlist 模式：本地未命中白名单仍进审批（服务端白名单由「总是允许」沉淀，服务端最终裁决）
 
-  emitTo(emit, 'tool.approval.required', { sessionId, messageId: assistantId, callId, name: call.name, command });
+  emitTo(emit, 'tool.approval.required', { sessionId, messageId: assistantId, callId, name: call.name, command, argsJson: call.arguments });
   let autoRejected = false;
   const decision = await new Promise<'once' | 'always' | 'trust' | 'deny'>((resolve) => {
     pendingApprovals.set(callId, resolve);
@@ -318,14 +337,14 @@ async function decideApproval(
   if (decision === 'deny') return autoRejected ? 'timeout' : 'deny';
   if (decision === 'always') {
     const set = sessionAllow.get(sessionId) ?? new Set<string>();
-    set.add(command);
+    set.add(approvalKey);
     sessionAllow.set(sessionId, set);
     // 持久化到服务端白名单（下次会话也放行该前缀）
     void fetch('/api/tool/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ addPrefix: command }),
+      body: JSON.stringify({ addPrefix: approvalKey }),
     }).catch(() => undefined);
     return 'ok';
   }
@@ -453,6 +472,16 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     }
     return;
   }
+  if (action === 'reset') {
+    // 编辑重答/重新生成的 shadow 复位（chat-lite 截断可见历史后调用）：清掉该会话的
+    // shadow，紧随其后的 start 按 payload.history 重新播种。要点：
+    // - 编排进行中拒绝——在途轮次的上下文不能被撕碎（本地 UI 另有流式守卫，这里是跨设备兜底）；
+    // - 在途 loop 闭包持有的是 shadow 数组引用，delete Map 条目不影响已跑轮次，下一轮 start 才重建；
+    // - 直通模式无 shadow，幂等返回。复位 = 丢弃压缩摘要，上下文按可见历史重播（与刷新页面同代价）。
+    if (running.has(sessionId) || running.has(`${sessionId}::turn`)) return;
+    shadows.delete(sessionId);
+    return;
+  }
   if (action === 'resume') {
     // 截断续写兜底（自动续写 burst 耗尽后用户点「继续」）：要求会话已有 shadow
     // （尾条是 assistant 半截 prefill）且当前空闲；不满足则静默忽略。
@@ -523,6 +552,10 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     let cwdHint = '<dataDir>/workspace（默认工作区）';
     let readonlyHint = '';
     let execCwd: string | undefined;
+    /** 会话绑定（或全局跟随）的工作区根 id：files/files_write 的默认根也跟随它——
+     *  否则 bash 在绑定根里跑、files_write 却写进内建 workspace，两套工具落盘分家
+     *  （2026-11-22 长任务实测发现：v1 全部文件写错位置）。 */
+    let boundRootId: string | undefined;
     try {
       const wsRes = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
       const list = wsRes.data?.roots ?? [];
@@ -532,6 +565,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       if (bound?.path) {
         cwdHint = `${bound.label}（${bound.path}）`;
         execCwd = bound.path;
+        boundRootId = bound.id;
       } else if (boundId) {
         // 绑定的根已失效（被移除/盘符不在）：回落默认并在 prompt 说明
         readonlyHint = ` 注意：会话绑定的工作区已失效（id=${boundId}），已回落默认工作区。`;
@@ -545,8 +579,10 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const label = list.find((r) => r.id === globalEntry[0])?.label ?? globalEntry[0];
           cwdHint = `${label}（${globalEntry[1]}）`;
           execCwd = globalEntry[1];
+          boundRootId = globalEntry[0];
         } else if (builtin?.path) {
           cwdHint = builtin.path;
+          boundRootId = builtin.id;
         }
       } else if (builtin?.path && builtin.path !== execCwd) {
         // 会话绑定优先；builtin 与其它登记根退居「只读可见」提示
@@ -581,7 +617,9 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           role: 'system',
           content:
             '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具与 files 工具（浏览/读取文件，只读）。' +
-            `当前宿主平台：${navigator.platform || 'unknown'}；bash 的 cwd 固定为：${cwdHint}。` +
+            `当前宿主平台：${navigator.platform || 'unknown'}；` +
+            `当前日期时间：${new Date().toLocaleString('zh-CN', { hour12: false })}（宿主本地时区；会话进行中日期跨零点后以 bash date 为准）。` +
+            `bash 的 cwd 固定为：${cwdHint}。` +
             '需要读写文件、跑脚本、查状态时优先用工具，不要凭空编造输出；' +
             '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。' +
             'bash 的读写只能发生在 cwd 内；需要浏览或读取 cwd 之外的文件时，用 files 工具的 roots/list/read（只读）。' +
@@ -694,6 +732,9 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
     let turn = 0;
     let totalToolCalls = 0;
+    /** 连续「纯工具无文本」轮数：模型偶发保活 ping 死循环（echo pingN ×1548 实测），
+     *  达阈值注入系统提示促其收敛——只 nudge 不断流，保留用户「停止」兜底语义。 */
+    let toolOnlyStreak = 0;
     // length 截断自动续写预算（per assistant 消息；耗尽后落截断块走「继续」按钮兜底）
     let autoContinueLeft = MAX_AUTO_CONTINUE;
     for (; !abortedFlag; turn += 1) {
@@ -724,6 +765,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
       running.delete(`${sessionId}::turn`);
 
       if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
+        toolOnlyStreak = 0; // 有正文输出：保活计数归零
         shadow.push({ role: 'assistant', content: result.text });
         // finish_reason=length：达到 max_tokens 被上游硬掐（不是错误但也不是说完了）。
         // 自动续写（burst 限次）：prefill 形态（shadow 尾=assistant 半截文）模型自然接续，
@@ -784,11 +826,10 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         totalToolCalls += 1;
         const desc = tools.get(call.name);
         const callId = call.id || `call-${turn}-${totalToolCalls}`;
-        let command = '';
-        try {
-          const parsed = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
-          command = String(parsed.command ?? '');
-        } catch { command = ''; }
+        // 摘要（2026-11-21）：display 是给用户看的单行摘要（browser 带 URL/元素文本等细节），
+        // approvalKey 是「总是允许该前缀」的稳定键——此前 command 只取 parsed.command
+        //（仅 bash 有），语义工具恒空串 → 卡片摘要只剩状态字。
+        const { display: command, approvalKey } = summarizeToolCall(call.name, call.arguments);
         emitTo(emit, 'tool.card', {
           sessionId, messageId: assistantId, callId,
           name: call.name, command, argsJson: call.arguments,
@@ -808,20 +849,24 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           } catch (err) {
             ia = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
-          // 无人值守：用户长期不看 → 交互卡超时返回 {__timeout:true}，明确告诉 AI 用已有信息继续，别空等
+          // 无人值守：用户长期不看 → 交互卡超时返回 {__timeout:true}，明确告诉 AI 用已有信息继续，别空等；
+          // 用户主动跳过（{__skipped:true}，跳过按钮）同理——没有答案但用户已明确表态「不想答」，按同语义继续。
           const timedOut = ia.ok && ia.answer && ia.answer.__timeout === true;
+          const skipped = ia.ok && ia.answer && ia.answer.__skipped === true;
           const feedback = timedOut
             ? `[无人值守：交互卡等待超时，用户未作答。请用已有信息继续当前任务，做出合理默认选择或直接给出结论；不要停下来等待用户回复，也不要重复发起同一提问。]`
-            : ia.ok && ia.answer
-              ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
-              : `[交互卡失败] ${ia.error ?? 'no answer'}`;
+            : skipped
+              ? `[用户跳过了本次交互，未提供答案。请尊重用户的跳过选择：用已有信息继续当前任务，自行做出合理默认选择或明确说明该信息缺失后继续；不要停下来等待用户回复，也不要重复发起同一提问。]`
+              : ia.ok && ia.answer
+                ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
+                : `[交互卡失败] ${ia.error ?? 'no answer'}`;
           // 工具卡终态回执：交互卡没有 exec 语义，也必须发 tool.result 收敛卡片，
           // 否则 UI 永远停在「执行中」转圈（2026-11-20 工具卡状态不回显修复）。
           // stdout 带作答摘要：hasBody 判定需要非空内容，否则成功卡永远无法展开查看。
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: ia.ok ? 'done' : 'error',
-            command: `interactive ${String((safeArgsJson(call.arguments) as { kind?: string }).kind ?? '')}`.trim(),
+            command,
             stdout: ia.ok ? feedback : undefined,
             stderr: ia.ok ? undefined : (ia.error ?? '交互卡失败'),
           });
@@ -854,7 +899,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: pr.ok ? 'done' : 'error',
-            command: `render ${pr.title ?? ''}`.trim(),
+            command,
             stdout: pr.ok ? feedback : undefined,
             stderr: pr.ok ? undefined : (pr.error ?? '预览生成失败'),
           });
@@ -871,7 +916,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         }
 
         // 审批（confirm/allowlist 模式且未在会话级白名单）
-        const verdict = await decideApproval(sessionId, callId, call, command, emit, assistantId, aborted);
+        const verdict = await decideApproval(sessionId, callId, call, command, approvalKey, emit, assistantId, aborted);
         if (verdict !== 'ok') {
           emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command });
           // 无人值守超时自动拒绝 ≠ 用户主动否决：给 AI 明确可执行的继续指令，避免它停下来等待或反复重试同一命令。
@@ -927,13 +972,18 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
               }
             } else if (action === 'list') {
               if (!fa.rootId) {
-                // 无 rootId 时先拉 roots 取默认（builtin 优先），避免模型必须先查再列两轮
-                const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
-                const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
-                if (!builtin) {
-                  fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                // 默认根跟随会话绑定（boundRootId，与 bash cwd 同源）；无绑定才回落 builtin
+                if (boundRootId) {
+                  fa.rootId = boundRootId;
                 } else {
-                  fa.rootId = builtin.id;
+                  // 无 rootId 时先拉 roots 取默认（builtin 优先），避免模型必须先查再列两轮
+                  const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+                  const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
+                  if (!builtin) {
+                    fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                  } else {
+                    fa.rootId = builtin.id;
+                  }
                 }
               }
               if (fa.rootId) {
@@ -945,12 +995,17 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
               }
             } else if (action === 'read') {
               if (!fa.rootId) {
-                const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
-                const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
-                if (!builtin) {
-                  fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                // 默认根跟随会话绑定（与 bash cwd 同源）；无绑定才回落 builtin
+                if (boundRootId) {
+                  fa.rootId = boundRootId;
                 } else {
-                  fa.rootId = builtin.id;
+                  const rr = await hostApi.dispatch<{ roots?: { id: string; label: string; path: string; builtin?: boolean }[] }>({ target: 'cap.tool.fs', action: 'roots' });
+                  const builtin = (rr.data?.roots ?? []).find((x) => x.builtin) ?? rr.data?.roots?.[0];
+                  if (!builtin) {
+                    fr = { ok: false, error: 'rootId required（且无可用默认根）' };
+                  } else {
+                    fa.rootId = builtin.id;
+                  }
                 }
               }
               if (fa.rootId) {
@@ -984,7 +1039,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: fr.ok ? 'done' : 'error',
-            command: `files ${String(safeFsArgs(call.arguments).action ?? '')}`.trim(),
+            command,
             stdout: fr.ok ? feedback : undefined,
             stderr: fr.ok ? undefined : String(fr.error ?? 'files 工具执行失败'),
           });
@@ -1016,7 +1071,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: lr.ok ? 'done' : 'error',
-            command: `ledger ${String((safeLedgerArgs(call.arguments) as { action?: string }).action ?? '')}`.trim(),
+            command,
             stdout: lr.ok ? feedback : undefined,
             stderr: lr.ok ? undefined : (lr.error ?? '记账失败'),
           });
@@ -1057,7 +1112,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
             status: br.ok ? 'done' : 'error',
-            command: `browser ${String((safeBrowserArgs(call.arguments) as { action?: string }).action ?? '')}`.trim(),
+            command,
             stdout: br.ok ? feedback : undefined,
             stderr: br.ok ? undefined : String(br.error ?? '浏览器操作失败'),
           });
@@ -1073,21 +1128,36 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         try {
           // files_write（cap.tool.files-write）：动作语义工具，参数透传走 safeArgsFilesWrite
           // （通用 safeArgs 只放行 command/timeoutMs，会把 action/path/content 全剥掉）。
+          // 默认 rootId 跟随会话绑定根（与 bash cwd 同源）——否则相对路径全部落进内建
+          // workspace，绑定的 world3d 形同虚设（2026-11-22 长任务实测发现）。
           // cap.tool.skill（read_skill）：参数是 {name}，同样会被 safeArgs 剥掉 → 走完整透传
           // （hookArgsOf，与 A3 钩子入参同一透传器；工具 describe 的 parameters 已约束形状）。
+          const filesWriteArgs = desc.cap === 'cap.tool.files-write' ? safeArgsFilesWrite(call.arguments) : null;
           const payload = desc.cap === 'cap.tool.files-write'
-            ? { ...safeArgsFilesWrite(call.arguments), sessionId, approved: true }
+            ? { ...filesWriteArgs, ...(filesWriteArgs?.rootId ? {} : { rootId: boundRootId }), sessionId, approved: true }
             : desc.cap === 'cap.tool.skill'
               ? { ...hookArgsOf(call.arguments), sessionId, approved: true }
               : desc.cap === 'cap.tool.mcp'
                 ? { name: call.name, arguments: hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
               : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
-          const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
-            target: desc.cap,
-            action: 'exec',
-            payload,
-          });
-          exec = res.data ?? { ok: false, error: 'empty response' };
+          // EXEC_BUSY（agent-bash 全局单飞锁）：模型并行/连续开火时高发——编排层做
+          // 短退避重试（≤2 次 × 2s），对模型透明；比把原始错误甩给模型省两轮修复。
+          exec = { ok: false, error: 'exec not attempted' };
+          for (let busyRetry = 0; busyRetry < 3; busyRetry += 1) {
+            if (busyRetry > 0) await new Promise((r) => setTimeout(r, 2000));
+            if (abortedFlag) break;
+            try {
+              const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
+                target: desc.cap,
+                action: 'exec',
+                payload,
+              });
+              exec = res.data ?? { ok: false, error: 'empty response' };
+            } catch (err) {
+              exec = { ok: false, error: err instanceof Error ? err.message : String(err) };
+            }
+            if (!(exec.error ?? '').includes('still running')) break;
+          }
         } catch (err) {
           exec = { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -1110,6 +1180,19 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           ? `[bash 执行完成 exit=${exec.exitCode ?? '?'} ${exec.durationMs ?? '?'}ms]\nSTDOUT:\n${capText(String(exec.stdout ?? '') || '(空)')}\nSTDERR:\n${capText(String(exec.stderr ?? '') || '(空)')}`
           : `[工具执行失败] ${exec.error ?? `exit=${exec.exitCode}`}\nSTDERR:\n${capText(String(exec.stderr ?? ''))}`;
         shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+      }
+      // 工具连发节流：连续多轮纯工具无正文 → 注入系统提示促收敛（echo pingN ×1548 实测的
+      // 保活死循环）。只提示不断流；模型给出正文后计数归零（见上方 text 分支）。
+      toolOnlyStreak += 1;
+      if (toolOnlyStreak > 0 && toolOnlyStreak % 12 === 0) {
+        shadow.push({
+          role: 'user',
+          content: `（系统：你已经连续 ${toolOnlyStreak} 轮只调用工具、没有任何正文输出。如果任务已完成，请立即直接向用户报告结果并停止调用工具；如果确实还需要继续，请先用一句话说明当前进度再继续。不要用重复的 ping/echo 等空转调用保活。）`,
+        });
+        emitTo(emit, 'message.continued', {
+          sessionId, messageId: assistantId,
+          attempt: Math.floor(toolOnlyStreak / 12), max: 0, reason: 'tool-streak-nudge',
+        });
       }
       // 下一轮：shadow 最后一条是 tool 结果，继续循环
     }

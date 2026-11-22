@@ -403,10 +403,408 @@
 .model-admin::-webkit-scrollbar { width: 6px; }
 .model-admin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* 移动端微调 */
+/* ===== v0.4：表单错误条 / 模型独立条目 / 拉取与导入弹层 / 逐模型抽屉 / Key 查看 ===== */
+
+/* P0：保存/操作失败可见化（此前 dispatch 结果被丢弃，失败静默） */
+.ma-error {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  border: 1px solid rgba(255, 122, 122, 0.3);
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.ma-error b { font-weight: 600; flex-shrink: 0; }
+
+/* 模型独立条目编辑器（替代逗号串输入；每个条目可独立 添加/删除/编辑能力/设默认调用） */
+.ma-mlist { display: flex; flex-direction: column; gap: 5px; }
+.ma-mlist-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--ctl-radius);
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 8px 9px;
+  text-align: center;
+}
+.ma-mrow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  padding: 5px 8px;
+  background: var(--bg);
+}
+.ma-mrow > input[type='radio'] {
+  width: 15px; height: 15px;
+  padding: 0; margin: 0;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+.ma-mrow > code {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  flex: 1 1 70px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ma-mbadges { display: flex; gap: 3px; flex-shrink: 0; flex-wrap: wrap; }
+.ma-mops { display: flex; gap: 4px; flex-shrink: 0; }
+.ma-mops .ma-btn { height: 20px; padding: 0 6px; font-size: 10.5px; }
+
+/* 添加模型 / 拉取 行 */
+.ma-fetchrow { display: flex; gap: 6px; align-items: center; }
+.ma-fetchrow input {
+  flex: 1;
+  min-width: 0;
+}
+.ma-importrow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+
+/* 三态开关（未知 / 支持 / 不支持） */
+.ma-tri {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  overflow: hidden;
+}
+.ma-tri button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 5px 0;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--plite-dur), color var(--plite-dur);
+}
+.ma-tri button + button { border-left: 1px solid var(--border); }
+.ma-tri button.on-t { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.ma-tri button.on-f { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.ma-tri button.on { background: var(--neutral-soft, rgba(15, 23, 42, 0.05)); color: var(--text); }
+
+/* 抽屉校验行 */
+.ma-val-line { font-size: 11px; margin-top: 8px; min-height: 15px; }
+.ma-val-line.bad { color: var(--danger); }
+.ma-val-line.dim { color: var(--text-dim); }
+.ma-chip-note { font-size: 10.5px; color: var(--text-faint); margin-top: 6px; line-height: 1.7; overflow-wrap: anywhere; }
+
+/* ===== 面板内浮层（弹窗居中 / 逐模型抽屉为底部 sheet） =====
+ * 经 portal 渲染进宿主 .slot-overlay-root（position:fixed 锚定视口，cap.ui.overlay 实现），
+ * 此处 absolute 相对根容器 = 全视口锚定——面板内容滚动时浮层不再漂移。 */
+.ma-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  background: rgba(15, 23, 42, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.ma-overlay.sheet { align-items: flex-end; padding: 0; }
+.ma-modal {
+  width: 296px;
+  max-width: calc(100vw - 32px);
+  max-height: min(86vh, 620px);
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--plite-shadow-1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ma-overlay.sheet .ma-modal {
+  /* ≤480px 视口即全宽 sheet；桌面居中 480px 底部面板（portal 后 overlay 为全窗宽） */
+  width: min(100%, 480px);
+  max-height: 82vh;
+  margin: 0 auto;
+  border-radius: 14px 14px 0 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+.ma-mhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ma-mhead code {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ma-mhead .ma-msub { font-weight: 400; color: var(--text-faint); font-size: 11px; }
+.ma-x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.ma-x:hover { color: var(--text); }
+.ma-mbody { padding: 11px 13px; overflow-y: auto; min-height: 0; }
+.ma-mfoot {
+  padding: 10px 13px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.ma-mfoot-sp { flex: 1; }
+
+/* 拉取模型弹层：搜索 + 勾选列表 */
+.ma-search {
+  height: 28px;
+  width: 100%;
+  padding: 0 9px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.ma-search:focus { border-color: var(--accent); }
+.ma-cat-list {
+  margin-top: 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.ma-cat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+}
+.ma-cat-item:first-child { border-top: none; }
+.ma-cat-item:hover { background: var(--bg-hover); }
+.ma-cat-item input[type='checkbox'] {
+  width: 15px; height: 15px;
+  padding: 0; margin: 0;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+.ma-cat-item code {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ma-cat-item em { font-style: normal; font-size: 10px; color: var(--text-faint); }
+.ma-cat-item.off { cursor: default; opacity: 0.6; }
+.ma-cat-empty { padding: 18px 10px; text-align: center; color: var(--text-faint); font-size: 11.5px; }
+
+/* 粘贴导入 */
+.ma-paste-ta {
+  width: 100%;
+  height: 110px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  background: var(--bg-hover);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  padding: 8px;
+  outline: none;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.ma-paste-ta:focus { border-color: var(--accent); }
+.ma-paste-ops { display: flex; gap: 6px; margin-top: 8px; }
+.ma-imp-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  margin-top: 9px;
+  background: var(--bg);
+}
+.ma-imp-preview .ttl { font-size: 12px; font-weight: 600; }
+.ma-imp-preview .meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; overflow-wrap: anywhere; }
+.ma-imp-issue {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.65;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.ma-imp-issue.warn { color: var(--warn); }
+.ma-imp-issue.bad { color: var(--danger); }
+.ma-imp-issue.ok { color: var(--ok); }
+
+/* 明文 Key 查看 */
+.ma-keywarn {
+  display: flex;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warn-soft, rgba(183, 121, 31, 0.1));
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+.ma-keywarn code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 10.5px; }
+.ma-keyrow code {
+  display: block;
+  width: 100%;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg-code, #f6f8fb);
+  border: 1px solid var(--border);
+  border-radius: var(--ctl-radius);
+  padding: 8px 9px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.ma-keyrow code.plain { color: var(--danger); border-color: rgba(255, 122, 122, 0.35); background: var(--danger-soft); }
+.ma-keytimer { font-size: 11px; color: var(--text-faint); margin-top: 6px; font-family: 'JetBrains Mono', Consolas, monospace; min-height: 14px; }
+.ma-keyops { display: flex; gap: 6px; margin-top: 4px; }
+
+/* 轻提示（锚定窗格底部，同浮层定位策略） */
+.ma-toast {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  background: var(--text);
+  color: #fff;
+  font-size: 11.5px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  box-shadow: var(--plite-shadow-1);
+  max-width: 88%;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* 列表页模型 chip 改为可点按钮（进入逐模型抽屉） */
+button.ma-model-chip {
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+button.ma-model-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+/* chips 折叠：+N 更多 / 收起（虚线弱化，区别于模型 chip） */
+button.ma-model-chip.more { border-style: dashed; color: var(--text-dim); background: transparent; }
+button.ma-model-chip.more code { color: var(--text-dim); max-width: none; }
+button.ma-model-chip.more:hover { border-color: var(--border-strong); background: var(--accent-soft); }
+
+/* ===== 移动端档位（≤768px，宿主 root 15px；面板此前全是 px 小字，密度不适配触屏） =====
+ * 原则：触控目标 ≥32px（chips/按钮/开关）、输入字号 ≥16px（iOS 聚焦缩放）、
+ * 正文字号 ≥12.5px、间距整体 +1 档。桌面规则不变。 */
 @media (max-width: 768px) {
-  .ma-btn { min-height: 34px; }
-  .ma-form input { font-size: 16px; }
+  .ma-item { padding: 14px; gap: 10px; }
+  .ma-name { font-size: 15px; }
+  .ma-badge { font-size: 12px; padding: 2px 8px; }
+  .ma-meta { font-size: 13px; }
+  .ma-test-line { font-size: 12.5px; }
+  .ma-hint { font-size: 12.5px; }
+
+  /* 模型 chips：20px/11px → 34px/13px（列表页核心触控目标） */
+  .ma-model-chip { height: 34px; padding: 0 10px; border-radius: 8px; }
+  .ma-model-chip code { font-size: 13px; max-width: 150px; }
+  .ma-model-chip em { font-size: 11px; line-height: 16px; padding: 0 6px; }
+  .ma-models { gap: 6px; }
+
+  /* 按钮 */
+  .ma-btn { min-height: 40px; }
+  .ma-btn.small { min-height: 34px; font-size: 13px; padding: 0 12px; }
+  .ma-more > button { height: 34px; font-size: 13px; }
+  .ma-mops .ma-btn { height: 34px; min-height: 34px; font-size: 13px; padding: 0 12px; }
+
+  /* 表单 */
+  .ma-form label { font-size: 13px; }
+  .ma-form input, .ma-search, .ma-paste-ta { font-size: 16px; } /* ≥16px 防 iOS 聚焦缩放 */
+  .ma-form input { height: 40px; }
+  .ma-fetchrow { flex-wrap: wrap; }
+  .ma-fetchrow input { flex: 1 1 100%; }
+  .ma-fetchrow > .ma-btn { flex: 1 1 auto; }
+  .ma-error { font-size: 13px; }
+
+  /* 独立条目 */
+  .ma-mlist { gap: 8px; }
+  .ma-mrow { padding: 8px 10px; }
+  .ma-mrow > code { font-size: 13.5px; flex-basis: 90px; }
+  .ma-mrow > input[type='radio'] { width: 20px; height: 20px; }
+  .ma-mops .ma-btn { height: 34px; }
+
+  /* 逐模型抽屉 */
+  .ma-cap-grid { grid-template-columns: 84px minmax(0, 1fr); gap: 10px 8px; }
+  .ma-cap-grid > span { font-size: 12.5px; }
+  .ma-cap-grid input, .ma-cap-grid select { height: 38px; font-size: 16px; }
+  .ma-cap-grid input[type='checkbox'] { width: 20px; height: 20px; }
+  .ma-tri button { font-size: 13px; padding: 9px 0; }
+  .ma-val-line, .ma-chip-note { font-size: 12.5px; }
+
+  /* 浮层（portal 到宿主 overlay root，全屏锚定） */
+  .ma-mhead { font-size: 14px; padding: 12px 14px; }
+  .ma-mhead code { font-size: 13.5px; }
+  .ma-x { font-size: 18px; min-width: 32px; min-height: 32px; }
+  .ma-msub { font-size: 12px; }
+  .ma-mbody { padding: 12px 14px; }
+  .ma-mfoot { padding: 12px 14px; flex-wrap: wrap; }
+  .ma-mfoot .ma-msub { flex: 1 1 100%; }
+  .ma-btn { white-space: nowrap; }
+  /* sheet 底部让出 home 条（overlay 覆盖全视口后必须自带安全区） */
+  .ma-overlay.sheet .ma-mfoot { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+
+  /* 拉取弹层 */
+  .ma-search { height: 38px; }
+  .ma-cat-item { padding: 10px 12px; }
+  .ma-cat-item code { font-size: 13px; }
+  .ma-cat-item input[type='checkbox'] { width: 20px; height: 20px; }
+
+  /* 粘贴导入 / Key / toast */
+  .ma-paste-ta { height: 150px; }
+  .ma-imp-preview .ttl { font-size: 13.5px; }
+  .ma-imp-preview .meta, .ma-imp-issue { font-size: 12.5px; }
+  .ma-keywarn { font-size: 12.5px; }
+  .ma-keyrow code { font-size: 14px; }
+  .ma-keytimer { font-size: 12px; }
+  .ma-toast { font-size: 13px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+
+  /* 识别报告 */
+  .ma-detect-model li { font-size: 12.5px; }
+  .ma-detect-head { font-size: 12.5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ma-btn[aria-busy='true']::before, .ma-test-line.busy::before { animation-duration: 2s; }

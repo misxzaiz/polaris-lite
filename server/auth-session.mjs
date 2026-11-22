@@ -8,7 +8,9 @@
  * - owner（首登=注册，仅一次）：.polaris-lite/auth-owner.json，scrypt(64B) 哈希，
  *   比较走 timingSafeEqual；历史 sha256(salt+md5(pw)) 记录在登录成功后自动升级为 scrypt；
  * - 请求体：上限 64KB、畸形 JSON 返回 400（原实现在 async 中间件里抛出会挂死请求）；
- * - 登录限速：按 IP 计失败次数，超阈值锁定 60s；注册路径同样受限速保护。
+ * - 登录限速：按 IP 计失败次数，超阈值锁定 60s；注册路径同样受限速保护；
+ * - 临时凭证登录：POST /api/auth/login { tempToken }（或 Authorization: Bearer）→ 换取
+ *   与密码登录同权的会话 cookie；无效/过期凭证计入限速。
  */
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,6 +22,10 @@ const TTL_MS = 12 * 60 * 60 * 1000; // 12h
 const MAX_FAILS = 5;
 const LOCK_MS = 60_000;
 const SCRYPT_KEYLEN = 64;
+/** 临时凭证默认/最长有效期 */
+const TEMP_TOKEN_DEFAULT_MS = 30 * 60 * 1000; // 30 分钟
+const TEMP_TOKEN_MIN_MS = 60 * 1000; // 1 分钟
+const TEMP_TOKEN_MAX_MS = 24 * 60 * 60 * 1000; // 24 小时
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const md5 = (s) => createHash('md5').update(s).digest('hex');
@@ -40,6 +46,23 @@ export function createAuthMiddleware(options = {}) {
   const sessions = new Map();
   /** 临时 Bearer 凭证（token → {expiresAt, owner}）；仅本地 IP 可用，重启即失效 */
   const tempTokens = new Map();
+  /** 规范化临时凭证 TTL：非法/越界回退默认值（签发接口自带 400，这里是兜底） */
+  const normalizeTempTtl = (ms, { strict = false } = {}) => {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) {
+      if (strict) throw new HttpError(400, 'AUTH_INVALID_TTL', '有效期必须是正数（毫秒）');
+      return TEMP_TOKEN_DEFAULT_MS;
+    }
+    if (n < TEMP_TOKEN_MIN_MS) {
+      if (strict) throw new HttpError(400, 'AUTH_INVALID_TTL', `有效期至少 ${TEMP_TOKEN_MIN_MS / 1000} 秒`);
+      return TEMP_TOKEN_MIN_MS;
+    }
+    if (n > TEMP_TOKEN_MAX_MS) {
+      if (strict) throw new HttpError(400, 'AUTH_INVALID_TTL', `有效期最长 ${TEMP_TOKEN_MAX_MS / (60 * 60 * 1000)} 小时`);
+      return TEMP_TOKEN_MAX_MS;
+    }
+    return Math.floor(n);
+  };
   // ip -> { fails, until }；定期清理，避免被随机 IP 撑爆内存
   const rate = new Map();
 
@@ -172,6 +195,29 @@ export function createAuthMiddleware(options = {}) {
           throw new HttpError(429, 'AUTH_RATE_LIMITED', '尝试过于频繁，请稍后再试');
         }
         const body = await readJson(req, BODY_LIMIT_SMALL);
+        // 临时凭证登录：body.tempToken（或 Authorization: Bearer 头）二选一。
+        // 凭证有效 → 直接铸会话（与密码登录同权限）；无效/过期按失败计数，防穷举。
+        const bearerFromHeader = (req.headers.authorization ?? '').startsWith('Bearer ')
+          ? req.headers.authorization.slice(7).trim()
+          : '';
+        const tempToken = String(body.tempToken ?? bearerFromHeader ?? '').trim();
+        if (tempToken) {
+          const entry = tempTokens.get(tempToken);
+          if (!entry || entry.expiresAt < Date.now() || entry.owner !== (readOwner()?.username ?? '')) {
+            tempTokens.delete(tempToken);
+            recordFail(ip);
+            throw new HttpError(401, 'AUTH_INVALID_CREDENTIALS', '临时凭证无效或已过期');
+          }
+          rate.delete(ip);
+          mintSession(req, res, entry.owner, ['owner', 'user']);
+          audit({ at: Date.now(), op: 'login-via-temp-credential', user: entry.owner, ip });
+          return sendJson(res, 200, {
+            ok: true,
+            status: 'authenticated',
+            user: { id: `u-${entry.owner}`, name: entry.owner },
+            via: 'temp-credential',
+          });
+        }
         const username = String(body.username ?? '').trim();
         const password = String(body.password ?? '');
         if (!username || password.length < 4) {
@@ -239,19 +285,65 @@ export function createAuthMiddleware(options = {}) {
 
       // 修改注册人账号/密码：必须已登录，且提供正确旧密码
       // 临时凭证：owner 登录后签发短 TTL Bearer token（仅本地回环 IP 可用，
-      // 供 AI/外部工具访问本地 /api/fs/* 与 /api/tool/exec；不落盘、重启即失效）
+      // 供 AI/外部工具访问本地 /api/fs/* 与 /api/tool/exec；不落盘、重启即失效）。
+      // body.ttlMs 可自定义有效期（1 分钟 ~ 24 小时），缺省 30 分钟。
       if (pathname === '/api/auth/temp-credential' && req.method === 'POST') {
         const session = getSession(req);
         if (!session) throw new HttpError(401, 'SESSION_REQUIRED', '未登录');
         const owner = readOwner();
         if (!owner) throw new HttpError(401, 'SESSION_REQUIRED', '尚未注册');
         if (session.user.name !== owner.username) throw new HttpError(403, 'AUTH_FORBIDDEN', '仅注册人可签发临时凭证');
+        // 兼容空 body 的 POST：body 非法/为空时按 {} 处理（readJson 对空串返回 {}，
+        // JSON 数组/标量按 BAD_JSON 由 readJson 统一拒绝）
+        let body = {};
+        try { body = await readJson(req, BODY_LIMIT_SMALL); } catch { body = {}; }
+        const ttlMs = body?.ttlMs === undefined ? TEMP_TOKEN_DEFAULT_MS : normalizeTempTtl(body.ttlMs, { strict: true });
         const token = randomBytes(24).toString('hex');
-        const expiresAt = Date.now() + 30 * 60 * 1000; // 30 分钟
+        const expiresAt = Date.now() + ttlMs;
         tempTokens.set(token, { expiresAt, owner: owner.username });
-        setTimeout(() => tempTokens.delete(token), 30 * 60 * 1000);
-        audit({ at: Date.now(), op: 'temp-credential-issued', user: owner.username });
-        return sendJson(res, 200, { ok: true, token, expiresInMs: 30 * 60 * 1000, note: '仅限 127.0.0.1/localhost 本地访问；30 分钟后自动失效' });
+        setTimeout(() => tempTokens.delete(token), ttlMs).unref?.();
+        audit({ at: Date.now(), op: 'temp-credential-issued', user: owner.username, ttlMs });
+        return sendJson(res, 200, {
+          ok: true,
+          token,
+          expiresAt,
+          expiresInMs: ttlMs,
+          note: `仅限 127.0.0.1/localhost 本地访问；${Math.round(ttlMs / 60000)} 分钟后自动失效`,
+        });
+      }
+
+      // 吊销临时凭证：owner 传 token（或 tokenDigest）即可作废，防泄露后无法回收
+      if (pathname === '/api/auth/temp-credential/revoke' && req.method === 'POST') {
+        const session = getSession(req);
+        if (!session) throw new HttpError(401, 'SESSION_REQUIRED', '未登录');
+        const owner = readOwner();
+        if (!owner) throw new HttpError(401, 'SESSION_REQUIRED', '尚未注册');
+        if (session.user.name !== owner.username) throw new HttpError(403, 'AUTH_FORBIDDEN', '仅注册人可吊销临时凭证');
+        let body0 = {};
+        try { body0 = await readJson(req, BODY_LIMIT_SMALL); } catch { body0 = {}; }
+        const token = String(body0?.token ?? '').trim();
+        if (!token) throw new HttpError(400, 'AUTH_INVALID_CREDENTIALS', '缺少 token');
+        const existed = tempTokens.delete(token);
+        return sendJson(res, 200, { ok: true, revoked: existed });
+      }
+
+      // 列出未过期临时凭证（脱敏摘要，仅 owner）：便于看到手里有哪些有效钥匙
+      if (pathname === '/api/auth/temp-credential/list' && req.method === 'GET') {
+        const session = getSession(req);
+        if (!session) throw new HttpError(401, 'SESSION_REQUIRED', '未登录');
+        const owner = readOwner();
+        if (!owner) throw new HttpError(401, 'SESSION_REQUIRED', '尚未注册');
+        if (session.user.name !== owner.username) throw new HttpError(403, 'AUTH_FORBIDDEN', '仅注册人可查看临时凭证');
+        const now = Date.now();
+        const items = [...tempTokens.entries()]
+          .filter(([, e]) => e.owner === owner.username && e.expiresAt > now)
+          .map(([tok, e]) => ({
+            tokenDigest: `${tok.slice(0, 4)}…${tok.slice(-4)}`,
+            expiresAt: e.expiresAt,
+            remainMs: e.expiresAt - now,
+          }))
+          .sort((a, b) => a.expiresAt - b.expiresAt);
+        return sendJson(res, 200, { ok: true, items });
       }
 
       if (pathname === '/api/auth/change-credentials' && req.method === 'POST') {
@@ -294,5 +386,13 @@ export function createAuthMiddleware(options = {}) {
     }
   };
 
-  return { getSession, middleware, ownerFile, sessionsFile, tempTokens, verifyTempToken: (token) => { const e = tempTokens.get(token); if (!e || e.expiresAt < Date.now()) return false; return e.owner === (readOwner()?.username ?? ''); } };
+  return {
+    getSession,
+    middleware,
+    ownerFile,
+    sessionsFile,
+    tempTokens,
+    tempTokenLimits: { defaultMs: TEMP_TOKEN_DEFAULT_MS, minMs: TEMP_TOKEN_MIN_MS, maxMs: TEMP_TOKEN_MAX_MS },
+    verifyTempToken: (token) => { const e = tempTokens.get(token); if (!e || e.expiresAt < Date.now()) return false; return e.owner === (readOwner()?.username ?? ''); },
+  };
 }

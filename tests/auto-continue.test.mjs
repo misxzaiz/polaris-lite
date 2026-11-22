@@ -21,6 +21,8 @@ const engineSrc = read('plugins/real-engine/index.ts');
 const chatSrc = read('plugins/chat-lite/index.ts');
 const blockSrc = read('plugins/chat-lite/BlockGroup.tsx');
 const storeSrc = read('plugins/chat-lite/store.ts');
+// 消息模型已上移契约层(host-slimming-report P1-3):块类型的事实源在 src/core/types.ts,经 @sdk 暴露
+const typesSrc = read('src/core/types.ts');
 
 test('real-engine：usage 帧主动索取 + 方言拉黑守卫', () => {
   assert.match(engineSrc, /include_usage: true/, '请求体必须带 stream_options.include_usage（被动校准依赖）');
@@ -59,7 +61,7 @@ test('agent-loop：resume 动作（无 prompt 直续 prefill + 直通模式拒�
 });
 
 test('chat-lite：truncated 块 + 「继续」按钮 + resumed 无 prompt', () => {
-  assert.match(storeSrc, /\{ type: 'truncated'; text: string \}/, '块类型联合必须含 truncated');
+  assert.match(typesSrc, /\{ type: 'truncated'; text: string \}/, '块类型联合必须含 truncated(契约层)');
   assert.match(blockSrc, /tc-resume-btn/);
   assert.match(chatSrc, /resumeTruncated/);
   // resume dispatch 只带 sessionId/messageId，不注入 prompt（prefill 续写语义）
@@ -70,6 +72,6 @@ test('chat-lite：truncated 块 + 「继续」按钮 + resumed 无 prompt', () =
 });
 
 test('chat-lite：message.continued 落轻提示块', () => {
-  assert.match(storeSrc, /\{ type: 'notice'; text: string \}/);
+  assert.match(typesSrc, /\{ type: 'notice'; text: string \}/);
   assert.match(chatSrc, /message\.continued/, '编排事件必须有对应处理分支');
 });

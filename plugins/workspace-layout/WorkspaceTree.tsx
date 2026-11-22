@@ -13,16 +13,14 @@
  *    →改样式是 ResizeObserver 死循环的典型成因）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { AnchorId, AnchorNode, SplitNode, SplitSize, TabsNode, ViewLeaf, WorkspaceNode } from './schema.ts';
-import { WORKSPACE_LIMITS } from './schema.ts';
+import type { CSSProperties, ComponentType, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { AnchorId, AnchorNode, SplitNode, SplitSize, TabsNode, ViewLeaf, WorkspaceNode } from '../sdk/schema.ts';
+import { WORKSPACE_LIMITS } from '../sdk/schema.ts';
 import { createLocalPersistence } from './store.ts';
-import { workspaceStore, viewRegistry } from './hostStore.ts';
+import { workspaceStore } from './hostStore.ts';
+import { getViewDef, listViewDefs, resolveInjectedView } from './viewAccess.ts';
 import { anchorOfSlotView, isHostSlotView } from './hostViews.ts';
-import { getRuntimeComponent } from '../externalPlugins';
-import { getDrawer, getIsNarrow, setDrawer, subscribeDrawer, subscribeNarrow } from '../shellState';
-import { Brand } from '../Brand';
-import { SlotOutlet } from '../SlotOutlet';
+import { getDrawer, getIsNarrow, setDrawer, subscribeDrawer, subscribeNarrow } from './stateBridge.ts';
 
 /** 单个窗格的最小像素宽/高：再小就放不下内容，且手指也抓不住分隔条 */
 const MIN_PANE_PX = WORKSPACE_LIMITS.minPx;
@@ -131,7 +129,7 @@ function splitterAria(size: SplitSize): { now: number; min: number; max: number;
 
 function titleOf(node: WorkspaceNode): string {
   if (node.kind === 'view') {
-    const def = viewRegistry.get(node.viewType);
+    const def = getViewDef(node.viewType);
     // 注册表里的 title 是必填的；缺失说明注册被拒，此时退回 viewType 便于排障
     return def?.title ?? node.viewType;
   }
@@ -151,12 +149,13 @@ function LeafView({ node }: { node: ViewLeaf }) {
   if (slotAnchor) {
     return (
       <div className={`ws-slot-body ws-slot-${slotAnchor}`} data-view={node.viewType}>
-        <SlotOutlet slot={slotAnchor} />
+        {layoutRenderAnchor(slotAnchor)}
       </div>
     );
   }
-  const def = viewRegistry.get(node.viewType);
-  const Comp = def ? getRuntimeComponent(def.pluginId, def.component) : undefined;
+  const def = getViewDef(node.viewType);
+  // 组件解析经宿主注入(核心 externalPlugins 查表;插件不 import 宿主实现)
+  const Comp = resolveInjectedView(node.viewType) as ComponentType | undefined;
   if (!def) {
     return (
       <div className="slot slot-empty" data-view={node.viewType}>
@@ -207,7 +206,7 @@ function AnchorView({ node }: { node: AnchorNode }) {
         ))}
       </div>
     ) : (
-      <SlotOutlet slot={node.anchor} />
+      layoutRenderAnchor(node.anchor)
     );
 
   // 关闭的抽屉必须**真正不可达**：`aria-hidden` 只对读屏生效，
@@ -233,7 +232,7 @@ function AnchorView({ node }: { node: AnchorNode }) {
 
   const body = isSidebar ? (
     <>
-      <Brand />
+      {layoutRenderBrand()}
       {content}
     </>
   ) : (
@@ -787,7 +786,17 @@ const NodeView = memo(function NodeView({ node }: { node: WorkspaceNode }) {
 });
 
 /** 工作区树入口：SlotLayout 把当前树交给它渲染 */
-export function WorkspaceTree({ node }: { node: WorkspaceNode }) {
+
+// ---- 宿主注入点(P2-2):核心经 LayoutRootProps 把锚点渲染与品牌下放 ----
+import { setLayoutDeps, renderAnchor as layoutRenderAnchor, renderBrand as layoutRenderBrand, type AnchorRenderer } from './layoutDeps.tsx';
+
+export function WorkspaceTree(props: { node: WorkspaceNode } & {
+  renderAnchor: AnchorRenderer;
+  renderBrand: () => ReactNode;
+}) {
+  // 注入写进模块级 deps(LeafView/AnchorView 深处同步取用;宿主单实例,时序安全)
+  setLayoutDeps({ renderAnchor: props.renderAnchor, renderBrand: props.renderBrand });
+  const { node } = props;
   // 断点变化时整树重渲是必要的（窄屏下所有 split 改单列）
   const narrow = useNarrow();
   const className = useMemo(() => `ws-root ${narrow ? 'ws-root-narrow' : ''}`, [narrow]);
@@ -825,7 +834,7 @@ export function LayoutNotice() {
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__PLITE_WORKSPACE__ = {
     getTree: () => workspaceStore.getSnapshot().tree,
-    getViews: () => viewRegistry.list(),
+    getViews: () => listViewDefs(),
     reset: () => workspaceStore.reset(),
     // 让验收脚本不必依赖具体按钮，也能验证持久化与文件是否落地
     persisted: () => createLocalPersistence()?.read('plite.workspace.v1') ?? null,

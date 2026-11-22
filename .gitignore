@@ -38,3 +38,8 @@ plite-*.apk
 .polaris-lite/
 .polaris-lite-dev/
 nonexistent-dir-for-test/
+
+# 临时调试产物（session cookie / 登录凭据 / hook 日志）——不入库
+.tmp-*
+.polaris-liteworkspace*
+.claude/hook-log.jsonl

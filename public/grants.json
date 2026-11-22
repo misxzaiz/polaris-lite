@@ -329,6 +329,19 @@
       "events": [
         "tool-registered"
       ]
+    },
+    "shell-chrome": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "workspace-layout": {
+      "capabilities": [],
+      "provides": [
+        "cap.ui.layout",
+        "cap.ui.layout.global"
+      ],
+      "events": []
     }
   }
 }

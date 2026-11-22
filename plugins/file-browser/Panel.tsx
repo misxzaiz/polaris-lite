@@ -8,6 +8,7 @@
  * - activeRoot 徽标与底部胶囊提示（审批可见性同款交互语言）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { CHANNEL_FILE_BROWSER_COMPOSE } from '@sdk';
 import type { FsRoot } from './index';
 import { setActiveRoot, toggleLinkedRoot, workspaceState } from './index';
 
@@ -159,7 +160,7 @@ export function FileBrowserPanel() {
 
   /** 文件/目录 → 注入对话输入框（chat-lite onCompose 通道） */
   const sendToChat = useCallback((node: FsNode) => {
-    const mod = (window as unknown as Record<string, unknown>).__FILE_BROWSER_COMPOSE__ as ((text: string) => void) | undefined;
+    const mod = (window as unknown as Record<string, unknown>)[CHANNEL_FILE_BROWSER_COMPOSE] as ((text: string) => void) | undefined;
     const text = node.isDir
       ? `帮我分析这个目录的结构：${node.path}`
       : `帮我看看这个文件的内容：${node.path}`;

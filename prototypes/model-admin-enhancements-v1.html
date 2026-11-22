@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>模型供应商面板增强 v1 原型：拉取模型 / 逐模型编辑 / 复制导入 / 查看Key / 错误可见化</title>
+<style>
+  /* ===== plite-tokens（静谧蓝白）真实值内联，对齐 plugins/model-admin/panel.css ===== */
+  :root {
+    --bg: #ffffff; --bg-panel: #ffffff; --bg-hover: #f3f5f9; --bg-elevated: #ffffff;
+    --border: rgba(15, 23, 42, 0.075); --border-strong: rgba(29, 78, 216, 0.3);
+    --border-rgb: 15, 23, 42;
+    --text: #101828; --text-soft: #384255; --text-dim: #5d6473; --text-faint: #858ca0;
+    --accent: #1d4ed8; --accent-rgb: 29, 78, 216; --accent-bright: #2563eb; --accent-soft: rgba(29, 78, 216, 0.07);
+    --on-accent: #ffffff;
+    --ok: #1f7a4d; --ok-soft: rgba(31, 122, 77, 0.09);
+    --danger: #c0392f; --danger-soft: rgba(192, 57, 47, 0.09);
+    --warn: #b7791f; --warn-soft: rgba(183, 121, 31, 0.1);
+    --neutral-soft: rgba(15, 23, 42, 0.05);
+    --radius: 10px;
+    --ctl-h: 30px; --ctl-radius: 6px; --ctl-font: 12.5px; --ctl-font-sm: 12px;
+    --plite-h-sm: 24px; --plite-h-md: 38px;
+    --plite-fs-xs: 11px; --plite-fs-sm: 12px; --plite-fs-md: 13px;
+    --plite-font-mono: 'SFMono-Regular', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+    --plite-font-sans: Inter, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    --plite-shadow-1: 0 16px 40px rgba(15, 23, 42, 0.07);
+    --plite-dur: 180ms; --plite-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: var(--plite-font-sans); font-size: var(--plite-fs-md); }
+
+  .wrap { display: grid; grid-template-columns: 430px 1fr; height: 100vh; }
+
+  /* ================= 左侧：说明 / 功能索引 / 剪贴板观察窗 ================= */
+  .brief { border-right: 1px solid var(--border); background: #fafbfd; overflow-y: auto; padding: 22px 20px 30px; }
+  .brief h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: 0.01em; }
+  .brief .sub { color: var(--text-dim); font-size: 12px; line-height: 1.7; margin: 0 0 16px; }
+  .feat { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
+    padding: 12px 14px; margin-bottom: 10px; }
+  .feat h3 { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .feat p { margin: 0 0 8px; color: var(--text-dim); font-size: 12px; line-height: 1.75; }
+  .feat .try { color: var(--text-dim); font-size: 11.5px; line-height: 1.7; background: var(--accent-soft);
+    border-radius: 6px; padding: 7px 9px; margin-bottom: 8px; }
+  .fnum { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .fnum.p0 { background: var(--danger); }
+  .mini-btn { border: 1px solid var(--border); background: var(--bg); color: var(--accent); border-radius: var(--ctl-radius);
+    height: 26px; padding: 0 10px; font-size: 12px; cursor: pointer; font-family: inherit;
+    transition: all var(--plite-dur) var(--plite-ease); }
+  .mini-btn:hover { background: var(--accent-soft); border-color: var(--border-strong); }
+  .clip-box { border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg); padding: 10px 12px; margin-top: 14px; }
+  .clip-box h4 { margin: 0 0 6px; font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; font-family: var(--plite-font-mono); }
+  .clip-box pre { margin: 0; font-family: var(--plite-font-mono); font-size: 10.5px; color: var(--text-soft);
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; line-height: 1.55; }
+  .legend { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
+
+  /* ================= 右侧：舞台 + 300px 面板 ================= */
+  .stage { display: flex; align-items: flex-start; justify-content: center; padding: 26px;
+    background: radial-gradient(1200px 500px at 50% -10%, rgba(var(--accent-rgb), 0.05), transparent 60%), #f2f4f9; }
+  .panel { position: relative; width: 310px; height: calc(100vh - 52px); max-height: 900px; min-height: 560px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--plite-shadow-1); display: flex; flex-direction: column; overflow: hidden; }
+
+  /* 面板 tab 条（装饰，对齐真实形态） */
+  .ptabs { display: flex; align-items: center; gap: 2px; padding: 0 10px; height: 34px; flex-shrink: 0;
+    border-bottom: 1px solid var(--border); overflow: hidden; }
+  .ptabs span { font-size: 11.5px; color: var(--text-faint); padding: 4px 6px; border-radius: 5px; white-space: nowrap; }
+  .ptabs span.on { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .ptabs .proto-chip { margin-left: auto; font-size: 9.5px; font-family: var(--plite-font-mono); color: var(--warn);
+    background: var(--warn-soft); border-radius: 999px; padding: 2px 7px; letter-spacing: 0.06em; }
+  .panel-body { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
+  .panel-body::-webkit-scrollbar { width: 6px; }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ===== 复用 model-admin 真实样式（裁剪） ===== */
+  .cap-panel h3 { font-size: 13.5px; margin: 2px 0 10px; font-weight: 600; }
+  .ma-list { display: flex; flex-direction: column; gap: 8px; }
+  .ma-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex;
+    flex-direction: column; gap: 7px; background: rgba(var(--border-rgb), 0.025);
+    transition: border-color var(--plite-dur), background var(--plite-dur); }
+  .ma-item:hover { border-color: var(--border-strong); }
+  .ma-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ma-name { font-weight: 600; display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .ma-badge { font-size: var(--plite-fs-xs); padding: 1px 6px; border-radius: 4px; background: var(--accent-soft);
+    color: var(--accent-bright); font-weight: 500; }
+  .ma-badge.off { background: var(--danger-soft); color: var(--danger); }
+  .ma-meta { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ma-meta code { color: var(--accent); font-family: var(--plite-font-mono); font-size: 11px; }
+  .ma-models { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ma-model-chip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px;
+    border: 1px solid var(--border); border-radius: 5px; font-size: 11px; cursor: pointer;
+    transition: all var(--plite-dur) var(--plite-ease); background: transparent; }
+  .ma-model-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .ma-model-chip code { font-family: var(--plite-font-mono); font-size: 11px; max-width: 110px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .ma-model-chip em { font-style: normal; font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 4px; font-weight: 500; }
+  em.t-manual  { color: var(--accent); background: var(--accent-soft); }
+  em.t-probe   { color: var(--ok); background: var(--ok-soft); }
+  em.t-builtin { color: var(--text-dim); background: var(--neutral-soft); }
+  em.t-vision  { color: var(--accent); background: transparent; border: 1px solid var(--accent-soft); }
+  em.t-effort  { color: var(--warn); background: var(--warn-soft); }
+  em.t-ctx     { color: var(--text-dim); background: transparent; border: 1px solid var(--border); }
+
+  .ma-btn { border: 1px solid var(--border); border-radius: var(--ctl-radius); background: transparent;
+    color: var(--text-dim); height: var(--plite-h-sm); padding: 0 10px; font-size: 12px; cursor: pointer; font-family: inherit;
+    transition: all var(--plite-dur) var(--plite-ease); }
+  .ma-btn:hover { border-color: var(--accent); color: var(--accent-bright); background: var(--accent-soft); }
+  .ma-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .ma-btn.primary:hover { background: var(--accent-bright); }
+  .ma-btn.danger { color: var(--danger); border-color: rgba(192, 57, 47, 0.4); }
+  .ma-btn.danger:hover { background: var(--danger-soft); border-color: var(--danger); }
+  .ma-btn.danger.arm { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); font-weight: 600; }
+  .ma-btn.small { height: 24px; padding: 0 8px; font-size: 11.5px; }
+  .ma-btn.wide { width: 100%; margin-top: 10px; height: var(--plite-h-md); }
+  .ma-btn:disabled { opacity: 0.4; cursor: default; }
+  .ma-btn[aria-busy='true'] { pointer-events: none; opacity: 0.75; }
+  .ma-btn[aria-busy='true']::before { content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 5px;
+    vertical-align: -1.5px; border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%;
+    animation: ma-spin 0.7s linear infinite; }
+  @keyframes ma-spin { to { transform: rotate(360deg); } }
+
+  .ma-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ma-ops { flex-wrap: wrap; gap: 6px; }
+  .ma-more { position: relative; margin-left: auto; }
+  .ma-more > button { height: 24px; padding: 0 8px; font-size: 11.5px; border: 1px solid var(--border);
+    border-radius: var(--ctl-radius); background: transparent; color: var(--text-dim); cursor: pointer; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 6px; }
+  .ma-more > button:hover { border-color: var(--accent); color: var(--text); }
+  .ma-more-menu { position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 20; min-width: 168px; padding: 4px;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: var(--plite-shadow-1); display: flex; flex-direction: column; }
+  .ma-more-menu button { text-align: left; padding: 6px 8px; font-size: 12px; border: none; background: transparent;
+    color: var(--text); border-radius: 4px; cursor: pointer; white-space: nowrap; font-family: inherit;
+    display: flex; align-items: center; gap: 7px; }
+  .ma-more-menu button:hover { background: var(--bg-hover); }
+  .ma-more-menu button.danger { color: var(--danger); }
+  .ma-more-menu .fnum { width: 15px; height: 15px; font-size: 9.5px; }
+  .ma-more-menu .fnum.p0 { width: 15px; height: 15px; font-size: 9.5px; }
+
+  .ma-switch { position: relative; display: inline-block; width: 34px; height: 19px; flex-shrink: 0; }
+  .ma-switch input { opacity: 0; width: 0; height: 0; }
+  .ma-switch span { position: absolute; inset: 0; border-radius: 10px; background: var(--border); cursor: pointer; transition: 0.2s; }
+  .ma-switch span::before { content: ''; position: absolute; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--text-dim); top: 2px; left: 2px; transition: 0.2s; }
+  .ma-switch input:checked + span { background: var(--accent); }
+  .ma-switch input:checked + span::before { transform: translateX(15px); background: var(--on-accent); }
+
+  /* 表单 */
+  .ma-form { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+  .ma-form label { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
+  .ma-form label.ma-check { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 12.5px; cursor: pointer; }
+  .ma-form input { height: var(--ctl-h); padding: 0 8px; font-size: var(--ctl-font); border: 1px solid var(--border);
+    border-radius: var(--ctl-radius); background: var(--bg-hover); color: var(--text); outline: none; width: 100%;
+    transition: border-color var(--plite-dur), box-shadow var(--plite-dur); font-family: inherit; }
+  .ma-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.18); }
+  .ma-form input[type='checkbox'] { width: 15px; height: 15px; accent-color: var(--accent); padding: 0; }
+  .fetch-row { display: flex; gap: 6px; align-items: center; }
+  .fetch-row input { flex: 1; min-width: 0; }
+  /* ★ 模型独立条目编辑器（替代逗号串） */
+  .mlist { display: flex; flex-direction: column; gap: 5px; }
+  .mrow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; border: 1px solid var(--border); border-radius: var(--ctl-radius); padding: 5px 8px; background: var(--bg); }
+  .mrow input[type='radio'] { width: 15px; height: 15px; padding: 0; accent-color: var(--accent); margin: 0; flex-shrink: 0; }
+  .mrow > code { font-family: var(--plite-font-mono); font-size: 11.5px; flex: 1 1 70px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .mrow .mbadges { display: flex; gap: 3px; flex-shrink: 0; }
+  .mrow .mops { display: flex; gap: 4px; flex-shrink: 0; }
+  .mrow .mops .ma-btn { height: 20px; padding: 0 6px; font-size: 10.5px; }
+  .mlist-empty { border: 1px dashed var(--border); border-radius: var(--ctl-radius); color: var(--text-faint); font-size: 11px; padding: 8px 9px; text-align: center; }
+  .ma-hint { font-size: 11px; color: var(--text-dim); margin: 10px 0 0; line-height: 1.75; }
+  .ma-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .ma-actions .ma-btn { height: var(--plite-h-md); flex: 1; }
+
+  /* ★ F-P0 表单内错误条（保存失败可见化） */
+  .ma-error { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; padding: 8px 10px;
+    border-radius: var(--radius); background: var(--danger-soft); border: 1px solid rgba(192, 57, 47, 0.3);
+    color: var(--danger); font-size: 11.5px; line-height: 1.65; }
+  .ma-error b { font-weight: 600; }
+  .ma-error .code { font-family: var(--plite-font-mono); font-size: 10.5px; opacity: 0.85; }
+
+  /* ===== 面板内浮层（modal / sheet） ===== */
+  .overlay { position: absolute; inset: 0; background: rgba(var(--border-rgb), 0.32); z-index: 30;
+    display: flex; align-items: center; justify-content: center; padding: 16px; animation: fade var(--plite-dur) var(--plite-ease); }
+  .overlay.sheet { align-items: flex-end; padding: 0; }
+  @keyframes fade { from { opacity: 0; } }
+  .mcard { width: 278px; max-height: 86%; background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); box-shadow: var(--plite-shadow-1); display: flex; flex-direction: column; overflow: hidden;
+    animation: rise var(--plite-dur) var(--plite-ease); }
+  .overlay.sheet .mcard { width: 100%; max-height: 82%; border-radius: 14px 14px 0 0; border-left: none; border-right: none; border-bottom: none; }
+  @keyframes rise { from { transform: translateY(14px); opacity: 0.6; } }
+  .mhead { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .mhead h4 { margin: 0; font-size: 12.5px; flex: 1; }
+  .mhead .x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; font-size: 15px; padding: 0 2px; }
+  .mbody { padding: 11px 13px; overflow-y: auto; min-height: 0; }
+  .mfoot { padding: 10px 13px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .mfoot .sp { flex: 1; }
+
+  /* F1 拉取模型 modal */
+  .search { height: 28px; width: 100%; padding: 0 9px; font-size: 12px; border: 1px solid var(--border);
+    border-radius: var(--ctl-radius); outline: none; background: var(--bg-hover); font-family: inherit; }
+  .search:focus { border-color: var(--accent); }
+  .cat-list { margin: 9px 0 0; border: 1px solid var(--border); border-radius: var(--radius); max-height: 250px; overflow-y: auto; }
+  .cat-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-top: 1px solid var(--border); cursor: pointer; }
+  .cat-item:first-child { border-top: none; }
+  .cat-item:hover { background: var(--bg-hover); }
+  .cat-item input { accent-color: var(--accent); margin: 0; flex-shrink: 0; }
+  .cat-item code { font-family: var(--plite-font-mono); font-size: 11.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cat-item .pre { font-size: 10px; color: var(--text-faint); white-space: nowrap; }
+  .cat-item .pre b { color: var(--text-dim); font-weight: 500; }
+  .cat-empty { padding: 18px 10px; text-align: center; color: var(--text-faint); font-size: 11.5px; }
+
+  /* F2 逐模型编辑 sheet：能力网格 + 三态开关 */
+  .cap-grid2 { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px 8px; align-items: center; }
+  .cap-grid2 > span { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+  .cap-grid2 input, .cap-grid2 select { height: 26px; padding: 0 8px; font-size: var(--ctl-font-sm); width: 100%;
+    border: 1px solid var(--border); border-radius: var(--ctl-radius); background: var(--bg); color: var(--text);
+    outline: none; font-family: inherit; }
+  .cap-grid2 input:focus, .cap-grid2 select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.18); }
+  .cap-grid2 input[type='checkbox'] { width: 15px; height: 15px; padding: 0; accent-color: var(--accent); flex: 0 0 auto; }
+  .cap-grid2 label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); cursor: pointer; }
+  .cap-grid2 select { appearance: none; padding-right: 20px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%238b90a0'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center; }
+  .tri { display: flex; border: 1px solid var(--border); border-radius: var(--ctl-radius); overflow: hidden; }
+  .tri button { flex: 1; border: none; background: transparent; color: var(--text-dim); font-size: 11px;
+    padding: 5px 0; cursor: pointer; font-family: inherit; transition: all var(--plite-dur); }
+  .tri button + button { border-left: 1px solid var(--border); }
+  .tri button.on-t { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+  .tri button.on-f { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+  .val-line { font-size: 11px; margin-top: 8px; min-height: 15px; }
+  .val-line.bad { color: var(--danger); }
+  .val-line.dim { color: var(--text-dim); }
+
+  /* F4 查看 Key */
+  .key-warn { display: flex; gap: 7px; padding: 8px 10px; border-radius: var(--radius); background: var(--warn-soft);
+    color: var(--warn); font-size: 11px; line-height: 1.7; margin-bottom: 10px; }
+  .key-row { display: flex; align-items: center; gap: 8px; }
+  .key-row code { flex: 1; min-width: 0; font-family: var(--plite-font-mono); font-size: 12px; background: var(--bg-code, #f6f8fb);
+    border: 1px solid var(--border); border-radius: var(--ctl-radius); padding: 8px 9px; overflow-wrap: anywhere; color: var(--text); }
+  .key-row code.plain { color: var(--danger); border-color: rgba(192, 57, 47, 0.35); background: var(--danger-soft); }
+  .key-timer { font-size: 11px; color: var(--text-faint); margin-top: 6px; font-family: var(--plite-font-mono); }
+  .audit-line { font-size: 10.5px; color: var(--text-faint); margin-top: 10px; line-height: 1.7;
+    border-top: 1px dashed var(--border); padding-top: 8px; }
+
+  /* F3 粘贴导入 */
+  .paste-ta { width: 100%; height: 110px; resize: none; border: 1px solid var(--border); border-radius: var(--ctl-radius);
+    background: var(--bg-hover); font-family: var(--plite-font-mono); font-size: 10.5px; line-height: 1.55; padding: 8px;
+    outline: none; color: var(--text); }
+  .paste-ta:focus { border-color: var(--accent); }
+  .imp-preview { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; margin-top: 9px; background: var(--bg); }
+  .imp-preview .ttl { font-size: 12px; font-weight: 600; }
+  .imp-preview .meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; overflow-wrap: anywhere; }
+  .imp-issue { display: flex; gap: 6px; font-size: 11px; line-height: 1.65; margin-top: 6px; }
+  .imp-issue.warn { color: var(--warn); }
+  .imp-issue.bad { color: var(--danger); }
+  .imp-issue.ok { color: var(--ok); }
+
+  /* toast */
+  .toast { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 50;
+    background: var(--text); color: #fff; font-size: 11.5px; padding: 7px 13px; border-radius: 999px;
+    box-shadow: var(--plite-shadow-1); opacity: 0; transition: opacity var(--plite-dur); pointer-events: none;
+    max-width: 86%; text-align: center; }
+  .toast.show { opacity: 0.94; }
+
+  .cap-note { font-size: 11px; color: var(--text-dim); background: var(--accent-soft); border-radius: 6px; padding: 7px 9px; line-height: 1.7; }
+  .btn-row2 { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-row2 .ma-btn.wide { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ 左侧说明 ============ -->
+  <aside class="brief">
+    <h1>模型供应商面板 · 增强 v1 原型</h1>
+    <p class="sub">纯前端 mock、无真实请求；样式对齐 plite-tokens 与现有 panel.css。右侧面板可直接操作，左侧按钮可直达各演示点。模型以<b>独立条目</b>管理（v1.1：移除逗号串输入）。</p>
+
+    <div class="feat">
+      <h3><span class="fnum p0">0</span>保存失败可见化（P0 前置修复）</h3>
+      <div class="try">试一试：点「编辑」→ 把 Base URL 改成 <code>https://api.example.com/v1</code> → 保存 → 表单内出现红色错误条，不再静默关闭。</div>
+      <p>现状：saveForm 不检查 dispatch 返回值，BASE_URL_NOT_ALLOWED 被吞掉，表现为「新增和修改都无效」。原型改为表单内联错误条 + 错误码展示。</p>
+      <button class="mini-btn" data-demo="edit">打开编辑表单</button>
+    </div>
+
+    <div class="feat">
+      <h3><span class="fnum">1</span>自动拉取模型列表</h3>
+      <div class="try">试一试：编辑表单里点「⟳ 拉取」→ 搜索 <code>nex</code> → 勾选 → 「加入所选」。命中 models.dev 的模型自动带目录初值（灰色「目录」徽标）。</div>
+      <p>新增 POST /api/providers/fetch-models：已存供应商按 id 用服务端存储的 key，新建中用表单 key（与 save 同信任边界）。/models 404 时保留手填并明确报错。</p>
+      <button class="mini-btn" data-demo="fetch">直达：新增表单 + 拉取</button>
+    </div>
+
+    <div class="feat">
+      <h3><span class="fnum">2</span>逐模型能力编辑（列表页直达）</h3>
+      <div class="try">试一试：列表页点任意模型 chip → 底部抽屉：token 上下限（支持 1m/200k 简写）、图片输入、思考等级、工具/思考可关/思考耗预算三态开关、单模型重新探测。输出上限 &gt; 输入上限会校验拦截。</div>
+      <p>补齐 tri-state 字段（tools / canDisableThinking / reasoningEatsBudget）的人工入口；改动来源自动标「人工」徽标；detectedAt 保留。表单内每个模型条目亦可直接进同一抽屉。</p>
+    </div>
+
+    <div class="feat">
+      <h3><span class="fnum">3</span>复制配置 / 粘贴导入</h3>
+      <div class="try">试一试：列表页「更多 → 复制配置」→ 左下剪贴板观察窗出现 JSON（不含 Key）；再点「粘贴导入」→ 填入示例 → 解析预览（缺 Key / 白名单警告）→ 导入到表单。</div>
+      <p>信封格式 polaris-provider-export v1；导入重新生成 id，避免跨实例冲突；单模型粒度复制在模型抽屉底部「复制此模型」。baseURL 不在白名单时导入预览即预警（保存仍会被 SSRF 白名单拦截）。</p>
+      <button class="mini-btn" data-demo="paste">打开粘贴导入</button>
+    </div>
+
+    <div class="feat">
+      <h3><span class="fnum">4</span>查看明文 API Key（带护栏）</h3>
+      <div class="try">试一试：列表页「更多 → 查看 API Key」→ 显示明文 + 10s 倒计时自动隐藏 + 复制按钮 + 审计记录。</div>
+      <p>新路由 POST /api/providers/reveal-key：登录会话硬门禁；PLITE_ALLOW_REVEAL 环境开关（生产默认 0 时此入口隐藏）；操作写入数据目录审计日志。对 XSS 防线无实质削弱（能拿 session 就能调接口），护栏主要压「意外暴露面」。</p>
+      <button class="mini-btn" data-demo="key">直达：查看 Key</button>
+    </div>
+
+    <div class="clip-box">
+      <h4>剪贴板观察窗（mock）</h4>
+      <pre id="clipView">（空）</pre>
+    </div>
+    <div class="legend" id="legend"></div>
+  </aside>
+
+  <!-- ============ 右侧 300px 面板 ============ -->
+  <main class="stage">
+    <div class="panel" id="panel">
+      <div class="ptabs">
+        <span>能力</span><span class="on">模型</span><span>Bash</span><span>账号</span><span>预览</span><span>文件</span><span>插件</span>
+        <span class="proto-chip">PROTOTYPE</span>
+      </div>
+      <div class="panel-body" id="view"></div>
+      <div class="toast" id="toast"></div>
+      <div id="overlayHost"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+'use strict';
+/* ================= mock 数据 ================= */
+const ALLOWED_HOSTS = ['api.openai.com','api.deepseek.com','api.moonshot.cn','api.anthropic.com','dashscope.aliyuncs.com','open.bigmodel.cn','api.mosi.cn'];
+const CATALOG_IDS = ['nex-n2.6','nex-n2.6-mini','nex-n2.6-think','nex-n2.6-vision','nex-omni-2','nex-code-1.5','nex-translate-2','nex-guard-1','nex-embed-3','nex-rerank-2','nex-n2.5','nex-n2.5-mini','nex-vl-1.2','legacy-nex-1.0'];
+/** models.dev 目录命中（初值来源；单位 token） */
+const MODELSDEV = {
+  'nex-n2.6':       { maxInputTokens: 1000000, maxOutputTokens: 131072 },
+  'nex-n2.6-mini':  { maxInputTokens: 1000000, maxOutputTokens: 65536 },
+  'nex-n2.6-think': { maxInputTokens: 1000000, maxOutputTokens: 131072, effort: 'medium' },
+  'nex-n2.6-vision':{ maxInputTokens: 512000,  maxOutputTokens: 8192, vision: true },
+  'nex-n2.5':       { maxInputTokens: 256000,  maxOutputTokens: 16384 },
+};
+const KEY_PLAIN = 'sk-mosi-9f3a2b7c64e5d1a0';
+
+let providers = [{
+  id: 'prov-mwm7tq53', name: 'nex-n2.6', baseURL: 'https://api.mosi.cn/v1',
+  keyMasked: 'sk-***64e5', hasKey: true, enabled: true, isDefault: true, activeModel: 'nex-n2.6',
+  models: [{
+    id: 'nex-n2.6',
+    caps: { in: 1000000, out: 131072, vision: true, effort: 'high', tools: true, canDisable: false, eatsBudget: true,
+            detected: 'manual', detectedAt: Date.now() - 86400000 },
+  }],
+}];
+
+const state = { view: 'list', editing: null, isNew: false, formError: null, clipboard: null, armDelete: null, moreOpen: null };
+
+/* ================= 工具 ================= */
+const $ = (sel, root) => (root || document).querySelector(sel);
+const view = $('#view');
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function fmtTok(n) {
+  if (!n || n <= 0) return '0';
+  if (n >= 1e6) return (n / 1e6).toString().replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1') + 'M';
+  if (n >= 1e3) return (n / 1e3).toString().replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1') + 'k';
+  return String(n);
+}
+function parseTok(raw) {
+  const s = String(raw ?? '').trim().replace(/[,\s_]/g, '');
+  if (s === '') return 0;
+  const m = /^(\d+(?:\.\d+)?)([kKmM]?)$/.exec(s);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n * (m[2].toLowerCase() === 'm' ? 1e6 : m[2].toLowerCase() === 'k' ? 1e3 : 1));
+}
+function hostOf(baseURL) { try { return new URL(baseURL).hostname.toLowerCase(); } catch { return null; } }
+function hostAllowed(baseURL) { const h = hostOf(baseURL); return !!h && ALLOWED_HOSTS.includes(h); }
+function newId() { return 'prov-' + Date.now().toString(36); }
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function setClipboard(json) { state.clipboard = json; $('#clipView').textContent = json; }
+
+/* 徽标渲染（对齐 Panel.tsx capBadges） */
+function capBadges(m) {
+  const out = [];
+  const detLabel = { manual: '人工', probe: '实测', reveal: '网关', catalog: '目录', builtin: '内置表' };
+  const detCls = { manual: 't-manual', probe: 't-probe', reveal: 't-probe', catalog: 't-builtin', builtin: 't-builtin' };
+  if (m.caps.detected) out.push([detLabel[m.caps.detected] ?? m.caps.detected, detCls[m.caps.detected] ?? 't-builtin']);
+  if (m.caps.vision) out.push(['图', 't-vision']);
+  if (m.caps.tools === true) out.push(['工', 't-vision']);
+  if (m.caps.effort) out.push(['思' + m.caps.effort, 't-effort']);
+  if (m.caps.eatsBudget) out.push(['思耗', 't-effort']);
+  if (m.caps.in > 0) out.push([fmtTok(m.caps.in), 't-ctx']);
+  return out;
+}
+
+/* ================= 列表视图 ================= */
+function renderList() {
+  const items = providers.map((c) => {
+    const chips = c.models.map((m) => {
+      const bs = capBadges(m).map(([l, cls]) => `<em class="${cls}">${esc(l)}</em>`).join('');
+      const tip = m.caps.detectedAt ? `识别于 ${new Date(m.caps.detectedAt).toLocaleString()}` : '点击编辑模型能力（新）';
+      return `<span class="ma-model-chip" data-chip="${esc(c.id)}|${esc(m.id)}" title="${esc(tip)}"><code>${esc(m.id)}</code>${bs}</span>`;
+    }).join('');
+    const menuItems = [
+      ['edit',   '编辑', ''],
+      ['copy',   '复制配置', '3'],
+      ['key',    '查看 API Key', '4'],
+      ['probe',  '识别模型能力', ''],
+      c.isDefault ? null : ['default', '设为默认', ''],
+      ['del',    state.armDelete === c.id ? '确认删除？' : '删除', ''],
+    ].filter(Boolean).map(([act, label, num]) =>
+      `<button data-act="${act}" data-id="${esc(c.id)}" class="${act === 'del' ? 'danger' : ''}">${num ? `<span class="fnum">${num}</span>` : ''}${label}</button>`).join('');
+    return `
+    <div class="ma-item">
+      <div class="ma-item-head">
+        <span class="ma-name">${esc(c.name)}${c.isDefault ? '<span class="ma-badge">默认</span>' : ''}${!c.enabled ? '<span class="ma-badge off">停用</span>' : ''}</span>
+        <label class="ma-switch" title="启用/停用"><input type="checkbox" data-act="toggle" data-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}><span></span></label>
+      </div>
+      <div class="ma-meta" title="${esc(c.baseURL)}">${esc(c.baseURL)}</div>
+      <div class="ma-meta">Key: ${c.hasKey ? `<code>${esc(c.keyMasked)}</code>` : '<em>未配置</em>'}</div>
+      ${c.models.length ? `<div class="ma-models">${chips}</div>` : ''}
+      <div class="ma-row ma-ops">
+        <button class="ma-btn small" data-act="edit" data-id="${esc(c.id)}">编辑</button>
+        <div class="ma-more">
+          <button data-act="more" data-id="${esc(c.id)}">更多 <i style="width:5px;height:5px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(45deg) translateY(-2px);display:inline-block"></i></button>
+          ${state.moreOpen === c.id ? `<div class="ma-more-menu">${menuItems}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  view.innerHTML = `
+    <div class="cap-panel">
+      <h3>模型供应商</h3>
+      <div class="ma-list">${items}</div>
+      <div class="btn-row2">
+        <button class="ma-btn wide" data-act="paste-import" style="height:34px">粘贴导入 <span class="fnum" style="margin-left:4px">3</span></button>
+      </div>
+      <button class="ma-btn primary wide" data-act="new">新增供应商</button>
+      <p class="ma-hint">新增：表单内可「⟳ 拉取」模型列表（①）；点模型 chip 直达逐模型编辑（②）；「复制配置 / 粘贴导入」（③）；明文 Key 查看带 10s 自动隐藏与审计（④）。</p>
+    </div>`;
+}
+
+/* ================= 模型独立条目编辑器（替代逗号串输入） ================= */
+function modelRowsHtml(e) {
+  if (!e.models.length) return `<div class="mlist-empty">暂无模型 — 手动添加或 ⟳ 拉取</div>`;
+  return e.models.map((m, i) => `
+    <div class="mrow">
+      <input type="radio" name="f-am" data-mi="${i}" title="设为默认调用模型" ${e.activeModel === m.id ? 'checked' : ''} />
+      <code title="${esc(m.id)}">${esc(m.id)}</code>
+      <span class="mbadges">${capBadges(m).map(([l, cls]) => `<em class="${cls}">${esc(l)}</em>`).join('')}</span>
+      <span class="mops">
+        <button class="ma-btn" data-mact="edit" data-mi="${i}" title="编辑此模型能力（②）">能力</button>
+        <button class="ma-btn" data-mact="del" data-mi="${i}" title="移除此条目">✕</button>
+      </span>
+    </div>`).join('');
+}
+function addModelFromInput() {
+  const inp = $('#f-add'); const id = (inp?.value ?? '').trim();
+  if (!id) return;
+  if (state.editing.models.some((m) => m.id === id)) { toast('该模型 id 已存在（同一供应商内需唯一）'); return; }
+  state.editing.models.push({ id, caps: { in: 0, out: 0, vision: false, effort: null, tools: null, canDisable: null, eatsBudget: null, detected: null } });
+  if (!state.editing.activeModel) state.editing.activeModel = id;
+  renderForm();
+  const again = $('#f-add'); if (again) again.focus();
+  toast(`已添加 ${id}`);
+}
+
+/* ================= 表单视图（新增/编辑） ================= */
+function renderForm() {
+  const e = state.editing;
+  view.innerHTML = `
+    <div class="cap-panel">
+      <h3>${state.isNew ? '新增供应商' : '编辑供应商'}</h3>
+      <div class="ma-form">
+        <label>名称</label>
+        <input id="f-name" value="${esc(e.name)}" placeholder="OpenAI" />
+        <label>Base URL</label>
+        <input id="f-url" value="${esc(e.baseURL)}" placeholder="https://api.openai.com/v1" />
+        <label>API Key ${state.isNew ? '' : '(留空 = 不修改)'}</label>
+        <input id="f-key" type="password" value="" placeholder="${state.isNew ? 'sk-...' : `当前 ${e.keyMasked || '未配置'}（留空保持不变）`}" autocomplete="new-password" />
+        <label>模型（独立条目：单独添加 / 删除 / 编辑能力 / 设默认调用）</label>
+        <div class="mlist" id="f-mlist">${modelRowsHtml(e)}</div>
+        <div class="fetch-row">
+          <input id="f-add" placeholder="输入模型 id，回车或点「添加」" />
+          <button class="ma-btn" id="f-addbtn">添加</button>
+          <button class="ma-btn" id="f-fetch" title="从上游 /models 拉取模型列表（①）">⟳ 拉取</button>
+        </div>
+        <p class="ma-hint" style="margin-top:2px">不再用逗号串：每个模型是独立条目，互不影响；radio 设默认调用模型；拉取与粘贴导入逐条并入，命中 models.dev 自动带目录初值。</p>
+        ${state.formError ? `<div class="ma-error"><div><b>保存失败</b> · <span class="code">${esc(state.formError.code)}</span><br>${esc(state.formError.msg)}</div></div>` : ''}
+        <label class="ma-check" style="margin-top:10px"><input type="checkbox" id="f-en" ${e.enabled ? 'checked' : ''} /> 启用</label>
+        <label class="ma-check"><input type="checkbox" id="f-def" ${e.isDefault ? 'checked' : ''} /> 设为默认</label>
+      </div>
+      <div class="ma-actions">
+        <button class="ma-btn primary" id="f-save">保存</button>
+        <button class="ma-btn" id="f-cancel">取消</button>
+      </div>
+    </div>`;
+}
+
+function collectForm() {
+  return {
+    name: $('#f-name').value.trim(),
+    baseURL: $('#f-url').value.trim().replace(/\/+$/, ''),
+    apiKey: $('#f-key').value.trim(),
+    enabled: $('#f-en').checked,
+    isDefault: $('#f-def').checked,
+  };
+}
+
+async function saveForm() {
+  const v = collectForm();
+  if (!v.name || !v.baseURL) { state.formError = { code: 'VALIDATION', msg: '名称与 Base URL 为必填。' }; renderForm(); return; }
+  // ★ P0：白名单校验失败 → 表单内错误条（此前该错误被静默吞掉）
+  if (!hostAllowed(v.baseURL)) {
+    state.formError = { code: 'BASE_URL_NOT_ALLOWED', msg: `host not allowed: ${hostOf(v.baseURL)}（如需支持，加入 plugins/relay-hosts.json）` };
+    renderForm(); return;
+  }
+  const idx = providers.findIndex((c) => c.id === state.editing.id);
+  const prev = idx >= 0 ? providers[idx] : null;
+  const next = {
+    ...state.editing, ...v,
+    apiKey: v.apiKey || (prev?.apiKeyPlain ?? ''),
+    keyMasked: v.apiKey ? (v.apiKey.length <= 8 ? '*'.repeat(v.apiKey.length) : v.apiKey.slice(0, 3) + '***' + v.apiKey.slice(-4)) : (prev?.keyMasked ?? ''),
+    hasKey: !!(v.apiKey || prev?.hasKey),
+  };
+  if (idx >= 0) providers[idx] = next; else providers.push(next);
+  if (!next.activeModel && next.models.length) next.activeModel = next.models[0].id;
+  if (next.isDefault) providers.forEach((c) => { if (c.id !== next.id) c.isDefault = false; });
+  state.view = 'list'; state.editing = null; state.formError = null;
+  renderList(); toast('已保存 · 保存后自动浅层识别（原型不模拟）');
+}
+
+/* ================= overlay 管理 ================= */
+function closeOverlay() { $('#overlayHost').innerHTML = ''; }
+function overlay(html, opts = {}) {
+  $('#overlayHost').innerHTML = `<div class="overlay ${opts.sheet ? 'sheet' : ''}" data-close="1">${html}</div>`;
+  const ov = $('#overlayHost .overlay');
+  ov.addEventListener('click', (ev) => { if (ev.target === ov && opts.dismissable !== false) closeOverlay(); });
+  return ov;
+}
+
+/* ================= F1：拉取模型列表 ================= */
+async function openFetchModal() {
+  const url = $('#f-url')?.value.trim();
+  if (!url) { toast('请先填写 Base URL'); return; }
+  if (!hostAllowed(url)) { toast('Base URL 不在白名单，拉取会被拦截'); return; }
+  const btn = $('#f-fetch'); btn.setAttribute('aria-busy', 'true'); btn.textContent = '拉取中';
+  await delay(700); // mock 网络往返
+  btn.removeAttribute('aria-busy'); btn.textContent = '⟳ 拉取';
+
+  const existing = new Set(state.editing.models.map((m) => m.id));
+  const ov = overlay(`
+    <div class="mcard">
+      <div class="mhead"><h4>拉取模型列表 · ${esc(hostOf(url))}</h4><button class="x" data-x>✕</button></div>
+      <div class="mbody">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">GET /models 返回 ${CATALOG_IDS.length} 个模型 · <span style="color:var(--ok)">连通成功</span>（mock）</div>
+        <input class="search" id="cat-search" placeholder="搜索模型 id…" />
+        <div class="cat-list" id="cat-list"></div>
+      </div>
+      <div class="mfoot"><span style="font-size:11.5px;color:var(--text-dim)">已选 <b id="cat-n" style="color:var(--accent)">0</b> 个</span><span class="sp"></span><button class="ma-btn" data-x>取消</button><button class="ma-btn primary" id="cat-add" disabled>加入所选</button></div>
+    </div>`);
+  const renderCat = () => {
+    const q = ($('#cat-search').value || '').toLowerCase();
+    const hits = CATALOG_IDS.filter((id) => id.toLowerCase().includes(q));
+    $('#cat-list').innerHTML = hits.length ? hits.map((id) => {
+      const pre = MODELSDEV[id];
+      const preTxt = pre ? `目录初值 <b>${fmtTok(pre.maxInputTokens)}/${fmtTok(pre.maxOutputTokens)}</b>` : '无目录初值';
+      return `<label class="cat-item"><input type="checkbox" value="${esc(id)}" ${existing.has(id) ? 'disabled' : ''} /><code>${esc(id)}</code><span class="pre">${preTxt}${existing.has(id) ? ' · 已在列表' : ''}</span></label>`;
+    }).join('') : `<div class="cat-empty">无匹配模型</div>`;
+  };
+  renderCat();
+  $('#cat-search').addEventListener('input', renderCat);
+  $('#cat-list').addEventListener('change', () => {
+    const n = $('#cat-list').querySelectorAll('input:checked').length;
+    $('#cat-n').textContent = n; $('#cat-add').disabled = n === 0;
+  });
+  ov.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', closeOverlay));
+  $('#cat-add').addEventListener('click', () => {
+    const picked = [...$('#cat-list').querySelectorAll('input:checked')].map((i) => i.value);
+    // 命中 models.dev → 自动带目录初值（detected: catalog）
+    const added = picked.map((id) => {
+      const pre = MODELSDEV[id] ?? {};
+      return { id, caps: { in: pre.maxInputTokens ?? 0, out: pre.maxOutputTokens ?? 0, vision: !!pre.vision, effort: pre.effort ?? null, tools: null, canDisable: null, eatsBudget: null, detected: pre ? 'catalog' : null, detectedAt: Date.now() } };
+    });
+    const e = state.editing;
+    e.models = [...e.models.filter((m) => !picked.includes(m.id)), ...added];
+    closeOverlay(); renderForm();
+    toast(`已加入 ${added.length} 个模型（目录初值自动回填）`);
+  });
+}
+
+/* ================= F2：逐模型编辑抽屉 ================= */
+function triHtml(name, val) {
+  const b = (v, label, cls) => `<button type="button" data-tri="${name}" data-v="${v}" class="${val === v ? cls : ''}">${label}</button>`;
+  return `<span class="tri">${b(null, '未知', '')}${b(true, '支持', 'on-t')}${b(false, '不支持', 'on-f')}</span>`;
+}
+function openChipEditor(m, onSaved) {
+  const detLabel = { manual: '人工', probe: '实测', reveal: '网关', catalog: '目录', builtin: '内置表' };
+  overlay(`
+    <div class="mcard">
+      <div class="mhead"><h4 style="font-family:var(--plite-font-mono)">${esc(m.id)}</h4>
+        ${m.caps.detected ? `<span class="ma-badge">${detLabel[m.caps.detected] ?? m.caps.detected}</span>` : ''}
+        <button class="x" data-x>✕</button></div>
+      <div class="mbody">
+        <div class="cap-grid2">
+          <span>输入 tokens</span><input id="c-in" value="${m.caps.in ? fmtTok(m.caps.in) : ''}" placeholder="0=未知，可写 1m / 200k" />
+          <span>输出 tokens</span><input id="c-out" value="${m.caps.out ? fmtTok(m.caps.out) : ''}" placeholder="0=默认，可写 64k" />
+          <span>图片输入</span><label class="ma-check" style="margin:0"><input type="checkbox" id="c-vis" ${m.caps.vision ? 'checked' : ''}/> 支持</label>
+          <span>思考等级</span>
+          <select id="c-eff">
+            <option value="">不支持/未知</option>
+            ${['minimal','low','medium','high'].map((v) => `<option value="${v}" ${m.caps.effort === v ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+          <span>工具调用</span>${triHtml('tools', m.caps.tools)}
+          <span>思考可关</span>${triHtml('canDisable', m.caps.canDisable)}
+          <span>思考耗预算</span>${triHtml('eatsBudget', m.caps.eatsBudget)}
+        </div>
+        <div class="val-line" id="c-val"></div>
+        <div style="font-size:10.5px;color:var(--text-faint);margin-top:6px">${m.caps.detectedAt ? '上次识别：' + new Date(m.caps.detectedAt).toLocaleString() + ' · ' : ''}保存后来源标「人工」，人工值不会被探测覆盖。</div>
+      </div>
+      <div class="mfoot">
+        <button class="ma-btn" id="c-reprobe" title="仅重探此模型（probe 加 modelIds 过滤）">⟳ 重探</button>
+        <button class="ma-btn" id="c-copymodel" title="复制此模型为 polaris-model-export（③）">复制此模型</button>
+        <span class="sp"></span>
+        <button class="ma-btn" data-x>取消</button>
+        <button class="ma-btn primary" id="c-save">保存</button>
+      </div>
+    </div>`, { sheet: true });
+
+  const triState = { tools: m.caps.tools, canDisable: m.caps.canDisable, eatsBudget: m.caps.eatsBudget };
+  const ov = $('#overlayHost .overlay');
+  ov.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', closeOverlay));
+  ov.querySelectorAll('[data-tri]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.tri;
+    triState[k] = b.dataset.v === 'null' ? null : b.dataset.v === 'true';
+    ov.querySelectorAll(`[data-tri="${k}"]`).forEach((x) => { x.classList.remove('on-t', 'on-f'); });
+    if (b.dataset.v === 'true') b.classList.add('on-t');
+    if (b.dataset.v === 'false') b.classList.add('on-f');
+  }));
+  const validate = () => {
+    const i = parseTok($('#c-in').value), o = parseTok($('#c-out').value);
+    const el = $('#c-val');
+    if (i === null || o === null) { el.className = 'val-line bad'; el.textContent = 'token 写法非法（支持 128000 / 128k / 1m）；非法字面量不会写回。'; return false; }
+    if (o > 0 && i > 0 && o > i) { el.className = 'val-line bad'; el.textContent = '输出上限大于输入上限，疑似填反。'; return false; }
+    el.className = 'val-line dim'; el.textContent = `将写入：输入 ${fmtTok(i || 0)} / 输出 ${fmtTok(o || 0)}。`; return true;
+  };
+  $('#c-in').addEventListener('input', validate);
+  $('#c-out').addEventListener('input', validate);
+  validate();
+  $('#c-save').addEventListener('click', () => {
+    if (!validate()) return;
+    m.caps = { ...m.caps, in: parseTok($('#c-in').value) || 0, out: parseTok($('#c-out').value) || 0,
+      vision: $('#c-vis').checked, effort: $('#c-eff').value || null,
+      tools: triState.tools, canDisable: triState.canDisable, eatsBudget: triState.eatsBudget,
+      detected: 'manual', detectedAt: Date.now() };
+    closeOverlay(); if (onSaved) onSaved(); toast('模型能力已保存（来源：人工）');
+  });
+  $('#c-reprobe').addEventListener('click', async () => {
+    const b = $('#c-reprobe'); b.setAttribute('aria-busy', 'true'); await delay(900); b.removeAttribute('aria-busy');
+    closeOverlay(); if (onSaved) onSaved(); toast('单模型重探完成（原型不模拟结果）');
+  });
+  $('#c-copymodel').addEventListener('click', () => {
+    const payload = { type: 'polaris-model-export', version: 1, model: clone(m) };
+    setClipboard(JSON.stringify(payload, null, 2));
+    toast('已复制此模型 JSON（不含 Key）');
+  });
+}
+
+/* ================= F3：复制配置 / 粘贴导入 ================= */
+function copyProvider(c) {
+  const payload = {
+    type: 'polaris-provider-export', version: 1,
+    provider: { name: c.name, baseURL: c.baseURL, activeModel: c.activeModel,
+      models: c.models.map((m) => ({ id: m.id, capabilities: { maxInputTokens: m.caps.in, maxOutputTokens: m.caps.out, effort: m.caps.effort, vision: m.caps.vision, tools: m.caps.tools, canDisableThinking: m.caps.canDisable, reasoningEatsBudget: m.caps.eatsBudget, detected: m.caps.detected } })) },
+  };
+  setClipboard(JSON.stringify(payload, null, 2));
+  toast('已复制配置（不含 Key · Key 留空待补）');
+}
+
+const PASTE_EXAMPLE = JSON.stringify({
+  type: 'polaris-provider-export', version: 1,
+  provider: { name: 'DeepSeek 直连', baseURL: 'https://api.deepseek.com/v1', activeModel: 'deepseek-chat',
+    models: [
+      { id: 'deepseek-chat', capabilities: { maxInputTokens: '64k', maxOutputTokens: '8k', effort: null, vision: false, tools: true } },
+      { id: 'deepseek-reasoner', capabilities: { maxInputTokens: '64k', maxOutputTokens: '64k', effort: 'medium', vision: false, tools: false } },
+    ] },
+}, null, 2);
+
+function openPasteModal() {
+  overlay(`
+    <div class="mcard">
+      <div class="mhead"><h4>粘贴导入（③）</h4><button class="x" data-x>✕</button></div>
+      <div class="mbody">
+        <textarea class="paste-ta" id="p-ta" placeholder="粘贴 polaris-provider-export / polaris-model-export JSON…"></textarea>
+        <div class="btn-row2" style="margin-top:8px">
+          <button class="ma-btn small" id="p-example">填入示例</button>
+          <button class="ma-btn small" id="p-parse">解析预览</button>
+        </div>
+        <div id="p-preview"></div>
+      </div>
+      <div class="mfoot"><span style="font-size:10.5px;color:var(--text-faint)">导入会重新生成 id</span><span class="sp"></span><button class="ma-btn" data-x>取消</button><button class="ma-btn primary" id="p-import" disabled>导入到表单</button></div>
+    </div>`);
+  let parsed = null;
+  const ov = $('#overlayHost .overlay');
+  ov.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', closeOverlay));
+  $('#p-example').addEventListener('click', () => { $('#p-ta').value = PASTE_EXAMPLE; });
+  $('#p-parse').addEventListener('click', () => {
+    const box = $('#p-preview');
+    let data;
+    try { data = JSON.parse($('#p-ta').value); }
+    catch { box.innerHTML = `<div class="imp-issue bad"><span>✕</span><div>JSON 解析失败，请检查内容。</div></div>`; $('#p-import').disabled = true; return; }
+    const prov = data.type === 'polaris-model-export' ? { name: '（粘贴的模型）', baseURL: '', models: [data.model] } : data.provider;
+    if (!prov || !Array.isArray(prov.models)) { box.innerHTML = `<div class="imp-issue bad"><span>✕</span><div>信封类型不认识：${esc(String(data.type ?? '（无）'))}。</div></div>`; $('#p-import').disabled = true; return; }
+    const issues = [];
+    if (!prov.baseURL) issues.push(['bad', '缺 Base URL：导入后需补填并选择目标主机。']);
+    else if (!hostAllowed(prov.baseURL)) issues.push(['warn', `baseURL 主机 ${esc(hostOf(prov.baseURL))} 不在白名单——保存将被 BASE_URL_NOT_ALLOWED 拦截（可先加入 plugins/relay-hosts.json）。`]);
+    issues.push(['warn', '导出不含 API Key：导入后需补填 Key。']);
+    issues.push(['ok', `解析成功：${esc(prov.name)} · ${prov.models.length} 个模型 · 能力配置随行。`]);
+    box.innerHTML = `<div class="imp-preview">
+        <div class="ttl">${esc(prov.name)}</div>
+        <div class="meta">${esc(prov.baseURL || '（无 baseURL）')} · activeModel: ${esc(prov.activeModel ?? '—')}</div>
+        ${issues.map(([cls, txt]) => `<div class="imp-issue ${cls}"><span>${cls === 'ok' ? '✓' : cls === 'warn' ? '⚠' : '✕'}</span><div>${txt}</div></div>`).join('')}
+      </div>`;
+    parsed = prov; $('#p-import').disabled = false;
+  });
+  $('#p-import').addEventListener('click', () => {
+    if (!parsed) return;
+    state.isNew = true;
+    state.editing = { id: newId(), name: parsed.name === '（粘贴的模型）' ? '' : parsed.name, baseURL: parsed.baseURL || '',
+      apiKeyPlain: '', keyMasked: '', hasKey: false, enabled: true, isDefault: false, activeModel: parsed.activeModel ?? '',
+      models: parsed.models.map((m) => ({ id: m.id, caps: {
+        in: parseTok(m.capabilities?.maxInputTokens) ?? 0, out: parseTok(m.capabilities?.maxOutputTokens) ?? 0,
+        vision: m.capabilities?.vision === true, effort: m.capabilities?.effort ?? null,
+        tools: m.capabilities?.tools ?? null, canDisable: m.capabilities?.canDisableThinking ?? null,
+        eatsBudget: m.capabilities?.reasoningEatsBudget ?? null, detected: 'manual', detectedAt: Date.now() } })) };
+    state.formError = null; state.view = 'form';
+    closeOverlay(); renderForm(); toast('已导入到新增表单，请补 API Key 后保存');
+  });
+}
+
+/* ================= F4：查看明文 Key ================= */
+function openKeyDialog(c) {
+  overlay(`
+    <div class="mcard">
+      <div class="mhead"><h4>查看 API Key · ${esc(c.name)}</h4><button class="x" data-x>✕</button></div>
+      <div class="mbody">
+        <div class="key-warn"><span>⚠</span><div>明文 Key 等同账户凭据：10 秒后自动隐藏；本次操作写入审计日志。生产部署可用 <b>PLITE_ALLOW_REVEAL=0</b> 整体关闭此入口（原型恒开）。</div></div>
+        <div class="key-row"><code id="k-code">${esc(c.keyMasked)}</code></div>
+        <div class="key-timer" id="k-timer"></div>
+        <div class="btn-row2">
+          <button class="ma-btn" id="k-reveal">显示明文</button>
+          <button class="ma-btn" id="k-copy" disabled>复制</button>
+        </div>
+        <div class="audit-line" id="k-audit">审计：待记录…</div>
+      </div>
+      <div class="mfoot"><span class="sp"></span><button class="ma-btn" data-x>关闭</button></div>
+    </div>`);
+  const ov = $('#overlayHost .overlay');
+  ov.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', closeOverlay));
+  let timer = null;
+  const hide = () => { $('#k-code').textContent = c.keyMasked; $('#k-code').classList.remove('plain'); $('#k-timer').textContent = ''; clearInterval(timer); };
+  $('#k-reveal').addEventListener('click', () => {
+    $('#k-code').textContent = KEY_PLAIN; $('#k-code').classList.add('plain');
+    $('#k-copy').disabled = false;
+    $('#k-audit').textContent = `审计：${new Date().toLocaleString()} root 查看了 nex-n2.6 的 Key（原型模拟；真实实现写数据目录 audit.jsonl）`;
+    let left = 10;
+    $('#k-timer').textContent = `${left}s 后自动隐藏`;
+    clearInterval(timer);
+    timer = setInterval(() => { left -= 1; if (left <= 0) { hide(); return; } $('#k-timer').textContent = `${left}s 后自动隐藏`; }, 1000);
+  });
+  $('#k-copy').addEventListener('click', () => { setClipboard(KEY_PLAIN); toast('明文 Key 已复制到剪贴板（mock）'); });
+}
+
+/* ================= 事件分发 ================= */
+view.addEventListener('click', async (ev) => {
+  const chip = ev.target.closest('[data-chip]');
+  if (chip) {
+    const [pid, mid] = chip.dataset.chip.split('|');
+    const c0 = providers.find((x) => x.id === pid); const m0 = c0 && c0.models.find((x) => x.id === mid);
+    if (m0) openChipEditor(m0, () => renderList());
+    return;
+  }
+  const btn = ev.target.closest('[data-act]'); if (!btn) {
+    if (state.moreOpen) { state.moreOpen = null; renderList(); }
+    return;
+  }
+  const act = btn.dataset.act; const id = btn.dataset.id;
+  const c = providers.find((x) => x.id === id);
+  if (act === 'more') { state.moreOpen = state.moreOpen === id ? null : id; renderList(); return; }
+  if (act === 'new') { state.isNew = true; state.editing = { id: newId(), name: '', baseURL: '', apiKeyPlain: '', keyMasked: '', hasKey: false, enabled: true, isDefault: providers.length === 0, activeModel: '', models: [] }; state.formError = null; renderForm(); return; }
+  if (act === 'edit' && c) { state.isNew = false; state.editing = clone(c); state.formError = null; renderForm(); return; }
+  if (act === 'copy' && c) { copyProvider(c); state.moreOpen = null; renderList(); return; }
+  if (act === 'key' && c) { state.moreOpen = null; renderList(); openKeyDialog(c); return; }
+  if (act === 'probe' && c) { state.moreOpen = null; renderList(); toast('已发起识别（原型不模拟探测）'); return; }
+  if (act === 'default' && c) { providers.forEach((x) => { x.isDefault = x.id === id; }); state.moreOpen = null; renderList(); toast('已设为默认'); return; }
+  if (act === 'del' && c) {
+    if (state.armDelete !== id) { state.armDelete = id; renderList(); setTimeout(() => { if (state.armDelete === id) { state.armDelete = null; renderList(); } }, 3000); return; }
+    providers = providers.filter((x) => x.id !== id); renderList(); toast('已删除'); return;
+  }
+  if (act === 'paste-import') { openPasteModal(); return; }
+});
+view.addEventListener('change', (ev) => {
+  const t = ev.target.closest('[data-act="toggle"]');
+  if (t) { const c = providers.find((x) => x.id === t.dataset.id); if (c) { c.enabled = t.checked; renderList(); } return; }
+  if (ev.target.name === 'f-am' && state.editing) {
+    state.editing.activeModel = state.editing.models[+ev.target.dataset.mi].id;
+    toast(`默认调用模型：${state.editing.activeModel}`);
+  }
+});
+view.addEventListener('click', (ev) => {
+  const mbtn = ev.target.closest('[data-mact]');
+  if (mbtn && state.editing) {
+    const i = +mbtn.dataset.mi;
+    if (mbtn.dataset.mact === 'del') {
+      const removed = state.editing.models.splice(i, 1)[0];
+      if (state.editing.activeModel === removed.id) state.editing.activeModel = state.editing.models[0]?.id ?? '';
+      renderForm(); toast(`已移除 ${removed.id}`);
+      return;
+    }
+    if (mbtn.dataset.mact === 'edit') { openChipEditor(state.editing.models[i], () => renderForm()); return; }
+  }
+  if (ev.target.id === 'f-fetch') { openFetchModal(); return; }
+  if (ev.target.id === 'f-addbtn') { addModelFromInput(); return; }
+  if (ev.target.id === 'f-save') { saveForm(); return; }
+  if (ev.target.id === 'f-cancel') { state.view = 'list'; state.editing = null; state.formError = null; renderList(); return; }
+});
+view.addEventListener('keydown', (ev) => {
+  if (ev.target.id === 'f-add' && ev.key === 'Enter') { ev.preventDefault(); addModelFromInput(); }
+});
+
+/* 左侧快捷演示 */
+document.querySelectorAll('[data-demo]').forEach((b) => b.addEventListener('click', () => {
+  closeOverlay();
+  const d = b.dataset.demo;
+  if (d === 'edit') { const c = providers[0]; state.isNew = false; state.editing = clone(c); state.formError = null; state.view = 'form'; renderList(); renderForm(); }
+  if (d === 'fetch') {
+    const c = providers[0]; state.isNew = true;
+    state.editing = { id: newId(), name: '', baseURL: c.baseURL, apiKeyPlain: '', keyMasked: '', hasKey: false, enabled: true, isDefault: false, activeModel: '', models: [] };
+    state.formError = null; state.view = 'form'; renderList(); renderForm(); openFetchModal();
+  }
+  if (d === 'paste') { state.view = 'list'; renderList(); openPasteModal(); }
+  if (d === 'key') { state.view = 'list'; renderList(); openKeyDialog(providers[0]); }
+}));
+
+/* 徽标图例 */
+$('#legend').innerHTML = [
+  ['人工', 't-manual'], ['实测/网关', 't-probe'], ['目录/内置表', 't-builtin'], ['图', 't-vision'], ['思', 't-effort'], ['1M', 't-ctx'],
+].map(([l, c]) => `<span class="ma-model-chip" style="cursor:default"><em class="${c}">${l}</em></span>`).join('');
+
+renderList();
+</script>
+</body>
+</html>

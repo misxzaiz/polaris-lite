@@ -15,12 +15,12 @@
  *
  * 本文件只补两件总线管不了的事：**归属校验**（只能动自己的视图）与**参数校验**。
  */
-import type { CapBus, CapContext } from '../bus';
-import type { CapRequest } from '../types';
-import type { TabsNode, WorkspaceNode } from './schema.ts';
-import { findNode, validateWorkspace } from './schema.ts';
+import type { CapBus, CapContext } from './capTypes.ts';
+import type { CapRequest } from '@sdk';
+import type { TabsNode, WorkspaceNode } from '../sdk/schema.ts';
+import { findNode, validateWorkspace } from '../sdk/schema.ts';
 import type { WorkspaceStore } from './store.ts';
-import type { ViewRegistry } from './viewRegistry.ts';
+import type { ViewRegistry, ViewDefinition } from './viewAccessTypes.ts';
 import { isHostSlotView } from './hostViews.ts';
 import { anchorNode } from './treeOps.ts';
 
@@ -139,7 +139,7 @@ export function createLayoutHandler(deps: LayoutCapDeps) {
         // 深拷贝：不给插件内部引用，否则它改一个字段宿主状态就与持久化不一致
         return deepClone(store.getSnapshot().tree);
       case 'listViews':
-        return registry.list().map((v) => ({ viewType: v.viewType, title: v.title, pluginId: v.pluginId }));
+        return registry.list().map((v: ViewDefinition) => ({ viewType: v.viewType, title: v.title, pluginId: v.pluginId }));
 
       // ---------- 打开 / 关闭 / 拆分 / 移动 ----------
       case 'open': {

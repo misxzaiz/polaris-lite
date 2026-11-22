@@ -97,6 +97,62 @@ export interface ViewDescriptor {
   defaultAnchor?: AnchorId;
 }
 
+/**
+ * Tab 条 chrome 贡献描述（host-slimming-report §7.2 契约扩展 / §4 P1-2）。
+ *
+ * 背景：多面板 tab 条（置顶/＋n 收纳/搜索/⟳ 刷新/roving 焦点）是「面板管理」的
+ * 产品语义而非容器本职，此前长在核心 SlotOutlet 里（约 300 行 + 215 行 CSS）。
+ * 经本贡献类型外移为插件组件：宿主保留激活态/置顶/刷新序号的**状态权威**
+ * （防双头），把 tab 条的渲染权交给插件；无插件注册时回退内置简版 tab 条
+ * （裸 tab 按钮，无 chrome——禁用 chrome 插件不破可用性）。
+ *
+ * 组件 props 契约（TabChromeProps）：宿主注入全部状态与回调，组件零自持状态。
+ */
+export interface TabChromeProps {
+  /** 有序条目（已按用户顺序+置顶排好） */
+  tabs: { key: string; title: string; pinned: boolean }[];
+  /** 激活条目 key */
+  activeKey: string;
+  /** 选择（点击/键盘/菜单统一入口） */
+  onSelect(key: string): void;
+  /** 切换置顶 */
+  onTogglePin(key: string): void;
+  /** 刷新当前面板（宿主自持重挂载序号） */
+  onRefresh(): void;
+  /** 槽位 id（a11y 命名空间用） */
+  slot: SlotId;
+  /** tab body 的渲染由宿主完成；chrome 组件只渲染 tab 条本身 */
+}
+
+/**
+ * 工作区布局树根容器契约（P2-2 workspace 抽出）：布局插件贡献 'layout-root' 容器组件,
+ * 宿主壳层(SlotLayout)把「工作区主体区域」的渲染委托给它。props 由宿主注入:
+ * - renderAnchor:宿主提供——布局树叶子遇到 host.slot.<anchor> 保留视图时,
+ *   经此回调渲染该锚点的槽位内容(内部即 <SlotOutlet slot=anchor/>;布局插件不认识 SlotOutlet)。
+ * 布局插件自持树/持久化/layoutCap 注册(grants 授权 cap.ui.layout)。
+ * 无插件注册时宿主回退内置固定四槽(WorkspaceTree 时代之前的形态)。
+ */
+export interface LayoutRootProps {
+  /** 渲染指定锚点的槽位内容(host.slot.* 保留视图的落地回调) */
+  renderAnchor(anchor: AnchorId): ReactNode;
+  /** 视图叶子解析:viewType → 插件组件(宿主 viewRegistry+externalPlugins 查表;查不到 undefined) */
+  resolveView(viewType: string): React.ComponentType | undefined;
+}
+
+/**
+ * 容器贡献描述：插件声明「我来渲染某类宿主 chrome」。
+ * 当前支持的容器：'slot-tabs'（多面板 tab 条）。
+ * 宿主按注册表查用；多个插件贡献同一容器时取 order 最小者（稳定可预期）。
+ */
+export interface ContainerDescriptor {
+  /** 容器种类（受控枚举，按需扩展；layout-root = 工作区布局树宿主容器,P2-2） */
+  container: 'slot-tabs' | 'layout-root';
+  /** 插件内组件导出名（组件签名 = TabChromeProps） */
+  component: string;
+  /** 同类容器的优先级，小者优先 */
+  order?: number;
+}
+
 /** 插件 manifest（Polaris manifest 的瘦身版） */
 export interface LiteManifest {
   id: string;
@@ -114,6 +170,8 @@ export interface LiteManifest {
     slots?: SlotDescriptor[];
     /** 可被工作区树摆放的视图（新契约；与 slots 并存，二者都由宿主统一渲染） */
     views?: ViewDescriptor[];
+    /** 宿主 chrome 容器（tab 条等;host-slimming-report §7.2） */
+    containers?: ContainerDescriptor[];
   };
 }
 
@@ -138,6 +196,8 @@ export interface CapResponse<T = unknown> {
   source?: string;
 }
 
+import type { ReactNode } from 'react';
+
 /** 会话消息（对话插件与引擎间的最小协议） */
 export interface ChatMessage {
   id: string;
@@ -146,6 +206,88 @@ export interface ChatMessage {
   createdAt: number;
   streaming?: boolean;
 }
+
+// ---------- 对话消息模型（2026-11-21 自 chat-lite/store.ts 上移,host-slimming-report §2.6/P1-3） ----------
+// 这是「引擎 → 编排层 → 对话 UI」之间的事实消息协议：此前只在 chat-lite 私有 store 里,
+// 任何想替换对话 UI 的插件都必须抄这批类型。上移契约层后,替换 UI = 按公开契约编程。
+// chat-lite 经 @sdk 引用同名类型(store.ts 保留 re-export 保持文件内引用兼容)。
+
+/** 工具调用卡（参考 Polaris ToolCallBlock 的收敛版） */
+export type ToolCardStatus = 'running' | 'done' | 'error' | 'denied' | 'awaiting' | 'resolved';
+
+export interface ToolCardData {
+  callId: string;
+  name: string;
+  command?: string;
+  /** 模型给的原始参数 JSON（tool.card 透传）：ArgsBlock 折叠展示用 */
+  argsJson?: string;
+  status: ToolCardStatus;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  durationMs?: number;
+  truncated?: boolean;
+  decision?: 'once' | 'always' | 'trust' | 'deny';
+}
+
+/** role:'tool' 的消息形态（旧数据兼容；新编排输出改为 assistant.blocks 内嵌块） */
+export interface ToolCardMessage {
+  id: string;
+  role: 'tool';
+  content: string;
+  createdAt: number;
+  streaming?: boolean;
+  tool: ToolCardData;
+}
+
+/** 交互卡数据（AI 发起 question/form/confirm，用户作答后回填） */
+export interface InteractiveCardData {
+  callId: string;
+  kind: 'question' | 'form' | 'confirm';
+  title: string;
+  payload: Record<string, unknown>;
+  answer?: Record<string, unknown>;
+  status: 'awaiting' | 'answered';
+}
+
+/**
+ * 通用产物块（第二个可视化插件起不再动对话 UI）：渲染器由产物插件经
+ * CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记（rendererType → 组件）。
+ * data 是渲染器私有载荷（html-preview 存 previewId/url 等）。一次性落块，无回填流。
+ */
+export interface ArtifactCardData {
+  callId: string;
+  rendererType: string;
+  title: string;
+  status: 'ready' | 'error';
+  data: Record<string, unknown>;
+}
+
+/** assistant 消息的内容块（Polaris ContentBlock 收敛版）：按事件到达序追加，保序交错 */
+export type AsstBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool'; card: ToolCardData }
+  | { type: 'interactive'; card: InteractiveCardData }
+  | { type: 'artifact'; card: ArtifactCardData }
+  /** 轻提示（自动续写进度等）：小字弱化样式，不参与正文镜像 */
+  | { type: 'notice'; text: string }
+  /** length 截断提示：带「继续」按钮（点击续开同一 assistant 消息，不新增用户消息） */
+  | { type: 'truncated'; text: string };
+
+export interface AssistantBlocks {
+  blocks: AsstBlock[];
+}
+
+/**
+ * 带 blocks 的 assistant 消息：核心 ChatMessage 的对话插件扩展。
+ * 不能写成 `ChatMessage & AssistantBlocks` 去做类型守卫——role 联合不含 'tool'，
+ * 与 ToolCardMessage 交叉会把 role 推断成 never。
+ */
+export type AssistantBlockMessage = ChatMessage & AssistantBlocks;
+
+/** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
+export type SessionStoreMessage = ChatMessage | ToolCardMessage | AssistantBlockMessage;
 
 export interface ChatSession {
   id: string;
@@ -158,6 +300,7 @@ export interface ChatSession {
 
 import type { CapabilityHandler, StreamCapabilityHandler } from './bus';
 import type { AnchorId, WorkspaceNode } from './workspace/schema';
+export type { AnchorId, WorkspaceNode, SplitNode, TabsNode, ViewLeaf, AnchorNode } from './workspace/schema';
 
 export type { CapabilityHandler, StreamCapabilityHandler };
 
@@ -219,6 +362,13 @@ export interface SlotHostApi {
   layout: {
     readonly isMobile: boolean;
     openDrawer(which: 'sidebar' | 'panel' | 'none'): void;
+  };
+  /** 浮层根容器（cap.ui.overlay 概念的宿主实现；构建门禁禁插件 CSS 用 position:fixed，
+   *  宿主代为提供 fixed 锚点）。插件用 react-dom 的 createPortal(content, root) 渲染
+   *  弹层/抽屉/toast——浮层锚定**视口**而非面板内容，移动端抽屉滚动时不再漂移。
+   *  返回 null 表示根容器未就绪（调用方降级为原位渲染）。 */
+  overlay: {
+    root(): HTMLElement | null;
   };
   /** 工作区布局能力（需 cap.ui.layout 授权；未授权时该字段不存在） */
   workspace?: WorkspaceApi;

@@ -32,12 +32,13 @@ async function startHost(t, { dist, dataDir }, opts = {}) {
   /** 带 cookie 记忆的简易客户端 */
   const client = () => {
     let cookie = '';
-    const send = async (path, { method = 'GET', body, raw } = {}) => {
+    const send = async (path, { method = 'GET', body, raw, headers: extraHeaders } = {}) => {
       const res = await fetch(base + path, {
         method,
         headers: {
           ...(cookie ? { cookie } : {}),
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(extraHeaders ?? {}),
         },
         body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
         redirect: 'manual',
@@ -209,8 +210,8 @@ test('登录失败限速：连续 5 次后锁定', async (t) => {
 
 // ---------------------------------------------------------------- 供应商
 
-test('供应商保存：拒绝非 https / 私有地址 / 非白名单；响应只回掩码', async (t) => {
-  const { client } = await startHost(t, tempRoot());
+test('供应商保存（strict 模式）：拒绝非 https / 私有地址 / 非白名单；响应只回掩码', async (t) => {
+  const { client } = await startHost(t, tempRoot(), { policyOptions: { strict: true } });
   const c = client();
   await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
 
@@ -251,9 +252,29 @@ test('供应商保存：拒绝非 https / 私有地址 / 非白名单；响应�
   assert.equal(keep.json.configs[0].keyMasked, 'sk-***7890');
 });
 
-test('中继：未知 provider 拒绝；指向内网地址的 provider 被 SSRF 策略拦截', async (t) => {
+test('上游默认不限制：http / 私网 / 非白名单主机均可保存（2026-11-22 用户决定）', async (t) => {
+  const { client } = await startHost(t, tempRoot());
+  const c = client();
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  const cases = [
+    { id: 'lan', baseURL: 'http://192.168.1.10:8000/v1' },          // 局域网 http
+    { id: 'metadata', baseURL: 'http://169.254.169.254/latest' },   // 私网地址
+    { id: 'domain', baseURL: 'http://random-gateway.example.com/v1' }, // 非白名单域名
+  ];
+  for (const { id, baseURL } of cases) {
+    const res = await c.send('/api/providers/save', {
+      method: 'POST',
+      body: { config: { id, name: id, baseURL, apiKey: 'sk-x-1234567890', models: [], activeModel: '', enabled: true } },
+    });
+    assert.equal(res.status, 200, `${baseURL} 默认模式应可保存`);
+    assert.equal(res.json.ok, true);
+  }
+});
+
+test('中继（strict 模式）：未知 provider 拒绝；指向内网地址的 provider 被 SSRF 策略拦截', async (t) => {
   const env = tempRoot();
-  const { client } = await startHost(t, env);
+  const { client } = await startHost(t, env, { policyOptions: { strict: true } });
   const c = client();
   await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
 
@@ -396,4 +417,214 @@ test('direct-config：PLITE_ALLOW_DIRECT_CONFIG=0 一键禁用', async (t) => {
     if (prev === undefined) delete process.env.PLITE_ALLOW_DIRECT_CONFIG;
     else process.env.PLITE_ALLOW_DIRECT_CONFIG = prev;
   }
+});
+
+// ---------------------------------------------------------------- 拉取模型列表 / 明文 Key 查看
+
+test('fetch-models：拉取上游 /models；未登录 401；非白名单 400；缺 baseURL 400', async (t) => {
+  const env = tempRoot();
+  // 环回 mock 上游：GET /v1/models 返回对象数组 + 裸字符串混合形态
+  const up = createServer((req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'mock-a' }, { id: 'mock-b' }, 'mock-c'] }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => up.listen(0, '127.0.0.1', r));
+  t.after(() => up.close());
+  const upUrl = `http://127.0.0.1:${up.address().port}/v1`;
+
+  const h = await startHost(t, env, { policyOptions: { strict: true, allowPrivate: true } });
+  const c = h.client();
+
+  const anon = await c.send('/api/providers/fetch-models', { method: 'POST', body: { baseURL: upUrl } });
+  assert.equal(anon.status, 401);
+
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  const noUrl = await c.send('/api/providers/fetch-models', { method: 'POST', body: {} });
+  assert.equal(noUrl.status, 400);
+  assert.equal(noUrl.json.error.code, 'BASE_URL_REQUIRED');
+
+  const blocked = await c.send('/api/providers/fetch-models', { method: 'POST', body: { baseURL: 'https://evil.example.com/v1' } });
+  assert.equal(blocked.status, 400);
+  assert.equal(blocked.json.error.code, 'BASE_URL_NOT_ALLOWED');
+
+  // 已保存供应商：只传 id（baseURL/key 用存储值）
+  mkdirSync(env.dataDir, { recursive: true });
+  writeFileSync(join(env.dataDir, 'providers.json'), JSON.stringify({
+    providers: [{ id: 'mock', name: 'mock', baseURL: upUrl, apiKey: 'k', models: [], activeModel: '', enabled: true }],
+  }));
+  const byId = await c.send('/api/providers/fetch-models', { method: 'POST', body: { id: 'mock' } });
+  assert.equal(byId.status, 200);
+  assert.deepEqual(byId.json.ids.sort(), ['mock-a', 'mock-b', 'mock-c']);
+  assert.equal(byId.json.count, 3);
+
+  // 新建中的供应商：直接传 baseURL（mock 不校验 key）
+  const byBody = await c.send('/api/providers/fetch-models', { method: 'POST', body: { baseURL: upUrl, apiKey: 'sk-fresh' } });
+  assert.equal(byBody.status, 200);
+  assert.equal(byBody.json.count, 3);
+});
+
+test('reveal-key：返回明文 Key + 写审计；未登录 401；无 Key 400；PLITE_ALLOW_REVEAL=0 一键禁用', async (t) => {
+  const env = tempRoot();
+  const h = await startHost(t, env);
+  const c = h.client();
+
+  const anon = await c.send('/api/providers/reveal-key', { method: 'POST', body: { id: 'p1' } });
+  assert.equal(anon.status, 401);
+
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  // 未配置 Key 的供应商 → 400
+  await c.send('/api/providers/save', {
+    method: 'POST',
+    body: { config: { id: 'nokey', name: 'nokey', baseURL: 'https://api.openai.com/v1', apiKey: '', models: [], activeModel: '', enabled: true } },
+  });
+  const noKey = await c.send('/api/providers/reveal-key', { method: 'POST', body: { id: 'nokey' } });
+  assert.equal(noKey.status, 400);
+  assert.equal(noKey.json.error.code, 'PROVIDER_NO_KEY');
+
+  await c.send('/api/providers/save', {
+    method: 'POST',
+    body: { config: { id: 'p1', name: 'openai', baseURL: 'https://api.openai.com/v1', apiKey: 'sk-reveal-test-123456', models: [], activeModel: '', enabled: true } },
+  });
+  const ok = await c.send('/api/providers/reveal-key', { method: 'POST', body: { id: 'p1' } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.key, 'sk-reveal-test-123456');
+
+  // 审计落盘：数据目录 providers-audit.jsonl 一行一条（时间 + 用户 + 供应商），不含明文 key
+  const auditFile = join(env.dataDir, 'providers-audit.jsonl');
+  assert.ok(existsSync(auditFile), '审计文件必须存在');
+  const lines = readFileSync(auditFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const entry = lines.find((l) => l.op === 'reveal-key');
+  assert.ok(entry, '必须有 reveal-key 审计条目');
+  assert.equal(entry.user, 'boss');
+  assert.equal(entry.providerId, 'p1');
+  assert.doesNotMatch(JSON.stringify(lines), /sk-reveal-test-123456/, '审计日志不得包含明文 key');
+});
+
+test('reveal-key：PLITE_ALLOW_REVEAL=0 一键禁用（403）', async (t) => {
+  const prev = process.env.PLITE_ALLOW_REVEAL;
+  process.env.PLITE_ALLOW_REVEAL = '0';
+  try {
+    const env = tempRoot();
+    const h = await startHost(t, env);
+    const c = h.client();
+    await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+    await c.send('/api/providers/save', {
+      method: 'POST',
+      body: { config: { id: 'p1', name: 'openai', baseURL: 'https://api.openai.com/v1', apiKey: 'sk-x-1234567890', models: [], activeModel: '', enabled: true } },
+    });
+    const res = await c.send('/api/providers/reveal-key', { method: 'POST', body: { id: 'p1' } });
+    assert.equal(res.status, 403);
+    assert.equal(res.json.error.code, 'REVEAL_DISABLED');
+  } finally {
+    if (prev === undefined) delete process.env.PLITE_ALLOW_REVEAL;
+    else process.env.PLITE_ALLOW_REVEAL = prev;
+  }
+});
+
+// ---- 临时凭证：自定义 TTL + 临时凭证登录 ----
+
+test('临时凭证：默认 30 分钟，可用 ttlMs 自定义有效期（含上下限校验）', async (t) => {
+  const { client } = await startHost(t, tempRoot());
+  const c = client();
+  await c.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+
+  // 默认签发：30 分钟
+  const def = await c.send('/api/auth/temp-credential', { method: 'POST' });
+  assert.equal(def.status, 200);
+  assert.equal(def.json.expiresInMs, 30 * 60 * 1000);
+  assert.ok(def.json.token.length >= 32);
+
+  // 自定义：2 小时
+  const long = await c.send('/api/auth/temp-credential', { method: 'POST', body: { ttlMs: 2 * 60 * 60 * 1000 } });
+  assert.equal(long.status, 200);
+  assert.equal(long.json.expiresInMs, 2 * 60 * 60 * 1000);
+
+  // 越界：低于 1 分钟 / 超过 24 小时 / 非法值 → 400
+  for (const ttlMs of [500, 25 * 60 * 60 * 1000, -1, 'abc']) {
+    const bad = await c.send('/api/auth/temp-credential', { method: 'POST', body: { ttlMs } });
+    assert.equal(bad.status, 400, `ttlMs=${ttlMs} 应被拒绝`);
+    assert.equal(bad.json.error.code, 'AUTH_INVALID_TTL');
+  }
+
+  // 未登录不能签发
+  const anon = await client().send('/api/auth/temp-credential', { method: 'POST' });
+  assert.equal(anon.status, 401);
+});
+
+test('临时凭证登录：tempToken 与 Authorization: Bearer 均可换取会话，权限等同密码登录', async (t) => {
+  const { client } = await startHost(t, tempRoot());
+  const admin = client();
+  await admin.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+  const issued = await admin.send('/api/auth/temp-credential', { method: 'POST', body: { ttlMs: 10 * 60 * 1000 } });
+  const token = issued.json.token;
+
+  // body.tempToken 登录
+  const c1 = client();
+  const viaBody = await c1.send('/api/auth/login', { method: 'POST', body: { tempToken: token } });
+  assert.equal(viaBody.status, 200);
+  assert.equal(viaBody.json.status, 'authenticated');
+  assert.equal(viaBody.json.user.name, 'boss');
+  assert.match(c1.cookie(), /plite\.sid=/);
+  const st1 = await c1.send('/api/auth/status');
+  assert.equal(st1.json.status, 'authenticated');
+
+  // Authorization: Bearer 头登录
+  const c2 = client();
+  const viaHeader = await c2.send('/api/auth/login', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: {} });
+  assert.equal(viaHeader.status, 200);
+  assert.equal(viaHeader.json.status, 'authenticated');
+
+  // 凭证吊销后同一 token 不能再登录
+  await admin.send('/api/auth/temp-credential/revoke', { method: 'POST', body: { token } });
+  const afterRevoke = await client().send('/api/auth/login', { method: 'POST', body: { tempToken: token } });
+  assert.equal(afterRevoke.status, 401);
+});
+
+test('临时凭证登录：无效/过期凭证 401 并计入限速', async (t) => {
+  const { client } = await startHost(t, tempRoot());
+  // 5 次无效后第 6 次触发限速（与密码登录同阈值）
+  for (let i = 0; i < 5; i++) {
+    const bad = await client().send('/api/auth/login', { method: 'POST', body: { tempToken: `deadbeef${i}deadbeef` } });
+    assert.equal(bad.status, 401);
+    assert.equal(bad.json.error.code, 'AUTH_INVALID_CREDENTIALS');
+  }
+  const locked = await client().send('/api/auth/login', { method: 'POST', body: { tempToken: 'deadbeefdeadbeef99' } });
+  assert.equal(locked.status, 429);
+});
+
+test('临时凭证：吊销后立即失效，list 只返回在效摘要', async (t) => {
+  const { client } = await startHost(t, tempRoot());
+  const admin = client();
+  await admin.send('/api/auth/login', { method: 'POST', body: { username: 'boss', password: 'secret123' } });
+  const a = await admin.send('/api/auth/temp-credential', { method: 'POST', body: { ttlMs: 60 * 60 * 1000 } });
+  const b = await admin.send('/api/auth/temp-credential', { method: 'POST', body: { ttlMs: 60 * 60 * 1000 } });
+
+  let list = await admin.send('/api/auth/temp-credential/list');
+  assert.equal(list.status, 200);
+  assert.equal(list.json.items.length, 2);
+  assert.ok(list.json.items.every((it) => it.tokenDigest.includes('…') && it.remainMs > 0));
+
+  const revoke = await admin.send('/api/auth/temp-credential/revoke', { method: 'POST', body: { token: a.json.token } });
+  assert.equal(revoke.status, 200);
+  assert.equal(revoke.json.revoked, true);
+
+  list = await admin.send('/api/auth/temp-credential/list');
+  assert.equal(list.json.items.length, 1);
+  assert.equal(list.json.items[0].tokenDigest.endsWith(b.json.token.slice(-4)), true);
+
+  // 重复吊销：revoked=false
+  const again = await admin.send('/api/auth/temp-credential/revoke', { method: 'POST', body: { token: a.json.token } });
+  assert.equal(again.json.revoked, false);
+
+  // verifyTempToken（插件 Bearer 门禁共用）对吊销 token 返回 false —— 经 /api/fs 门禁间接验证不可行时直接查会话语义：
+  const anon = client();
+  const denied = await anon.send('/api/auth/temp-credential/list');
+  assert.equal(denied.status, 401);
 });

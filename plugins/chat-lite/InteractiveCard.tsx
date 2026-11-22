@@ -27,6 +27,8 @@ export function InteractiveCard({ callId, kind, title, payload, status = 'awaiti
   // 已回执（事件回填 answered）：展示答案摘要，交互控件收起
   const answered = submitted || status === 'answered';
   const finalAnswer = answer ?? draft;
+  // 跳过作答：answer 带 __skipped 标记（agent-loop 按跳过语义喂回模型）
+  const skipped = (finalAnswer as { __skipped?: unknown } | undefined)?.__skipped === true;
 
   const submit = (override?: Record<string, unknown>) => {
     if (answered) return;
@@ -42,7 +44,7 @@ export function InteractiveCard({ callId, kind, title, payload, status = 'awaiti
     return (
       <div className="tc-ia answered" data-testid={`tc-ia-${callId}`}>
         <div className="tc-ia-title">{title}</div>
-        <div className="tc-receipt">已提交 · {JSON.stringify(finalAnswer)}</div>
+        <div className="tc-receipt">{skipped ? '已跳过' : `已提交 · ${JSON.stringify(finalAnswer)}`}</div>
       </div>
     );
   }
@@ -89,7 +91,11 @@ export function InteractiveCard({ callId, kind, title, payload, status = 'awaiti
         </div>
       )}
       {kind !== 'confirm' && (
-        <button className="tc-btn primary tc-submit" onClick={() => submit()}>提交</button>
+        // 跳过：不填任何答案直接结束本次交互（对齐无人值守超时语义，AI 收到跳过提示后自行继续）
+        <div className="tc-ia-actions">
+          <button className="tc-btn primary" onClick={() => submit()}>提交</button>
+          <button className="tc-btn" onClick={() => submit({ __skipped: true })}>跳过</button>
+        </div>
       )}
     </div>
   );

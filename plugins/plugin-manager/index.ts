@@ -58,7 +58,9 @@ export const pluginManagerPlugin: LitePlugin = {
     // cap.meta：describe 取插件权限表与 panel 槽贡献清单（面板排序的数据源）。
     capabilities: ['cap.plugin.admin', 'cap.meta'],
     provides: ['cap.plugin.admin'],
-    events: [],
+    // tool-registered：面板「刷新工具表」按钮借道既有事件通知 agent-loop 重扫
+    // （该事件名本就是「工具集合可能变了」的语义，agent-loop 消费时忽略 payload）。
+    events: ['tool-registered'],
     contributes: {
       // 面板 order 已占用 1..10，本插件取 11；tab 名 ≤4 字
       slots: [{ slot: 'panel', component: 'PluginManagerPanel', order: 11, title: '插件' }],

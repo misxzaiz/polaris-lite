@@ -343,6 +343,37 @@ install 能力 → 注册 host.slot.* → workspaceStore.restore()
 
 ---
 
+## 六·五、容器贡献（host-slimming-report §7.2/P1-2、§7.1/P2-2;2026-11-22 落地）
+
+**containers 是什么**：插件声明「我来渲染某类宿主 chrome」。与槽位（填固定位置）、
+视图（被任意摆放）并列的第三种 UI 贡献面——宿主把一段**壳层界面的渲染权**整体交给插件,
+状态权威仍在宿主（防双头）。
+
+### 支持的容器（受控枚举,构建期校验,拼错直接构建失败）
+
+| container | 组件 props 契约 | 提供方 | 禁用时宿主回退 |
+|---|---|---|---|
+| `slot-tabs` | `TabChromeProps`（`src/core/types.ts`） | shell-chrome | 内置简版 tab 条（裸按钮,无置顶/收纳/搜索/⟳） |
+| `layout-root` | `LayoutRootProps`（`renderAnchor`/`resolveView` 宿主注入） | workspace-layout | 固定四槽（WorkspaceTree 时代之前的形态） |
+
+### 两条铁纪律
+
+1. **状态权威在宿主,chrome 组件零自持持久状态**。tab 条的激活态/置顶/懒挂载/刷新序号
+   全部由宿主 SlotOutlet 持有,经 props 下发回调;布局树的树/持久化是 workspace-layout
+   自己的职责,但「锚点槽位内容」必须经 `renderAnchor` 回调渲染——插件不认识 SlotOutlet。
+2. **跨模块同步走 @sdk 登记的通道,禁止裸 window 全局**（暗通道门禁强制）:
+   `CHANNEL_LAYOUT_WIRE`（宿主→布局插件注入 viewRegistry 查表能力,main.tsx 装载后调用）、
+   `CHANNEL_DRAWER_STATE`/`CHANNEL_DRAWER_EVENT`（抽屉双向同步;监听方同步状态时不得再派发,防环）。
+
+### 已知约束（写代码前必读）
+
+- **布局插件禁用/缺席 = 回退固定四槽**——管理面板启停这两个插件有结构性后果;
+- **setup 期不要调 `cap.ui.layout`**：布局能力的处理器在 workspace-layout 的 setup 注册
+  （registry order 末位）,且 viewRegistry 查表通道在装配后 wiring 才注入——setup 期调用
+  会被拒。运行期（渲染后）调用不受影响;
+- 同类容器多插件贡献时取 order 最小者;容器产出不经 grants 校验（它不是能力）,但
+  manifest 解析 + kind 枚举在构建期强制。
+
 ## 七、当前未开放的能力（明确不做）
 
 | 能力 | 状态 | 原因 |

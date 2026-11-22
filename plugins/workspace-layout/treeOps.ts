@@ -19,10 +19,10 @@ import type {
   TabsNode,
   ViewLeaf,
   WorkspaceNode,
-} from './schema.ts';
+} from '../sdk/schema.ts';
 // 带 .ts 扩展名：这些模块会被 `node --experimental-strip-types --test` 直接加载，
 // Node 的 ESM 解析不做扩展名补全（tsconfig 已开 allowImportingTsExtensions）。
-import { WORKSPACE_LIMITS, findNode } from './schema.ts';
+import { WORKSPACE_LIMITS, findNode } from '../sdk/schema.ts';
 
 // ============================================================================
 // 默认树：与改造前的四槽布局逐节点等价

@@ -1,6 +1,6 @@
 /**
  * 对话内预览卡片（html-preview 渲染器；chat-lite artifact 块经
- * __PLITE_ARTIFACT_RENDERERS__ 查表渲染本组件）。
+ * CHANNEL_ARTIFACT_RENDERERS(@sdk) 查表渲染本组件）。
  *
  * 卡片结构：标题栏（AI 生成徽标 + 标题 + 版本 + 操作钮[全屏/展开]）+ 沙箱 iframe。
  * iframe 源是 /api/preview/:id/raw（服务端 CSP sandbox 头 + 本组件 sandbox 属性双保险）。
