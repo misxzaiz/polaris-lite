@@ -439,9 +439,14 @@ function pageScript() {
   function headHtml(d) {
     var live = META.live ? ' · <span class="live-dot"></span><b id="live-badge">实时中</b>' : '';
     var apiCount = d.apiCalls ? d.apiCalls.length : 0;
+    // 子路径必须基于 location.pathname 拼绝对路径：页面 URL 是 /share/<token>（无尾斜杠），
+    // 相对 ./json 会被浏览器解析到 /share/json → 404（实测踩坑）。
+    // 不用 replace(/\/+$/,) 正则——模板字符串会吃掉 \/ 转义产出 // 注释掉整行
+    var base = location.pathname;
+    if (base.charAt(base.length - 1) === '/') base = base.slice(0, -1);
     return '<header><h1>' + esc(d.title) + '</h1><div class="meta">' + d.messages.length +
       ' 条消息 · ' + apiCount + ' 次模型 API 调用 · 转录于 ' + fmtTime(d.capturedAt) + live +
-      '</div><div class="toolbar"><a href="./markdown">个人版 MD</a><a href="./ai">AI 分析版</a><a href="./json">JSON</a><button id="refresh-btn">刷新</button></div></header>';
+      '</div><div class="toolbar"><a href="' + base + '/markdown">个人版 MD</a><a href="' + base + '/ai">AI 分析版</a><a href="' + base + '/json">JSON</a><button id="refresh-btn">刷新</button></div></header>';
   }
   function rerender(d) {
     root.innerHTML = headHtml(d) + renderApiCalls(d.apiCalls) + d.messages.map(renderMsg).join('') +

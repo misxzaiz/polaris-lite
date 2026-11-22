@@ -180,6 +180,10 @@ test('三出口：HTML 自包含 / JSON 结构化 / Markdown', async (t) => {
   assert.match(html.text, /ls -la/); // 工具命令进页面
   assert.match(html.text, /file1\.txt/); // stdout 进页面
   assert.match(html.text, /__SHARE__/); // 内联数据
+  // 工具栏子路径必须是 location.pathname 拼接的绝对形式：
+  // 相对 ./json 从 /share/<token> 解析会落到 /share/json → 404（实测踩坑）
+  assert.match(html.text, /base \+ '\/json/);
+  assert.doesNotMatch(html.text, /href="\.\/json"/);
 
   const json = await c.send(`${url}/json`);
   assert.equal(json.status, 200);
