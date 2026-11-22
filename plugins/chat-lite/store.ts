@@ -93,10 +93,13 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
   lastActiveAt?: number;
 };
 
-/** 会话列表排序口径（唯一权威）：按最后活跃时间倒序（最新在前），缺省用 createdAt。
+/** 会话列表排序口径（唯一权威）：按创建时间倒序（最新创建在前）。
+ *  v2（2026-11-22）：从 lastActiveAt 改为 createdAt——按活跃排序会让「回复一句旧会话」
+ *  导致会话瞬移到顶部，左右滑切/Alt+N 依赖下标稳定，位置漂移即切错目标。
+ *  lastActiveAt 仍随会话 JSON 同步（供展示用），但不再参与排序。
  *  sessions 数组的下标语义（相邻切换/滑切/侧栏展示）全部依赖本函数，勿在别处自行排序。 */
-export function sortSessions<T extends { createdAt: number; lastActiveAt?: number }>(sessions: T[]): T[] {
-  return [...sessions].sort((a, b) => (b.lastActiveAt ?? b.createdAt) - (a.lastActiveAt ?? a.createdAt));
+export function sortSessions<T extends { createdAt: number }>(sessions: T[]): T[] {
+  return [...sessions].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 /** 触摸会话：刷新 lastActiveAt 并标记脏（所有会话内容变更的唯一入口） */
@@ -179,9 +182,12 @@ function syncState() {
   return { sessions: st.sessions, versions, dirty, activeId: st.activeId };
 }
 
-/** 服务端快照合并进 store（服务端为权威；本地 streaming 消息复位；按 lastActiveAt 归位排序）。
- *  注意：**不 touch**——lastActiveAt 保留服务端权威值。拉取是按索引逐条进行的，
- *  若在此 touch，越晚拉到的旧会话 lastActiveAt 越大，列表会整体颠倒（最新沉底）。 */
+/** 服务端快照合并进 store（服务端为权威；本地 streaming 消息复位；按 createdAt 归位排序）。
+ *  注意：**不 touch**——lastActiveAt 保留服务端权威值。
+ *  activeId 冷启动兜底（2026-11-22）：无缓存首开场景（IndexedDB 空、active-hint 缺失）
+ *  store 初始 activeId=null，此处若只填 sessions 不补选，滑切/Alt+N 的 idx=-1 静默失效，
+ *  且消息区永远停在欢迎空态。首份快照到达即自动选中最新（排序后第一个），
+ *  与缓存路径 restoredActive=sessions[0]?.id 的回退口径一致。 */
 function applyServerSnapshot(snap: SessionSnapshot): void {
   const incoming = snap.session;
   if (!incoming || typeof incoming.id !== 'string') return;
@@ -190,11 +196,15 @@ function applyServerSnapshot(snap: SessionSnapshot): void {
     messages: (incoming.messages ?? []).map((m) => ({ ...m, streaming: false })),
   };
   versions[incoming.id] = snap.version;
-  useSessionStore.setState(st => ({
-    sessions: sortSessions(st.sessions.some(s => s.id === incoming.id)
+  useSessionStore.setState(st => {
+    const sessions = sortSessions(st.sessions.some(s => s.id === incoming.id)
       ? st.sessions.map(s => (s.id === incoming.id ? clean : s))
-      : [clean, ...st.sessions]),
-  }));
+      : [clean, ...st.sessions]);
+    const activeId = st.activeId && sessions.some(s => s.id === st.activeId)
+      ? st.activeId
+      : sessions[0]?.id ?? null;
+    return { sessions, activeId };
+  });
 }
 
 function applyTombstone(id: string): void {

@@ -5,7 +5,7 @@
  *  v4（2026-11-22 移动端优化）：搜索框 + 时间分组（今天/7天内/更早，80+ 会话平铺找不到）；
  *  窄屏行内小图标收进「⋮」动作菜单（触控目标从 22-30px 提到 44px 级）；
  *  触屏长按会话行唤出同一菜单（iOS/安卓原生习惯）。 */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
 import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
@@ -131,10 +131,10 @@ export function SessionSidebar() {
     return sessions.filter((s) => `${s.title} ${s.messages[0]?.content ?? ''}`.toLowerCase().includes(q));
   }, [sessions, q]);
 
-  // ---- 时间分组（无搜索词时）：今天 / 7 天内 / 更早 ----
+  // ---- 时间分组（无搜索词时）：今天 / 7 天内 / 更早（按创建时间，与排序口径一致） ----
   const grouped = useMemo(() => {
     const map: Record<TimeBucket, typeof sessions> = { today: [], week: [], older: [] };
-    for (const s of filtered) map[bucketOf(s.lastActiveAt ?? s.createdAt)].push(s);
+    for (const s of filtered) map[bucketOf(s.createdAt)].push(s);
     return map;
   }, [filtered]);
 
@@ -142,6 +142,39 @@ export function SessionSidebar() {
     if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; }
   };
 
+  // ---- 无限滚动（2026-11-22）：长列表不全量渲染，触底自动追加一批 ----
+  // 行级全局切片：把「已显示总数」额度按桶顺序分摊（前面的桶用满才轮到后面）。
+  // 搜索词 / 会话数量变化时重置；纯前端切片，不动同步层。
+  const PAGE = 20;
+  const [visibleCount, setVisibleCount] = useState(PAGE);
+  useEffect(() => { setVisibleCount(PAGE); }, [q, sessions.length]);
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) setVisibleCount((v) => v + PAGE);
+    }, { root: el.closest('.chat-sessions'), rootMargin: '160px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  /** 对各桶做行级切片：全局可见额度按顺序分配 */
+  const capBuckets = (lists: (typeof sessions)[]): (typeof sessions)[] => {
+    let budget = visibleCount;
+    return lists.map((list) => {
+      const take = list.slice(0, budget);
+      budget -= take.length;
+      return take;
+    });
+  };
+  const cappedGrouped = useMemo(
+    () => capBuckets(BUCKET_ORDER.map((b) => grouped[b])),
+    [grouped, visibleCount],
+  );
+  const totalVisible = cappedGrouped.reduce((n, l) => n + l.length, 0);
+  const hasMore = totalVisible < filtered.length;
   /** 触屏长按会话行 → 动作菜单（与 ⋮ 同一菜单；P1-8 的重命名入口即菜单第一项） */
   const onRowPointerDown = (id: string, e: React.PointerEvent) => {
     if (e.pointerType !== 'touch') return;
@@ -315,16 +348,19 @@ export function SessionSidebar() {
       )}
 
       {q ? (
-        <div className="chat-session-list">{filtered.map(renderRow)}</div>
+        <div className="chat-session-list">{filtered.slice(0, visibleCount).map(renderRow)}</div>
       ) : (
-        BUCKET_ORDER.map((b) =>
-          grouped[b].length > 0 ? (
-            <div className="chat-session-group-wrap" key={b}>
-              <div className="chat-session-group">{BUCKET_LABEL[b]}</div>
-              <div className="chat-session-list">{grouped[b].map(renderRow)}</div>
+        cappedGrouped.map((rows, i) =>
+          rows.length > 0 ? (
+            <div className="chat-session-group-wrap" key={BUCKET_ORDER[i]}>
+              <div className="chat-session-group">{BUCKET_LABEL[BUCKET_ORDER[i]]}</div>
+              <div className="chat-session-list">{rows.map(renderRow)}</div>
             </div>
           ) : null,
         )
+      )}
+      {hasMore && (
+        <div className="chat-session-sentinel" ref={sentinelRef} aria-hidden="true" />
       )}
 
       {/* 窄屏会话动作菜单（⋮ / 长按唤出）：底部 sheet，触控目标 44px 级。
