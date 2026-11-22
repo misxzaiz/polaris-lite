@@ -25,9 +25,31 @@ npm run deploy:9826                    # 发布仓库 master 最新 commit（ori
 npm run deploy:9826 -- <sha|tag|分支>   # 发布指定版本（钉旧版对比分析用）
 npm run deploy:9826 -- --rebuild       # 不拉代码，只重建 clone 当前状态（实验模式）
 npm run status:9826                    # 查看分析实例落后仓库 master 多少
+npm run soft:9826                      # 「软发布」：deploy 全流程丢进后台分离进程，人正挂在 9826 对话里也能安全触发
+npm run soft:9826 -- log               # 看最近一次软发布的后台日志尾部
 ```
 
 注意 npm 语法：传**带 `-` 的参数必须写 `--`**（`-- --rebuild`），否则 npm 把 flag 自己吞掉、静默走默认 deploy；非 flag 的 rev 直接跟在后面也行（如 `npm run deploy:9826 dd9621e`）。
+
+## 软发布（soft:9826）：对话中安全重启
+
+场景：你正挂在 9826 的 Web 对话里（比如正和 AI 聊着），此时想按最新代码重启 9826。
+直接 `deploy:9826` 的问题：构建完成后 pm2 restart 会杀掉当前进程，正在流式输出的那轮回复被拦腰截断。
+
+`npm run soft:9826`（`scripts/soft-deploy-9826.mjs`）把 deploy 全流程丢进
+**detached + unref 的后台分离进程**执行：
+
+- bash 调用立即返回，当前这轮 AI 回复正常说完；
+- 构建（通常几十秒）期间对话继续，落库不受影响；
+- restart 发生在流程最后，旧进程被杀时当前对话早已结束；pm2 `restart_delay: 3s` 拉起新实例；
+- 浏览器走 stream-retry 自动重连，下一条消息即跑在新代码上，历史完整。
+
+细节：
+
+- 后台日志追加在 `logs/soft-deploy-9826.log`（仓库本体），`npm run soft:9826 -- log` 看尾部 40 行；
+- 防重入：pid 文件（`logs/soft-deploy-9826.pid`）检测上一个后台发布是否还活着，活着就拒绝触发；
+- 同 deploy 一样只发 **已 commit** 的内容（origin/master），先 commit 再 soft；
+- 也可钉指定版本：`npm run soft:9826 -- <sha>`。
 
 发布流程：fetch → `git reset --hard` 目标 commit →（`package-lock.json` 变了才 `npm ci`）→
 `build:plugins` + `npm run build` → `pm2 restart` + `pm2 save` → 在 `polaris-lite-9826/logs/deploy-9826.log` 记一行版本戳。
@@ -55,5 +77,6 @@ npm run status:9826                    # 查看分析实例落后仓库 master �
 ## 文件清单
 
 - `scripts/deploy-9826.mjs` —— 发布脚本（npm script：`deploy:9826` / `status:9826`）
+- `scripts/soft-deploy-9826.mjs` —— 软发布脚本（npm script：`soft:9826`；detached 后台跑 deploy，对话中安全触发）
 - `ecosystem.config.cjs` —— 9826 的 pm2 配置（cwd=clone、数据目录绝对化）
 - `D:\space\base\polaris-lite-9826` —— 9826 专属 clone（origin=本仓库，钉在发布过的 commit）
