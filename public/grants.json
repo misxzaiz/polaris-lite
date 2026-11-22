@@ -183,6 +183,19 @@
         "ledger-changed"
       ]
     },
+    "goal-keeper": {
+      "capabilities": [
+        "cap.kv",
+        "cap.model.admin",
+        "cap.interactive",
+        "cap.agent.loop"
+      ],
+      "provides": [],
+      "events": [
+        "cap.agent.loop:event",
+        "interactive.answered"
+      ]
+    },
     "browser-lite": {
       "capabilities": [],
       "provides": [

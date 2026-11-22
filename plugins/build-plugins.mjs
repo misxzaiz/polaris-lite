@@ -80,6 +80,8 @@ const plugins = [
   { id: 'interactive-cards', config: 'interactive-cards/vite.config.ts', dist: 'interactive-cards/dist', order: 14 },
   { id: 'html-preview', config: 'html-preview/vite.config.ts', dist: 'html-preview/dist', order: 15 },
   { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 16 },
+  // 目标守护：目标跟踪 + 完成检查（仅分析）+ 交互卡提示（纯消费者，provides 为空）
+  { id: 'goal-keeper', config: 'goal-keeper/vite.config.ts', dist: 'goal-keeper/dist', order: 17 },
   { id: 'kv-store', config: 'kv-store/vite.config.ts', dist: 'kv-store/dist', order: 17 },
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 17 },
   { id: 'chat-store', config: 'chat-store/vite.config.ts', dist: 'chat-store/dist', order: 19 },
