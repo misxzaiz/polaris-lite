@@ -43,8 +43,14 @@ export async function git<T>(action: string, rootId: string | null, params: Reco
     const err = res.error as { message?: string } | undefined;
     throw new Error(err?.message ?? `cap.git ${action} 调用失败`);
   }
-  const data = res.data as { result?: T } | undefined;
-  return (data?.result ?? (res.data as unknown)) as T;
+  // cap.git 提供方把 /api/git/dispatch 的完整响应（{ok, result, stderr...}）作为 data 透传：
+  // 总线层 res.ok 只代表「转发成功」，业务成败要看 data.ok——否则 git 失败（result=null）
+  // 会被当成空数组成功返回，下游 .map/.filter 直接崩掉整棵渲染树（实测踩坑）。
+  const data = (res.data ?? {}) as { ok?: boolean; error?: string; result?: T };
+  if (data.ok === false) {
+    throw new Error(data.error || `git ${action} 执行失败`);
+  }
+  return (data.result ?? (res.data as unknown)) as T;
 }
 
 /** 订阅 git-operation 事件（git-core 写动作后广播；一期由面板本地刷新兜底） */

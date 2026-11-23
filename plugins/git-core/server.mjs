@@ -129,7 +129,7 @@ function buildArgs(action, p) {
       args.push('--date=relative', '--pretty=format:%h%x1f%an%x1f%at%x1f%s');
       return args;
     }
-    case 'get_branches': return ['branch', '--format=%(refname:short)%x1f%(HEAD)'];
+    case 'get_branches': return ['branch', '--format=%(refname:short)%01%(HEAD)'];
     case 'batch_stage': {
       const files = Array.isArray(p.filePaths) ? p.filePaths.map(String) : [];
       if (!files.length) return null;
@@ -259,7 +259,7 @@ export function createServerPart(options = {}) {
       }
       if (action === 'get_branches' && result.ok) {
         parsed = result.stdout.split('\n').filter(Boolean).map((l) => {
-          const [name, head] = l.split('\x1f');
+          const [name, head] = l.split('\x01'); // %01 八进制转义（%x1f 在 branch --format 里不展开，会原样输出字面量）
           return { name, current: head === '*' };
         });
       }

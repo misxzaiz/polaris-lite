@@ -54,9 +54,10 @@ export function GitPanel() {
   const loadRoots = useCallback(async () => {
     if (!hostApi) return;
     const res = await hostApi.dispatch<{ roots?: Roots }>({ target: 'cap.tool.fs', action: 'roots' });
-    if (res.ok && res.data?.roots) {
-      setRoots(res.data.roots);
-      setRootId((cur) => cur ?? res.data!.roots![0]?.id ?? null);
+    if (res.ok && Array.isArray(res.data?.roots) && res.data!.roots!.length > 0) {
+      setRoots(res.data!.roots!);
+      // 不自动猜根：只恢复记忆值；没有记忆就保持未选，由用户在下拉里明确选择
+      // （自动选第一个曾把非 git 目录当工作区，get_log 422 直接把面板打崩）
     }
   }, []);
 
@@ -87,8 +88,14 @@ export function GitPanel() {
         git<GitLogEntry[]>('get_log', rid, { limit: 50 }),
         git<GitBranch[]>('get_branches', rid),
       ]);
-      setStatus(st); setLog(lg); setBranches(br);
+      // 非数组兜底：任一维度异常都不应让面板（乃至全应用）白屏
+      setStatus(st && typeof st === 'object' ? st : null);
+      setLog(Array.isArray(lg) ? lg : []);
+      setBranches(Array.isArray(br) ? br : []);
     } catch (e) {
+      setStatus(null);
+      setLog([]);
+      setBranches([]);
       say(`[x] ${(e as Error).message}`);
     }
   }, [busy, say]);
@@ -123,7 +130,7 @@ export function GitPanel() {
     }
   }, [busy, refreshStatus, say]);
 
-  const all = useMemo(() => status?.files ?? [], [status]);
+  const all = useMemo(() => (Array.isArray(status?.files) ? status!.files : []), [status]);
   const selFiles = useMemo(() => all.filter((f) => selected.has(f.path)), [all, selected]);
   const selAllStaged = selFiles.length > 0 && selFiles.every((f) => f.staged || f.untracked);
 
@@ -150,7 +157,8 @@ export function GitPanel() {
           <div className="gp-head-main">
             <div className="gp-title">变更</div>
             <div className="gp-sub">
-              <select className="gp-root-sel" value={rootId ?? ''} onChange={(e) => switchRoot(e.target.value)} aria-label="工作区">
+              <select className="gp-root-sel" value={rootId ?? ''} onChange={(e) => { if (e.target.value) switchRoot(e.target.value); }} aria-label="工作区">
+                {!rootId && <option value="" disabled>选择工作区…</option>}
                 {roots.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
               {status && <> · [b] {status.branch} · <span className="gp-ab">[up]{status.ahead} [dn]{status.behind}</span></>}
@@ -164,7 +172,8 @@ export function GitPanel() {
             <div className="gp-sum u"><b>{groups.unstaged.length}</b><span>未暂存</span></div>
             <div className="gp-sum"><b>{groups.untracked.length}</b><span>未跟踪</span></div>
           </div>
-          {status == null && <div className="gp-empty">{busy ? '读取中...' : '选择工作区以查看变更'}</div>}
+          {!rootId && <div className="gp-empty">请先在上方选择一个 Git 工作区（仅列出已登记目录，可在「设置 → 工作区」增删）</div>}
+          {rootId != null && status == null && <div className="gp-empty">{busy ? '读取中...' : '选择工作区以查看变更'}</div>}
           {(['staged', 'unstaged', 'untracked'] as const).map((k) => groups[k].length > 0 && (
             <div key={k}>
               <div className="gp-grp">
@@ -209,7 +218,8 @@ export function GitPanel() {
               </span>
             </div>
           ))}
-          {filteredLog.length === 0 && <div className="gp-empty">没有匹配的提交</div>}
+          {rootId == null && <div className="gp-empty">选择工作区后查看提交历史</div>}
+          {rootId != null && filteredLog.length === 0 && <div className="gp-empty">没有匹配的提交</div>}
         </div>
       </section>
 
@@ -228,7 +238,8 @@ export function GitPanel() {
               {b.current ? <span className="gp-cur">当前</span> : <span className="gp-go">切换 &gt;</span>}
             </div>
           ))}
-          {branches.length === 0 && <div className="gp-empty">读取分支失败或空仓库</div>}
+          {rootId == null && <div className="gp-empty">选择工作区后查看本地分支</div>}
+          {rootId != null && branches.length === 0 && <div className="gp-empty">读取分支失败或空仓库</div>}
         </div>
       </section>
 
