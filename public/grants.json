@@ -1,5 +1,5 @@
 {
-  "version": "18",
+  "version": "19",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -116,8 +116,7 @@
         "cap.tool.mcp",
         "cap.tool.mcp-ops",
         "cap.market.tool",
-        "cap.tool.transcript",
-        "cap.tool.goal"
+        "cap.tool.transcript"
       ],
       "provides": [
         "cap.agent.loop"
@@ -182,24 +181,6 @@
       "events": [
         "tool-registered",
         "ledger-changed"
-      ]
-    },
-    "goal-keeper": {
-      "capabilities": [
-        "cap.kv",
-        "cap.model.admin",
-        "cap.interactive",
-        "cap.agent.loop"
-      ],
-      "provides": [
-        "cap.tool.goal",
-        "cap.tool.goal-check"
-      ],
-      "events": [
-        "cap.agent.loop:event",
-        "interactive.answered",
-        "user.prompt",
-        "tool-registered"
       ]
     },
     "browser-lite": {
