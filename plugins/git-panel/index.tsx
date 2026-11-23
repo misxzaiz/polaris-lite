@@ -16,6 +16,8 @@ import './panel.css';
 const NS = 'git-panel';
 const STATUS_TTL_MS = 2000;
 const LIST_HARD_CAP = 120; // 超过则截断渲染（虚拟滚动的降级，避免长列表卡顿）
+const TOAST_OK_MS = 1800;  // 成功提示短驻留
+const TOAST_ERR_MS = 5000; // 错误要留够阅读时间（UX 审查 P2-5）
 
 type TabKey = 'changes' | 'history' | 'branches';
 type Roots = { id: string; label: string; path: string; builtin?: boolean; missing?: boolean }[];
@@ -30,6 +32,15 @@ function fileKind(f: GitStatusFile): 'staged' | 'unstaged' | 'untracked' {
   return f.staged ? 'staged' : 'unstaged';
 }
 
+/** 把内部错误翻译成用户可理解的话（UX 审查 P1-2：别暴露 get_status 这类 action 名） */
+function humanizeError(e: unknown): string {
+  const raw = String((e as Error)?.message ?? e);
+  if (/not a git repository|不是 git 仓库/i.test(raw)) return '该目录不是 Git 仓库，请换一个工作区';
+  if (/GIT_ROOT_MISSING|工作区根不存在/.test(raw)) return '该目录不存在或不可访问';
+  if (/参数缺失|BAD_PARAMS/.test(raw)) return '操作参数不完整';
+  return raw;
+}
+
 export function GitPanel() {
   const [roots, setRoots] = useState<Roots>([]);
   const [rootId, setRootId] = useState<string | null>(null);
@@ -39,15 +50,17 @@ export function GitPanel() {
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<string>('');
+  const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [search, setSearch] = useState('');
+  const [commitDraft, setCommitDraft] = useState(''); // 内联提交输入（替代原生 prompt）
+  const [loadError, setLoadError] = useState<string | null>(null); // 当前工作区级错误（非 git 目录等）
   const statusAt = useRef(0);
   const rootIdRef = useRef<string | null>(null);
   rootIdRef.current = rootId;
 
-  const say = useCallback((m: string) => {
-    setToast(m);
-    window.setTimeout(() => setToast(''), 1800);
+  const say = useCallback((text: string, kind: 'ok' | 'err' = 'ok') => {
+    setToast({ text, kind });
+    window.setTimeout(() => setToast(null), kind === 'err' ? TOAST_ERR_MS : TOAST_OK_MS);
   }, []);
 
   /** 工作区根列表（复用 file-browser 的 cap.tool.fs，不自造根体系） */
@@ -72,14 +85,18 @@ export function GitPanel() {
   const switchRoot = useCallback((id: string) => {
     setRootId(id);
     setSelected(new Set());
+    setLoadError(null);
+    setSearch('');
     statusAt.current = 0;
     if (hostApi) void hostApi.dispatch({ target: 'cap.kv', action: 'set', payload: { namespace: NS, key: 'activeRoot', value: { activeRootId: id } } });
   }, []);
 
-  /** status 读取（TTL 缓存；force=写动作后精准刷新） */
+  /** status 读取（TTL 缓存；force=写动作后精准刷新）。
+   *  busy 只挡写动作后的并发刷新，不挡换根读取——否则换根时上一读未完成会静默跳过，
+   *  新根什么都没加载（实测 world3d 切换后无错误态无数据）。 */
   const refreshStatus = useCallback(async (force = false) => {
     const rid = rootIdRef.current;
-    if (!rid || busy) return;
+    if (!rid) return;
     if (!force && Date.now() - statusAt.current < STATUS_TTL_MS) return;
     statusAt.current = Date.now();
     try {
@@ -92,13 +109,14 @@ export function GitPanel() {
       setStatus(st && typeof st === 'object' ? st : null);
       setLog(Array.isArray(lg) ? lg : []);
       setBranches(Array.isArray(br) ? br : []);
+      setLoadError(null);
     } catch (e) {
       setStatus(null);
       setLog([]);
       setBranches([]);
-      say(`[x] ${(e as Error).message}`);
+      setLoadError(humanizeError(e));
     }
-  }, [busy, say]);
+  }, []);
 
   useEffect(() => {
     if (rootId) void refreshStatus(true);
@@ -121,10 +139,11 @@ export function GitPanel() {
       await git(action, rootIdRef.current, params);
       say(okMsg);
       setSelected(new Set());
+      setCommitDraft('');
       statusAt.current = 0;
       await refreshStatus(true);
     } catch (e) {
-      say(`[x] ${(e as Error).message}`);
+      say(`[x] ${humanizeError(e)}`, 'err');
     } finally {
       setBusy(false);
     }
@@ -149,6 +168,24 @@ export function GitPanel() {
 
   const curRoot = roots.find((r) => r.id === rootId);
 
+  /** 提交所选：内联输入（原生 prompt 在手机 WebView 里体验差，且取消会被误报为错误） */
+  const submitSelected = useCallback(() => {
+    if (busy || selFiles.length === 0) return;
+    if (!selAllStaged) {
+      void runWrite('batch_stage', { filePaths: selFiles.map((f) => f.path) }, '已暂存所选文件');
+      return;
+    }
+    const message = commitDraft.trim();
+    if (!message) return; // 输入为空不动作、不报错（按钮态已引导）
+    void runWrite('commit_changes', { message, stageAll: false }, '已提交');
+  }, [busy, selFiles, selAllStaged, commitDraft, runWrite]);
+
+  /** 「全部暂存」批量写：先确认再执行（UX 审查 P1-5：热区小 + 无确认易误触） */
+  const [confirmStage, setConfirmStage] = useState<{ kind: string; paths: string[] } | null>(null);
+  const askStageAll = useCallback((kind: string, paths: string[]) => {
+    setConfirmStage({ kind, paths });
+  }, []);
+
   return (
     <div className={`gp-root${hostApi?.layout.isMobile ? ' gp-mobile' : ''}`} data-testid="git-panel">
       {/* ── 视图：变更（自带顶栏，互斥覆盖） ── */}
@@ -157,34 +194,45 @@ export function GitPanel() {
           <div className="gp-head-main">
             <div className="gp-title">变更</div>
             <div className="gp-sub">
-              <select className="gp-root-sel" value={rootId ?? ''} onChange={(e) => { if (e.target.value) switchRoot(e.target.value); }} aria-label="工作区">
+              <select className="gp-root-sel" value={rootId ?? ''} onChange={(e) => { if (e.target.value) switchRoot(e.target.value); }} aria-label="选择 Git 工作区">
                 {!rootId && <option value="" disabled>选择工作区…</option>}
                 {roots.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
-              {status && <> · [b] {status.branch} · <span className="gp-ab">[up]{status.ahead} [dn]{status.behind}</span></>}
+              {status && <> · 分支 {status.branch} · <span className="gp-ab">领先 {status.ahead} / 落后 {status.behind}</span></>}
             </div>
           </div>
-          <button className="gp-icon" onClick={() => void refreshStatus(true)} disabled={busy} aria-label="刷新">[r]</button>
+          <button className="gp-icon" onClick={() => void refreshStatus(true)} disabled={busy} aria-label="刷新状态">R</button>
         </header>
         <div className="gp-body">
-          <div className="gp-summary">
-            <div className="gp-sum s"><b>{groups.staged.length}</b><span>已暂存</span></div>
-            <div className="gp-sum u"><b>{groups.unstaged.length}</b><span>未暂存</span></div>
-            <div className="gp-sum"><b>{groups.untracked.length}</b><span>未跟踪</span></div>
-          </div>
+          {rootId != null && (
+            <div className="gp-summary">
+              <div className="gp-sum s"><b>{groups.staged.length}</b><span>已暂存</span></div>
+              <div className="gp-sum u"><b>{groups.unstaged.length}</b><span>未暂存</span></div>
+              <div className="gp-sum"><b>{groups.untracked.length}</b><span>未跟踪</span></div>
+            </div>
+          )}
           {!rootId && <div className="gp-empty">请先在上方选择一个 Git 工作区（仅列出已登记目录，可在「设置 → 工作区」增删）</div>}
-          {rootId != null && status == null && <div className="gp-empty">{busy ? '读取中...' : '选择工作区以查看变更'}</div>}
+          {rootId != null && loadError && <div className="gp-err">{loadError}</div>}
+          {rootId != null && !loadError && status == null && <div className="gp-empty">{busy ? '读取中…' : '选择工作区以查看变更'}</div>}
           {(['staged', 'unstaged', 'untracked'] as const).map((k) => groups[k].length > 0 && (
             <div key={k}>
               <div className="gp-grp">
                 {k === 'staged' ? '已暂存' : k === 'unstaged' ? '未暂存' : '未跟踪'}
                 {k !== 'staged' && groups[k].length > 0 && (
-                  <span className="gp-lnk" onClick={() => void runWrite('batch_stage', { filePaths: groups[k].map((f) => f.path) }, '[ok] 已暂存')}>全部暂存 [dn]</span>
+                  <button className="gp-lnk" onClick={() => askStageAll(k, groups[k].map((f) => f.path))}>全部暂存（{groups[k].length}）</button>
                 )}
               </div>
               {cap(groups[k]).map((f) => (
-                <div key={f.path} className={`gp-file${selected.has(f.path) ? ' sel' : ''}`} onClick={() => toggleSel(f.path)}>
-                  <span className="gp-box">{selected.has(f.path) ? '[ok]' : ''}</span>
+                <div
+                  key={f.path}
+                  className={`gp-file${selected.has(f.path) ? ' sel' : ''}`}
+                  onClick={() => toggleSel(f.path)}
+                  role="checkbox"
+                  aria-checked={selected.has(f.path)}
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggleSel(f.path); } }}
+                >
+                  <span className="gp-box" aria-hidden="true">{selected.has(f.path) ? 'OK' : ''}</span>
                   <span className="gp-fi">
                     <span className="gp-fn">{f.path}</span>
                   </span>
@@ -195,7 +243,7 @@ export function GitPanel() {
               ))}
             </div>
           ))}
-          {status != null && all.length === 0 && <div className="gp-empty">工作区干净，没有待处理的变更</div>}
+          {rootId != null && !loadError && status != null && all.length === 0 && <div className="gp-empty">工作区干净，没有待处理的变更</div>}
         </div>
       </section>
 
@@ -207,7 +255,14 @@ export function GitPanel() {
             <div className="gp-sub">{curRoot?.label ?? '—'} · 提交记录</div>
           </div>
         </header>
-        <div className="gp-search"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索提交信息 / sha / 作者" /></div>
+        <div className="gp-search">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索提交信息 / sha / 作者"
+            aria-label="搜索提交历史"
+          />
+        </div>
         <div className="gp-body">
           {filteredLog.map((c) => (
             <div key={c.sha} className="gp-commit">
@@ -219,7 +274,8 @@ export function GitPanel() {
             </div>
           ))}
           {rootId == null && <div className="gp-empty">选择工作区后查看提交历史</div>}
-          {rootId != null && filteredLog.length === 0 && <div className="gp-empty">没有匹配的提交</div>}
+          {rootId != null && loadError && <div className="gp-err">{loadError}</div>}
+          {rootId != null && !loadError && filteredLog.length === 0 && <div className="gp-empty">{search.trim() ? '没有匹配的提交' : '暂无提交记录'}</div>}
         </div>
       </section>
 
@@ -233,41 +289,84 @@ export function GitPanel() {
         </header>
         <div className="gp-body">
           {branches.map((b) => (
-            <div key={b.name} className="gp-row" onClick={() => { if (!b.current) void runWrite('checkout_branch', { name: b.name }, `[b] 已切换到 ${b.name}`); }}>
+            <div
+              key={b.name}
+              className="gp-row"
+              onClick={() => { if (!b.current) void runWrite('checkout_branch', { name: b.name }, `已切换到 ${b.name}`); }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !b.current) void runWrite('checkout_branch', { name: b.name }, `已切换到 ${b.name}`); }}
+            >
               <span className="gp-bn">{b.name}</span>
               {b.current ? <span className="gp-cur">当前</span> : <span className="gp-go">切换 &gt;</span>}
             </div>
           ))}
           {rootId == null && <div className="gp-empty">选择工作区后查看本地分支</div>}
-          {rootId != null && branches.length === 0 && <div className="gp-empty">读取分支失败或空仓库</div>}
+          {rootId != null && loadError && <div className="gp-err">{loadError}</div>}
+          {rootId != null && !loadError && branches.length === 0 && <div className="gp-empty">读取分支失败或空仓库</div>}
         </div>
       </section>
 
       {/* ── 底部 tab（移动端主导航；桌面端同样适用，简化层级） ── */}
       <nav className="gp-tabbar">
-        {([['changes', '[c]', '变更'], ['history', '[h]', '历史'], ['branches', '[b]', '分支']] as const).map(([k, ic, label]) => (
-          <button key={k} className={`gp-tab${tab === k ? ' on' : ''}`} onClick={() => setTab(k)}>
-            <span className="gp-ic">{ic}</span>{label}
+        {([['changes', '变', '变更'], ['history', '史', '历史'], ['branches', '支', '分支']] as const).map(([k, ic, label]) => (
+          <button
+            key={k}
+            className={`gp-tab${tab === k ? ' on' : ''}`}
+            onClick={() => setTab(k)}
+            aria-current={tab === k ? 'page' : undefined}
+          >
+            <span className="gp-ic" aria-hidden="true">{ic}</span>{label}
             {k === 'changes' && all.length > 0 && <span className="gp-dot">{all.length}</span>}
           </button>
         ))}
       </nav>
 
-      {/* ── 底部操作条（选中文件后弹出） ── */}
-      {selFiles.length > 0 && (
+      {/* ── 底部操作条（仅变更视图渲染；切视图不残留、不遮挡） ── */}
+      {tab === 'changes' && selFiles.length > 0 && (
         <div className="gp-abar">
+          {selAllStaged && (
+            <input
+              className="gp-commit-input"
+              value={commitDraft}
+              onChange={(e) => setCommitDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitSelected(); }}
+              placeholder={`提交信息（将提交 ${selFiles.length} 个文件）`}
+              aria-label="提交信息"
+              autoFocus
+            />
+          )}
           <div className="gp-ab-in">
-            <button className="gp-btn ghost" disabled={busy} onClick={() => void runWrite('batch_unstage', { filePaths: selFiles.map((f) => f.path) }, '[u] 已取消暂存')}>[u]</button>
-            <button className="gp-btn pri" disabled={busy} onClick={() => {
-              if (selAllStaged) void runWrite('commit_changes', { message: window.prompt('提交信息') ?? '', stageAll: false }, '[ok] 已提交');
-              else void runWrite('batch_stage', { filePaths: selFiles.map((f) => f.path) }, '[ok] 已暂存');
-            }}>{busy ? '...' : selAllStaged ? '提交所选' : '暂存所选'}</button>
+            {selAllStaged && (
+              <button className="gp-btn ghost" disabled={busy} onClick={() => void runWrite('batch_unstage', { filePaths: selFiles.map((f) => f.path) }, '已取消暂存')} aria-label="取消暂存所选文件">取消暂存</button>
+            )}
+            <button
+              className="gp-btn pri"
+              disabled={busy || (selAllStaged && !commitDraft.trim())}
+              onClick={submitSelected}
+            >
+              {busy ? '处理中…' : selAllStaged ? `提交所选（${selFiles.length}）` : `暂存所选（${selFiles.length}）`}
+            </button>
           </div>
-          <div className="gp-ab-hint">已选 {selFiles.length} 个文件</div>
         </div>
       )}
 
-      {toast && <div className="gp-toast">{toast}</div>}
+      {/* ── 「全部暂存」二次确认（批量写防误触） ── */}
+      {confirmStage && (
+        <div className="gp-confirm" role="dialog" aria-label="确认批量暂存">
+          <div className="gp-confirm-text">将暂存 {confirmStage.paths.length} 个{confirmStage.kind === 'untracked' ? '未跟踪' : '未暂存'}文件？</div>
+          <div className="gp-confirm-ops">
+            <button className="gp-btn ghost" onClick={() => setConfirmStage(null)}>取消</button>
+            <button
+              className="gp-btn pri"
+              disabled={busy}
+              onClick={() => { const p = confirmStage.paths; setConfirmStage(null); void runWrite('batch_stage', { filePaths: p }, '已暂存'); }}
+            >确认暂存</button>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className={`gp-toast ${toast.kind === 'err' ? 'err' : ''}`}>{toast.text}</div>}
     </div>
   );
 }
@@ -276,7 +375,7 @@ export const gitPanelPlugin: LitePlugin = {
   manifest: {
     id: 'git-panel',
     name: 'Git',
-    version: '0.1.0',
+    version: '0.1.1',
     capabilities: ['cap.git', 'cap.tool.fs', 'cap.kv'],
     provides: [],
     events: ['git-operation'],

@@ -274,6 +274,11 @@ export function createServerPart(options = {}) {
         ok: result.ok,
         action,
         result: parsed,
+        // 面板要按「该目录不是 Git 仓库」给出专用错误态（UX 审查 P1-2），
+        // 这里把 stderr 的关键形态规整成稳定文案，避免暴露 git 命令细节
+        error: result.ok ? undefined : (result.stderr.includes('not a git repository')
+          ? '该目录不是 Git 仓库'
+          : (result.stderr.split('\n').find(Boolean)?.slice(0, 160) || `git ${action} 执行失败（exit ${result.exitCode}）`)),
         stdout: parsed ? undefined : result.stdout.slice(0, 64 * 1024),
         stderr: result.stderr.slice(0, 16 * 1024) || undefined,
         exitCode: result.exitCode,
