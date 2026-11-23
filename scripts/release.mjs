@@ -54,6 +54,9 @@ const run = (cmd, cwd, { capture = false, allowFail = false } = {}) => {
   }
   return (r.stdout ?? '').trim();
 };
+/** --quiet 类命令的「是否有差异」只能看退出码（0=无差异，1=有差异）；stdout 恒为空串，
+ *  拿输出判断会把「有暂存改动」误判成「无改动」→ 跳过 commit（实测踩坑：修复被漏发） */
+const hasDiff = (args, cwd = SRC) => spawnSync('git ' + args, { cwd, shell: true, encoding: 'utf8' }).status === 1;
 const git = (args, cwd = SRC) => run('git ' + args, cwd, { capture: true });
 const shortLog = (rev, cwd) => git('log -1 --format="%h %s" ' + rev, cwd);
 
@@ -104,12 +107,12 @@ if (DRY) {
 
 // ---------- 1. commit + push ----------
 log('步骤 1/5：commit + push');
-if (git('diff --cached --quiet') === '' && status.split('\n').filter(Boolean).some(l => !l.startsWith('??'))) {
+if (!hasDiff('diff --cached --quiet') && status.split('\n').filter(Boolean).some(l => !l.startsWith('??'))) {
   // 有已跟踪改动但没 stage：自动 stage（未跟踪文件不自动包含，避免误提交垃圾）
   log('自动 stage 已跟踪改动');
   git('add -u');
 }
-if (git('diff --cached --quiet') !== '') {
+if (hasDiff('diff --cached --quiet')) {
   const msg = inferMsg();
   log('commit: ' + msg);
   git('commit -m ' + JSON.stringify(msg));
