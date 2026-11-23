@@ -10,6 +10,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import { parseBlocks, parseInline, type Block, type Inline } from './markdown-parse';
+import { copyText } from '../shared/copyText';
 import { CheckIcon, CopyIcon } from './icons';
 
 /** 超过该长度不再做 Markdown 解析：长文档逐帧重排会明显掉帧，退回纯文本更诚实 */
@@ -20,12 +21,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [state, setState] = useState<'idle' | 'done' | 'fail'>('idle');
   const copy = () => {
     void (async () => {
-      try {
-        await navigator.clipboard.writeText(code);
-        setState('done');
-      } catch {
-        setState('fail');
-      }
+      const ok = await copyText(code);
+      setState(ok ? 'done' : 'fail');
       setTimeout(() => setState('idle'), 1400);
     })();
   };

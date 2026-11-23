@@ -3,6 +3,7 @@
  * 数据经 store.ts（cap.config 持久化，与 AI 工具层同键空间同口径），计算走 core 单一权威。
  * 交互对齐原件 pocket-ledger：金额大输入框 + 分类 chips + 时段档位 + 月度翻页 + 预算进度。
  */
+import { copyText } from '../shared/copyText';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as core from './core';
 import { cfgKeys, loadSettings, saveSettings as persistSettings, loadDayBills, addBill as addBillStore, deleteBillById } from './store';
@@ -171,7 +172,8 @@ function ListTab({ month, setMonth, bills, settings, refresh }: {
 
   const exportCsv = async () => {
     const csv = core.toCsv(filtered, settings.currencySymbol);
-    try { await navigator.clipboard.writeText(csv); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* 剪贴板不可用静默 */ }
+    // 失败不标「已复制」；APK WebView/明文 http 源由 execCommand 兜底
+    if (await copyText(csv)) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
   return (

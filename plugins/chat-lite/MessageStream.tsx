@@ -11,6 +11,7 @@ import { PolarisMark, UserIcon, CopyIcon, CheckIcon, EditIcon, ResendIcon, Regen
 import { onStreamRetry, resumeTruncated, requestCompose, resendMessage, editResendLast, regenerateLast, assistantVisibleText } from './index';
 import { renderBlocks } from './BlockGroup';
 import { fmtMsgTime, fmtDur } from './time-fmt';
+import { copyText } from '../shared/copyText';
 
 /** 编辑态：一次只编辑一条；draft 进状态（确认条重建 DOM 不丢稿） */
 interface EditState { msgId: string; draft: string; confirm: boolean }
@@ -126,8 +127,8 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
   const doCopy = async () => {
     const text = isUser ? m.content : assistantVisibleText(m);
     if (!text.trim()) return;
-    try { await navigator.clipboard.writeText(text); } catch { /* 剪贴板受限：静默 */ }
-    setCopied(true);
+    // 复制结果决定反馈口径：失败必须如实反馈（不标「已复制」），APK WebView/明文 http 源走 execCommand 兜底
+    setCopied(await copyText(text));
     if (copyTimer.current) clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(false), 1200);
   };

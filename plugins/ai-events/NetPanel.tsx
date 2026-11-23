@@ -5,6 +5,8 @@
  * - 轮次：这一轮调了几次工具、谁批准、结果如何（对话语义）
  * - 请求：模型收到的原始 messages/tools/参数、上游返回的 SSE 帧（协议层，可复现）
  */
+import { copyText } from '../shared/copyText';
+
 import { useEffect, useMemo, useState } from 'react';
 import { buildNetExport, clearNet, loadRecentNet, subscribeNet } from './netStore';
 import type { HttpKind, HttpRecord } from './netStore';
@@ -56,27 +58,6 @@ function statusClass(rec: HttpRecord): string {
   if (rec.status === 0) return 'is-live';
   if (rec.status >= 400) return 'is-bad';
   return 'is-ok';
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
 }
 
 export function NetPanel() {

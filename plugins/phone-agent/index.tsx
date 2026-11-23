@@ -15,6 +15,7 @@
  * 能力如实标注：PWA 拿不到系统截屏/后台常驻（iOS 冻结后 SSE 断即离线），
  * describe 里写明，AI 调不到的能力返回结构化降级而不是假装成功。
  */
+import { copyText } from '../shared/copyText';
 import { useEffect, useState } from 'react';
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import './panel.css';
@@ -37,12 +38,9 @@ const EXECUTORS: Record<string, Executor> = {
   'clipboard.write': async (p) => {
     const text = String(p?.text ?? '');
     if (!text) return { ok: false, error: 'text required' };
-    try {
-      await navigator.clipboard.writeText(text);
-      return { ok: true, data: 'written' };
-    } catch (e) {
-      return { ok: false, error: `剪贴板写入被拒绝：${e instanceof Error ? e.message : String(e)}` };
-    }
+    // Android WebView/明文 http 源无异步 Clipboard API：execCommand 兜底
+    if (await copyText(text)) return { ok: true, data: 'written' };
+    return { ok: false, error: '剪贴板写入被拒绝' };
   },
   notify: async (p) => {
     const title = String(p?.title ?? 'Polaris');

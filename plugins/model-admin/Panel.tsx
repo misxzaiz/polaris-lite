@@ -12,6 +12,7 @@
  * - 查看 API Key：服务端会话门禁 + PLITE_ALLOW_REVEAL 开关 + 审计；前端 10s 自动隐藏；
  * - P0：保存/启停/删除失败不再静默——表单内联错误条 + 列表页错误提示。
  */
+import { copyText } from '../shared/copyText';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -83,27 +84,6 @@ function unwrapBus<T>(res: { ok: boolean; data?: T; error?: { message?: string }
 function portalInto(node: ReactNode): ReactNode {
   const root = api?.overlay.root() ?? document.getElementById('plite-overlay-root');
   return root ? createPortal(node, root) : node;
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
 }
 
 function providerExportPayload(c: { name: string; baseURL: string; activeModel?: string; models: ModelInfo[] }) {

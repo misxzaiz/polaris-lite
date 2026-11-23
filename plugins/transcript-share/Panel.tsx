@@ -3,6 +3,7 @@
  * 左侧选会话（/api/chat/sessions 索引），右侧管理该会话的活动分享
  * （生成 / 续期 / 吊销 / 打开 / 复制链接）。数据面全部同源 fetch。
  */
+import { copyText } from '../shared/copyText';
 import { useCallback, useEffect, useState } from 'react';
 
 interface SessionItem {
@@ -122,12 +123,7 @@ export function SharePanel() {
   }, [loadShares]);
 
   const copy = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setNote('已复制');
-    } catch {
-      setNote('复制失败（浏览器拦截）');
-    }
+    setNote(await copyText(text) ? '已复制' : '复制失败（浏览器拦截）');
   }, []);
 
   const selShares = shares.filter((s) => s.sessionId === sel);

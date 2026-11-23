@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useSessionStore } from './store';
+import { copyText } from '../shared/copyText';
 
 const TTL_OPTIONS = [
   { label: '1小时', ms: 60 * 60 * 1000 },
@@ -31,15 +32,6 @@ const fmtLeft = (ms: number) => {
   const h = Math.floor(ms / 3600000);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 };
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function downloadBlob(filename: string, content: string, mime: string): void {
   const blob = new Blob([content], { type: mime });

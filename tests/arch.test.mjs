@@ -52,6 +52,9 @@ function specifiers(code) {
 /** 构建期文件：由 Node/vite 执行，依赖 node:* 与构建工具是正常的，不参与运行时依赖约束 */
 const BUILD_TIME = new Set(['plugins/build-plugins.mjs', 'plugins/shared.plugin-config.ts']);
 
+/** 插件间共享的纯前端工具目录：随引用方 bundle 打包（非插件、无宿主依赖），等同 @sdk 的豁免待遇 */
+const isSharedUtil = (spec) => spec.startsWith('../shared/');
+
 const pluginFiles = collect('plugins').filter(
   (p) => !p.startsWith('plugins/sdk/') && !BUILD_TIME.has(p) && !p.endsWith('/vite.config.ts'),
 );
@@ -76,9 +79,9 @@ test('插件不得依赖宿主实现或其它插件', () => {
         violations.push(`${file} → ${spec}（引用了宿主实现）`);
         continue;
       }
-      // 平级插件互相 import：会绕过 cap 总线与授权表，直接耦合
+      // 平级插件互相 import：会绕过 cap 总线与授权表，直接耦合（plugins/shared/ 是共享工具目录，豁免）
       const sibling = /^\.\.\/([\w-]+)\//.exec(spec);
-      if (sibling && sibling[1] !== 'sdk' && sibling[1] !== ownPlugin && sibling[1] !== 'shared.plugin-config.ts') {
+      if (sibling && sibling[1] !== 'sdk' && sibling[1] !== ownPlugin && sibling[1] !== 'shared.plugin-config.ts' && !isSharedUtil(spec)) {
         violations.push(`${file} → ${spec}（引用了其它插件）`);
       }
     }

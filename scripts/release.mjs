@@ -46,7 +46,9 @@ const die = (s) => { console.error('\n[release] ✗ ' + s); process.exit(1); };
 
 const run = (cmd, cwd, { capture = false, allowFail = false } = {}) => {
   const r = spawnSync(cmd, { cwd, shell: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-  if (r.status !== 0 && !allowFail) {
+  // git diff --cached --quiet / git diff --quiet 用退出码 1 表达「有差异」，是语义信号不是失败
+  const semanticOne = /git (diff|rev-list)\b.*--quiet/.test(cmd) && r.status === 1;
+  if (r.status !== 0 && r.status !== 1 && !allowFail && !semanticOne) {
     console.error('\n[release] 命令失败(exit ' + r.status + '): ' + cmd + (cwd ? '  @ ' + cwd : ''));
     process.exit(r.status ?? 1);
   }

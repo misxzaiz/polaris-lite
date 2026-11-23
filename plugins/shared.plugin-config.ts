@@ -22,6 +22,9 @@ export function createPluginConfig(pluginDir: string, entry: string, outDir: str
         // 刻意不再提供 '@' → src 别名：插件误引宿主实现会在构建期直接暴露，而不是形成隐式耦合。
         '@sdk': resolve(sharedDir, 'sdk'),
       },
+      // 插件间共享的纯前端工具（无宿主依赖）：随引用方 bundle 打包。
+      // 注意：这里的模块不得 import 宿主 src/ 或 Node API，保持插件自足。
+      dedupe: [],
     },
     build: {
       lib: {

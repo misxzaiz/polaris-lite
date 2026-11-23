@@ -7,6 +7,7 @@
  * - owner（首登=注册，仅一次）上收服务端 .polaris-lite/auth-owner.json（sha256+salt）；
  * - 状态变化经 auth-changed 广播。
  */
+import { copyText } from '../shared/copyText';
 import { useState } from 'react';
 import { KEY_MOCK_AUTH_SESSION, type AuthStatusResult, CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import './auth.css';
@@ -508,12 +509,10 @@ function TempCredentialPanel() {
   };
 
   const copy = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    // 失败不显示口令已复制（APK WebView 走 execCommand 兜底）
+    if (await copyText(text)) {
       setCopied(label);
       setTimeout(() => setCopied(''), 1400);
-    } catch {
-      setCopied('');
     }
   };
 

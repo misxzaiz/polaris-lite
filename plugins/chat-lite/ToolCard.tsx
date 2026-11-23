@@ -9,6 +9,7 @@
  */
 import { useState } from 'react';
 import { resolveApproval } from './index';
+import { copyText } from '../shared/copyText';
 import type { ToolCardData, ToolCardMessage } from './store';
 
 /** 分类色（Polaris：execute=purple；lite 不引图标库，用左缘色条 + 字母块） */
@@ -125,8 +126,7 @@ function OutputCopy({ text }: { text: string }) {
       title="复制输出"
       aria-label="复制输出"
       onClick={async () => {
-        try { await navigator.clipboard.writeText(text); } catch { /* 剪贴板受限：静默 */ }
-        setCopied(true);
+        setCopied(await copyText(text)); // 失败不标「已复制」
         setTimeout(() => setCopied(false), 1200);
       }}
     >
