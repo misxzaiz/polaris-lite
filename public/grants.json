@@ -1,5 +1,5 @@
 {
-  "version": "20",
+  "version": "21",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -369,6 +369,25 @@
       "provides": [],
       "events": [
         "git-operation"
+      ]
+    },
+    "personal-hub": {
+      "capabilities": [
+        "cap.config"
+      ],
+      "provides": [],
+      "events": []
+    },
+    "voice-radio": {
+      "capabilities": [
+        "cap.kv",
+        "cap.ai.chat",
+        "cap.ai.chat.interrupt",
+        "cap.model.admin"
+      ],
+      "provides": [],
+      "events": [
+        "cap.ai.chat:event"
       ]
     }
   }

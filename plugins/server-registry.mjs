@@ -41,6 +41,8 @@ export const SERVER_PLUGINS = [
   { id: 'app-updater', entry: './app-updater/server.mjs' },
   // Git 能力：cap.git 提供方（git CLI 执行 + 根白名单 + 写串行 + 审计）
   { id: 'git-core', entry: './git-core/server.mjs' },
+  // voice-radio：AI 无限语音电台（MiMo TTS 服务端代理 + 磁盘缓存；Key 只在服务端）
+  { id: 'voice-radio', entry: './voice-radio/server.mjs' },
 ];
 
 /**

@@ -103,6 +103,9 @@ test('宿主核心不得依赖任何插件', () => {
 
 test('插件只允许依赖声明过的外部包', () => {
   const ALLOWED = new Set(['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'zustand', '@sdk']);
+  // server 半边可用的 Node 侧包（跑在 Node，不进浏览器 import map）：
+  // - undici：Node 24 内置 fetch 的实现包，server 半边自定义超时/连接池时直接引（voice-radio TTS 上游 90s 超时）
+  const SERVER_ALLOWED = new Set(['undici']);
   const violations = [];
   for (const file of pluginFiles) {
     // server 半边跑在 Node 而非浏览器：node:* 内置模块是平台能力，不需要进 import map。
@@ -111,6 +114,7 @@ test('插件只允许依赖声明过的外部包', () => {
     for (const spec of specifiers(readFileSync(resolve(root, file), 'utf8'))) {
       if (spec.startsWith('.') || spec.startsWith('/')) continue; // 自身相对/绝对
       if (isServerHalf && spec.startsWith('node:')) continue;
+      if (isServerHalf && SERVER_ALLOWED.has(spec)) continue;
       const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
       if (!ALLOWED.has(pkg) && !ALLOWED.has(spec)) violations.push(`${file} → ${spec}`);
     }
