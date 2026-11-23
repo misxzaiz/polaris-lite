@@ -1,17 +1,26 @@
 /* git-panel 面板样式（gp- 前缀；消费宿主 token；禁 :root/html/body/fixed/!important）。
    移动端形态对齐 v2 原型：底部 tab + sticky 操作条 + 互斥整屏视图。 */
 
+/* 宿主工作区的面板窗格是「内容自适应高」（panes flex:0 1 auto，与其它面板一致）。
+   这里不能用 height:100%/absolute——父级高度由内容决定，会循环塌陷成 0（实测全白）。
+   正确形态：普通文档流 + 自身给一个视口相关的 max-height，内部 .gp-body 自己滚动；
+   桌面端面板窄而高，取 70vh；移动端（isMobile，全屏 sheet 形态）用 100dvh 铺满。 */
 .gp-root {
   position: relative;
   display: block;
-  height: 100%;
-  min-height: 0;
+  width: 100%;
+  height: 70vh;
+  min-height: 320px;
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
   line-height: 19px;
   font-family: var(--plite-font-sans, inherit);
   overflow: hidden;
+}
+.gp-root.gp-mobile {
+  height: 100dvh;
+  min-height: 0;
 }
 .gp-view { position: absolute; inset: 0; display: none; flex-direction: column; background: var(--bg); }
 .gp-view.on { display: flex; }
