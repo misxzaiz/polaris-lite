@@ -7,7 +7,7 @@ import { useSessionStore, isToolCard, hasBlocks, type StoreMessage, type ToolCar
 import { EmptyState } from './EmptyState';
 import { Markdown } from './markdown';
 import { ToolCard } from './ToolCard';
-import { PolarisMark, UserIcon, CopyIcon, CheckIcon, EditIcon, ResendIcon, RegenIcon, JumpIcon, BackfillIcon } from './icons';
+import { PolarisMark, UserIcon, CopyIcon, CheckIcon, EditIcon, ResendIcon, RegenIcon, JumpIcon, BackfillIcon, CloseIcon } from './icons';
 import { onStreamRetry, resumeTruncated, requestCompose, resendMessage, editResendLast, regenerateLast, assistantVisibleText } from './index';
 import { renderBlocks } from './BlockGroup';
 import { fmtMsgTime, fmtDur } from './time-fmt';
@@ -231,6 +231,11 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
         return root ? createPortal(
           <div className="chat-sheet-mask" onClick={() => setSheetOpen(false)}>
             <div className="chat-sheet" role="menu" aria-label="消息操作" onClick={(e) => e.stopPropagation()}>
+              <button type="button" className="chat-sheet-topbar" aria-label="返回" onClick={() => setSheetOpen(false)}>
+                <span className="chat-sheet-topbar-back">‹</span>
+                <span className="chat-sheet-topbar-title">消息操作</span>
+                <CloseIcon />
+              </button>
               {specs.map((sp) => (
                 <button key={sp.key} type="button" className={`chat-sheet-item${sp.done ? ' done' : ''}`}
                   role="menuitem" onClick={() => { setSheetOpen(false); sp.run(); }}>

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
-import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon } from './icons';
+import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon, CloseIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
 
 /** 浮层根：宿主 SlotLayout 提供的 fixed 覆盖层（空态 pointer-events:none 放行，子元素恢复 auto）。
@@ -378,6 +378,11 @@ export function SessionSidebar() {
         return root ? createPortal(
         <div className="chat-sheet-mask" onClick={() => setMenuFor(null)}>
           <div className="chat-sheet" role="menu" aria-label="会话操作" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="chat-sheet-topbar" aria-label="返回" onClick={() => setMenuFor(null)}>
+              <span className="chat-sheet-topbar-back">‹</span>
+              <span className="chat-sheet-topbar-title">会话操作</span>
+              <CloseIcon />
+            </button>
             <div className="chat-sheet-title">{displayTitle(menuSession.title, menuSession.messages[0]?.content)}</div>
             <button
               type="button"

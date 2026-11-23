@@ -239,6 +239,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
         style={{ left: panelPos.left, bottom: panelPos.bottom, width: panelPos.width, maxHeight: panelPos.maxHeight }}
       >
         <div className="chat-picker-head">
+          <button type="button" className="chat-picker-back" aria-label="返回" onClick={onDone}>‹ 返回</button>
           <span className="chat-picker-title">会话设置</span>
           {/* 会话标题展示：未设置（「新会话」）时回退用户第一句（SessionSidebar displayTitle 同款口径） */}
           <span className="chat-pop-title" title={sessionTitle}>{sessionTitle}</span>

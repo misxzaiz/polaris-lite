@@ -527,6 +527,20 @@
 }
 .chat-picker-title { font-size: 11px; color: var(--text-dim); letter-spacing: 0.06em; }
 
+/* 面板顶部返回钮：手机单手可达的关闭入口（右侧「完成」保留） */
+.chat-picker-back {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-picker-back:hover { background: var(--bg-hover); }
+
 /* ===== 会话设置面板头部：标题展示 + 左右侧栏展开小按钮 ===== */
 /* 标题：「会话设置」右侧同行展示，弱化灰、超长省略——不新增行高 */
 .chat-pop-title {

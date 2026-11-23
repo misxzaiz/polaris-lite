@@ -205,6 +205,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 顶部返回条：手机上单手可达的关闭入口（底部「取消」保留，双保险） */
+.chat-sheet-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: -2px -4px 4px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-sheet-topbar:hover, .chat-sheet-topbar:active { background: var(--bg-hover); }
+.chat-sheet-topbar-back { font-size: 20px; line-height: 1; color: var(--text); }
+.chat-sheet-topbar-title { flex: 1 1 auto; text-align: left; color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-sheet-topbar svg { width: 15px; height: 15px; flex-shrink: 0; }
 .chat-sheet-item {
   display: flex;
   align-items: center;
