@@ -1,5 +1,5 @@
 {
-  "version": "19",
+  "version": "20",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -352,6 +352,24 @@
         "cap.ui.layout.global"
       ],
       "events": []
+    },
+    "git-core": {
+      "capabilities": [],
+      "provides": [
+        "cap.git"
+      ],
+      "events": []
+    },
+    "git-panel": {
+      "capabilities": [
+        "cap.git",
+        "cap.tool.fs",
+        "cap.kv"
+      ],
+      "provides": [],
+      "events": [
+        "git-operation"
+      ]
     }
   }
 }

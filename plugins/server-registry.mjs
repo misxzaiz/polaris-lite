@@ -39,6 +39,8 @@ export const SERVER_PLUGINS = [
   { id: 'transcript-share', entry: './transcript-share/server.mjs' },
   // 应用更新：版本查询端点（App 刷新引导；docs/app-updater-plan.md）
   { id: 'app-updater', entry: './app-updater/server.mjs' },
+  // Git 能力：cap.git 提供方（git CLI 执行 + 根白名单 + 写串行 + 审计）
+  { id: 'git-core', entry: './git-core/server.mjs' },
 ];
 
 /**

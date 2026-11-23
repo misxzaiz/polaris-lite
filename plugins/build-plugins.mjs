@@ -82,6 +82,9 @@ const plugins = [
   { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 16 },
   { id: 'kv-store', config: 'kv-store/vite.config.ts', dist: 'kv-store/dist', order: 17 },
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 17 },
+  // Git 能力（cap.git 提供方，server 半边）+ Git 面板（消费方；requires 保证 core 先装配）
+  { id: 'git-core', config: 'git-core/vite.config.ts', dist: 'git-core/dist', order: 23 },
+  { id: 'git-panel', config: 'git-panel/vite.config.ts', dist: 'git-panel/dist', order: 24 },
   { id: 'chat-store', config: 'chat-store/vite.config.ts', dist: 'chat-store/dist', order: 19 },
   { id: 'plugin-manager', config: 'plugin-manager/vite.config.ts', dist: 'plugin-manager/dist', order: 18 },
   { id: 'mobile-companion', config: 'mobile-companion/vite.config.ts', dist: 'mobile-companion/dist', order: 20 },
