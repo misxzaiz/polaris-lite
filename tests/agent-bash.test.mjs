@@ -221,16 +221,34 @@ test('exec: 超时杀进程返回 timedOut', async (t) => {
   assert.notEqual(r.json.exitCode, 0);
 }, { timeout: 15000 });
 
-test('exec: 并发 1，第二个请求 BUSY', async (t) => {
+test('exec: 并发 1 → 第二个请求排队等待（不再直接 BUSY）', async (t) => {
   const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
   const slow = env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 3"', sessionId: 's1', timeoutMs: 10000 });
   // 等第一个真正进入 inflight
   await new Promise((r) => setTimeout(r, 500));
-  const second = await env.call('/api/tool/exec', { command: 'echo second', sessionId: 's1' });
-  assert.equal(second.status, 429);
-  assert.equal(second.json.code, 'EXEC_BUSY');
+  const second = await env.call('/api/tool/exec', { command: 'echo second', sessionId: 's1', timeoutMs: 15000 });
+  // 2026-11-23 修复：BUSY 直接拒绝会让模型连环重试全废（转录实测一条卡住命令拖死 5 个工具）；
+  // 现在排队等前一条结束再执行
+  assert.equal(second.status, 200, `排队后应执行成功: ${JSON.stringify(second.json).slice(0, 200)}`);
+  assert.equal(second.json.exitCode, 0);
+  assert.match(second.json.stdout, /second/);
   await slow;
-}, { timeout: 20000 });
+}, { timeout: 30000 });
+
+test('exec: 同命令重试 = 卡死自杀（杀前一条，本条直接执行）', async (t) => {
+  const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
+  // 第一条：长命令（模拟卡死；同一条命令的第二次调用会杀掉它）
+  const first = env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 60"', sessionId: 's1', timeoutMs: 60000 });
+  await new Promise((r) => setTimeout(r, 700));
+  // 同一命令重试：应杀掉旧树并立即执行本条
+  const retry = await env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 60"', sessionId: 's1', timeoutMs: 60000 });
+  // retry 自身会跑满 60s 超时——不等它，只断言它没被 BUSY 拒绝（拿到了执行机会）
+  assert.notEqual(retry.json?.code, 'EXEC_BUSY', `同命令重试不应被 BUSY 拒绝: ${JSON.stringify(retry.json).slice(0, 200)}`);
+  assert.equal(retry.status, 200);
+  // 清理：杀掉 retry 的长任务
+  await env.call('/api/tool/exec', { command: 'echo cleanup', sessionId: 's1', timeoutMs: 15000 }).catch(() => null);
+  await first.catch(() => null);
+}, { timeout: 40000 });
 
 test('exec: 禁用配置 403；hardOff 环境变量 403', async (t) => {
   const env = tempEnv(t, { config: { enabled: false, mode: 'yolo', allowPrefixes: [] } });

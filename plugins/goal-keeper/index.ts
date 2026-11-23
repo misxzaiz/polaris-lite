@@ -1,14 +1,14 @@
 /**
  * goal-keeper 插件：目标守护（纯插件实现，零宿主改动）。
  *
- * v3（/goal 斜杠命令驱动，Claude Code 风格）：
- * - goal 工具（cap.tool.goal，只读）：AI 每轮经它读取当前会话目标状态；
- *   description 即模型可见协议：/goal = 用户已正式登记目标，立即实施不请示；
- * - /goal 命令族（监听 user.prompt）：/goal <内容> 登记/覆盖目标、/goal-status、
- *   /goal-done、/goal-abandon；非命令族消息完全不响应；
- * - 检查编排（保留 v1）：message.done(interrupted) 立即检查，正常结束按节流；
- *   /goal 登记后 turnsSinceCheck 清零 → 下一轮 message.done 即触发首次检查；
- * - 结论命中 notifyOn 弹交互卡（achieved/interrupted），选项回流可关/再验/放弃。
+ * v4（无人值守闭环——用户派发即离线场景）：
+ * - 检查触发点收窄为「会话中断」：goal active 期间 AI 正常推进不检查不打扰；
+ *   message.done(interrupted:true) 才触发审查（正常轮次不再检查——2048 教训：
+ *   刚交付就被三选一卡打断）。goal_check 工具作为 AI 主动申报检查点的补充通道。
+ * - 审查 AI 结论直接闭环，不再等用户点选：achieved 连续 2 次 → status=done 自动关闭；
+ *   partial/not_started 保持 active 静默守护；interrupted 单向通知。用户睡觉也要能走完流程。
+ * - 交互卡全部降级为无需作答的通知卡（confirm 形态「知道了」，answered 无副作用）；
+ *   手动管理保留在 /goal-status、/goal-done、/goal-abandon 与面板。
  *
  * 事件信封契约（对齐 chat-lite/agent-loop 消费姿势）：
  * - 流式通道（cap.agent.loop:event）：宿主 broadcastStream 注入的
@@ -23,20 +23,23 @@
  * 下一条 assistant 消息出现再 dispatch（v1 只带 sessionId，卡从未渲染）。
  *
  * 防自激红线：检查调用走 /api/model-relay 直连，不经 agent-loop 用户对话通道；
- * 「继续推进」仅更新面板提示文案，绝不自动注入对话；goal 工具只读（danger:'read'），
- * 目标只能由用户经 /goal 命令或面板设置。
+ * goal/goal_check 工具只读（danger:'read'），目标只能由用户经 /goal 命令或面板设置；
+ * 通知卡不产生新的对话轮次，无自激回路。
  */
 import type { LitePlugin, SlotHostApi } from '@sdk';
 import { GoalKeeperPanel } from './Panel';
 import { setGoalApi, loadGoal, saveGoal, notifyChanged } from './store';
-import { runGoalCheck, shouldCheck } from './check';
-import { newGoal, type GoalRecord, type GoalVerdict, type VerdictOutcome } from './model-types';
+import { runGoalCheck } from './check';
+import { newGoal, type GoalRecord, type VerdictOutcome } from './model-types';
 import './panel.css';
 
 /** 同会话检查互斥（sessionId → 检查中标志） */
 const checking = new Map<string, boolean>();
 /** 检查期间的 message.done 合并标志（检查完成后若 dirty 再补检一次） */
 const dirty = new Map<string, boolean>();
+
+/** achieved 自动关闭的保险丝：连续 N 次审查判达成才落 done（防单次误判） */
+const ACHIEVED_STREAK_N = 2;
 
 /** 待落位的命令族交互卡（sessionId → 队列）：等本会话 assistant 消息出现后 dispatch */
 const pendingCards = new Map<string, { title: string; options: string[] }[]>();
@@ -69,21 +72,22 @@ function envelopePayload(raw: unknown): Record<string, unknown> {
   return (env?.payload ?? {}) as Record<string, unknown>;
 }
 
-/** 结论 → 交互卡文案与选项 */
+/** 检查结论 → 通知卡（无需作答：confirm 形态 +「知道了」，answered 无副作用）。
+ *  v4 起不再发「三选一裁决卡」——结论由审查 AI 直接闭环，卡片只做单向告知。 */
 function cardFor(v: { outcome: string; evidence: string; gap: string }, goalText: string): { title: string; options: string[] } | null {
   switch (v.outcome) {
     case 'achieved':
       return {
-        title: `check: [达成] 目标已达成：${goalText}${v.evidence ? `（${v.evidence}）` : ''}`,
-        options: ['关闭目标', '再验证一次', '保持关注'],
+        title: `check: [达成] 目标已达成，已自动关闭：${goalText}${v.evidence ? `（${v.evidence}）` : ''}`,
+        options: ['知道了'],
       };
     case 'interrupted':
       return {
-        title: `check: [中断] 目标推进被中断：${goalText}${v.evidence ? `（${v.evidence}）` : ''}`,
-        options: ['继续推进（手动）', '放弃目标'],
+        title: `check: [中断] 目标推进被中断，待你回来继续：${goalText}${v.evidence ? `（${v.evidence}）` : ''}${v.gap ? `；建议：${v.gap}` : ''}`,
+        options: ['知道了'],
       };
     default:
-      return null; // partial/not_started/unknown 默认静默（面板可见）
+      return null; // partial/not_started/unknown 静默记录（面板可见）
   }
 }
 
@@ -149,7 +153,7 @@ async function dispatchCard(
   }
 }
 
-async function performCheck(api: SlotHostApi, sessionId: string, reason: 'turn' | 'interrupt', messageId?: string): Promise<void> {
+async function performCheck(api: SlotHostApi, sessionId: string, reason: 'turn' | 'interrupt' | 'tool', messageId?: string): Promise<void> {
   if (checking.get(sessionId)) { dirty.set(sessionId, true); return; }
   checking.set(sessionId, true);
   try {
@@ -160,16 +164,28 @@ async function performCheck(api: SlotHostApi, sessionId: string, reason: 'turn' 
     const finalOutcome: VerdictOutcome =
       reason === 'interrupt' && verdict.outcome !== 'achieved' ? 'interrupted' : verdict.outcome;
     const finalVerdict = { ...verdict, outcome: finalOutcome };
+    // achieved 连续 N 次才自动关闭（防单次误判的保险丝）；其余结论保持 active 继续守护
+    const streak = finalOutcome === 'achieved' ? (goal.achievedStreak ?? 0) + 1 : 0;
+    const autoClose = finalOutcome === 'achieved' && streak >= ACHIEVED_STREAK_N;
     const next: GoalRecord = {
       ...goal,
       lastCheckedAt: Date.now(),
       turnsSinceCheck: 0,
       checkCount: goal.checkCount + 1,
+      achievedStreak: streak,
       lastVerdict: finalVerdict,
+      ...(autoClose ? { status: 'done' as const } : {}),
     };
     await saveGoal(sessionId, next);
     notifyChanged();
-    if (next.settings.notifyOn.includes(finalOutcome)) {
+    if (autoClose) {
+      // 自动关闭也要让用户回来能看到（无需作答的通知卡）
+      const card = cardFor(finalVerdict, next.goalText);
+      if (card) queueOrDispatchCard(api, sessionId, card, messageId);
+      return;
+    }
+    if (next.settings.notifyOn.includes(finalOutcome) && finalOutcome !== 'achieved') {
+      // 未自动关闭的中断等结论：单向通知卡（无需作答）
       const card = cardFor(finalVerdict, next.goalText);
       if (card) queueOrDispatchCard(api, sessionId, card, messageId);
     }
@@ -201,6 +217,22 @@ const GOAL_DESCRIPTOR = {
   danger: 'read' as const,
 };
 
+const GOAL_CHECK_DESC =
+  '触发一次目标完成度审查（由独立审查 AI 后台判定，非你自己评分）。' +
+  '协议：①每完成一个阶段性交付物（文件写入/面板生成/测试通过等），或你判断目标已达成时，' +
+  '主动调用本工具申报检查点；②返回结构化结论 achieved/partial/not_started/unknown 与证据；' +
+  '③返回 achieved 且连续两次达成时目标将自动关闭——无需请示用户；' +
+  '④返回 partial 时会附差距（gap），请继续围绕差距推进；' +
+  '⑤会话中断时系统也会自动触发审查，本工具是你主动申报的补充通道。';
+
+const GOAL_CHECK_DESCRIPTOR = {
+  cap: 'cap.tool.goal-check',
+  name: 'goal_check',
+  description: GOAL_CHECK_DESC,
+  parameters: { type: 'object', properties: {} },
+  danger: 'read' as const,
+};
+
 /** goal 工具：无参单动作，恒返回当前会话目标状态（模型只读的眼睛） */
 function createGoalHandler(): (req: { action?: string; payload?: unknown }) => Promise<unknown> {
   return async (req) => {
@@ -223,6 +255,39 @@ function createGoalHandler(): (req: { action?: string; payload?: unknown }) => P
             : { status: 'none' };
         }
         return { ok: true, exitCode: 0, stdout: JSON.stringify(state) };
+      }
+      default:
+        return { ok: false, error: `unknown action: ${req.action}` };
+    }
+  };
+}
+
+/** goal_check 工具：AI 主动申报检查点 → 触发独立审查（结论直接闭环） */
+function createGoalCheckHandler(api: SlotHostApi): (req: { action?: string; payload?: unknown }) => Promise<unknown> {
+  return async (req) => {
+    switch (req.action) {
+      case 'describe':
+        return { descriptor: GOAL_CHECK_DESCRIPTOR };
+      case 'exec': {
+        const payload = (req.payload ?? {}) as { sessionId?: string; messageId?: string };
+        const sid = payload.sessionId ?? '';
+        if (!sid) return { ok: true, exitCode: 0, stdout: JSON.stringify({ status: 'none', note: '当前会话未设置目标' }) };
+        const goal = await loadGoal(sid);
+        if (!goal || goal.status !== 'active') {
+          return { ok: true, exitCode: 0, stdout: JSON.stringify({ status: 'none', note: '当前会话没有进行中的目标' }) };
+        }
+        // 同步触发审查（互斥锁防重入），把审查结论喂回模型
+        await performCheck(api, sid, 'tool', payload.messageId);
+        const after = await loadGoal(sid);
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: after?.status ?? 'unknown',
+            verdict: after?.lastVerdict ?? null,
+            note: after?.status === 'done' ? '审查判定目标已达成，目标已自动关闭' : '审查完成，目标继续守护',
+          }),
+        };
       }
       default:
         return { ok: false, error: `unknown action: ${req.action}` };
@@ -299,9 +364,9 @@ export const goalKeeperPlugin: LitePlugin = {
   manifest: {
     id: 'goal-keeper',
     name: '目标守护',
-    version: '0.3.0',
+    version: '0.4.0',
     capabilities: ['cap.kv', 'cap.model.admin', 'cap.interactive', 'cap.agent.loop'],
-    provides: ['cap.tool.goal'],
+    provides: ['cap.tool.goal', 'cap.tool.goal-check'],
     events: ['cap.agent.loop:event', 'interactive.answered', 'user.prompt', 'tool-registered'],
     contributes: {
       slots: [{ slot: 'panel', component: 'GoalKeeperPanel', order: 26, title: '目标' }],
@@ -310,9 +375,11 @@ export const goalKeeperPlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     setGoalApi(api);
 
-    // goal 工具（只读）：agent-loop discoverTools 经 describe 收录，模型无参调用
+    // goal（只读状态）+ goal_check（主动申报检查点 → 独立审查闭环）双工具
     api.registerCapability.register('cap.tool.goal', createGoalHandler() as never);
+    api.registerCapability.register('cap.tool.goal-check', createGoalCheckHandler(api) as never);
     api.emit('tool-registered', { cap: 'cap.tool.goal', name: 'goal' });
+    api.emit('tool-registered', { cap: 'cap.tool.goal-check', name: 'goal_check' });
 
     // /goal 命令族：旁听用户输入原文（user.prompt 载荷 = { sessionId, messageId, text, at }）
     api.listen('user.prompt', (raw: unknown) => {
@@ -328,29 +395,22 @@ export const goalKeeperPlugin: LitePlugin = {
       })();
     });
 
-    // 触发源：agent-loop 轮次完成（正常/中断）；信封 = { source, kind, payload }
+    // 触发源（v4 收窄）：只在「会话中断」时自动派发审查——正常轮次不检查不打扰。
+    // AI 主动申报走 goal_check 工具；这里兜底覆盖「AI 忘了申报就中断」的场景。
     api.listen('cap.agent.loop:event', (raw: unknown) => {
       const env = raw as StreamEnvelope | null;
       if (env?.kind !== 'message.done') return;
       const ev = (env?.payload ?? {}) as LoopEvent;
-      if (!ev.sessionId) return;
-      const interrupted = ev.interrupted === true;
+      if (!ev.sessionId || ev.interrupted !== true) return; // 非中断：完全不响应
       void (async () => {
         const goal = await loadGoal(ev.sessionId!);
         if (!goal || goal.status !== 'active') return;
-        if (interrupted) {
-          // 中断立即检查（不管节流）
-          void performCheck(api, ev.sessionId!, 'interrupt', ev.messageId);
-          return;
-        }
-        const next: GoalRecord = { ...goal, turnsSinceCheck: goal.turnsSinceCheck + 1 };
-        await saveGoal(ev.sessionId!, next);
-        if (shouldCheck(next, Date.now())) void performCheck(api, ev.sessionId!, 'turn', ev.messageId);
+        void performCheck(api, ev.sessionId!, 'interrupt', ev.messageId);
       })();
     });
 
-    // 交互卡作答回流：interactive-cards 的 answered 载荷 = { callId, answer, kind, title, sessionId, messageId }
-    // （无 __source 字段；按标题前缀识别本插件卡片——cmd:/check: 前缀在 dispatch 前写入 title）
+    // 交互卡作答回流：全部卡片均已通知化（「知道了」），这里只处理用户主动操作
+    // （面板/命令族已覆盖关闭/放弃/重验；通知卡的作答无副作用，直接忽略）。
     api.listen('interactive.answered', (raw: unknown) => {
       const p = envelopePayload(raw);
       const sid = typeof p.sessionId === 'string' ? p.sessionId : '';
@@ -358,28 +418,18 @@ export const goalKeeperPlugin: LitePlugin = {
       const sel = String((p.answer as Record<string, unknown> | undefined)?.selected ?? '');
       // 非本插件卡片：直接忽略（不能对其他插件的卡做任何动作）
       if (!title.startsWith('cmd:') && !title.startsWith('check:')) return;
-      if (title.startsWith('cmd:')) return; // 命令族确认卡：无副作用
+      if (title.startsWith('check:')) return; // 通知卡：无副作用（结论已自动闭环）
       void (async () => {
+        // 命令族卡是确认型；保留 /goal-abandon 之类的命令作为唯一主动操作入口。
+        // （旧版「关闭目标/再验证/放弃」选项已从检查卡移除——闭环不依赖用户点选。）
         const goal = await loadGoal(sid);
-        if (!goal) return;
-        if (sel.includes('关闭目标') || sel.includes('标记达成')) {
-          await saveGoal(sid, { ...goal, status: 'done' });
-          notifyChanged();
-        } else if (sel.includes('放弃')) {
-          await saveGoal(sid, { ...goal, status: 'abandoned' });
-          notifyChanged();
-        } else if (sel.includes('再验证')) {
-          const verdict: GoalVerdict = await runGoalCheck(api, { sessionId: sid, goalText: goal.goalText });
-          await saveGoal(sid, {
-            ...goal,
-            lastCheckedAt: Date.now(),
-            checkCount: goal.checkCount + 1,
-            turnsSinceCheck: 0,
-            lastVerdict: verdict,
-          });
-          notifyChanged();
+        if (!goal || sel.includes('放弃')) {
+          if (goal && sel.includes('放弃')) {
+            await saveGoal(sid, { ...goal, status: 'abandoned' });
+            notifyChanged();
+          }
+          return;
         }
-        // 「保持关注」「继续推进（手动）」「知道了」：不注入对话——防自激红线
       })();
     });
   },

@@ -98,7 +98,7 @@ export function GoalKeeperPanel() {
               <div className="gk-verdict-time">{new Date(goal.lastVerdict.at).toLocaleString('zh-CN', { hour12: false })}</div>
             </div>
           ) : (
-            <div className="gk-verdict gk-verdict-none">尚未检查：对话每 {goal.settings.checkEveryNTurns} 轮自动派发检查 agent（仅分析）。</div>
+            <div className="gk-verdict gk-verdict-none">尚未检查：会话中断时自动派发审查 AI（仅分析）；AI 也可经 goal_check 主动申报检查点。</div>
           )}
           {goal.status === 'active' ? (
             <div className="gk-actions">

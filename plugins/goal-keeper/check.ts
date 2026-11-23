@@ -77,7 +77,8 @@ export async function runGoalCheck(api: SlotHostApi, input: CheckInput): Promise
   return { outcome, evidence, gap, at: now };
 }
 
-/** 检查节流判断：是否到达本目标该检查的时机 */
+/** 检查节流判断（v4 起仅 goal_check 工具路径保留节流语义；事件路径只看中断）。
+ *  保留导出以免破坏既有引用形态；事件层不再调用。 */
 export function shouldCheck(
   goal: { status: string; turnsSinceCheck: number; lastCheckedAt: number; settings: { checkEveryNTurns: number } },
   now: number,

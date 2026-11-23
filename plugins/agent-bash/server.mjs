@@ -342,10 +342,8 @@ export function createServerPart(options = {}) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'tool exec disabled by config', code: 'EXEC_DISABLED' }));
     }
-    if (inflight) {
-      res.writeHead(429, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'another command is still running', code: 'EXEC_BUSY' }));
-    }
+    // 并发 1 的排队/自杀逻辑在 ⑦（cwd 校验之后、spawn 之前）——这里不再直接 429，
+    // 见 ⑦ 注释（2026-11-23 一条卡住命令拖死后续全部工具调用的转录教训）。
 
     let body;
     try {

@@ -1,5 +1,5 @@
 {
-  "version": "17",
+  "version": "18",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -192,7 +192,8 @@
         "cap.agent.loop"
       ],
       "provides": [
-        "cap.tool.goal"
+        "cap.tool.goal",
+        "cap.tool.goal-check"
       ],
       "events": [
         "cap.agent.loop:event",

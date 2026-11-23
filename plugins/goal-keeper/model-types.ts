@@ -34,6 +34,8 @@ export interface GoalRecord {
   /** 自上次检查以来经历的对话轮数 */
   turnsSinceCheck: number;
   checkCount: number;
+  /** 连续判「达成」的次数（达到 N 次自动关闭的保险丝） */
+  achievedStreak?: number;
   lastVerdict?: GoalVerdict;
   settings: GoalSettings;
 }
