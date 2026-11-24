@@ -10,26 +10,30 @@ interface PoolItem {
   prompt?: unknown;
   category?: unknown;
   enabled?: unknown;
+  source?: unknown;
 }
 
 /** 从 kv 池读取可展示建议；任何异常都回退 null（调用方用内置池兜底） */
-async function loadPoolSuggestions(): Promise<Suggestion[] | null> {
+async function loadPoolSuggestions(): Promise<{ items: Suggestion[]; builtinEnabled: boolean } | null> {
   try {
     const resp = await fetch('/api/kv/get?namespace=starter-suggestions&key=pool', { credentials: 'include' });
     if (!resp.ok) return null;
-    const j = (await resp.json()) as { value?: { items?: PoolItem[] } | null };
+    const j = (await resp.json()) as { value?: { items?: PoolItem[]; settings?: { builtinEnabled?: boolean } } | null };
     const items = j?.value?.items;
     if (!Array.isArray(items) || items.length === 0) return null;
+    const builtinEnabled = j?.value?.settings?.builtinEnabled !== false;
     const out: Suggestion[] = [];
     for (const it of items) {
       if (it?.enabled === false) continue;
+      // 池级开关：关闭「应用自带开场白」时过滤内置条目（AI/手动建议不受影响）
+      if (!builtinEnabled && it?.source === 'builtin') continue;
       const label = typeof it.label === 'string' ? it.label : '';
       const prompt = typeof it.prompt === 'string' ? it.prompt : '';
       if (!label || !prompt) continue;
       const category = (CATEGORY_LABEL as Record<string, string>)[String(it.category)] ? (it.category as CategoryId) : 'explore';
       out.push({ label, prompt, category });
     }
-    return out.length > 0 ? out : null;
+    return out.length > 0 ? { items: out, builtinEnabled } : null;
   } catch {
     return null;
   }
@@ -49,7 +53,7 @@ export function EmptyState({ variant }: { variant: 'no-session' | 'no-message' }
   useEffect(() => {
     let alive = true;
     void loadPoolSuggestions().then((remote) => {
-      if (alive && remote) setPool(remote);
+      if (alive && remote) setPool(remote.items);
     });
     return () => { alive = false; };
   }, []);

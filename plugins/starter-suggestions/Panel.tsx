@@ -4,7 +4,7 @@
  * 数据经 index.ts 的 kv 层（与 AI 工具同键空间），suggestions-changed 事件驱动刷新。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { loadPool, savePool, getPanelHostApi } from './index';
+import { loadPool, savePool, savePoolSettings, getPanelHostApi } from './index';
 import { SUGGESTIONS, CATEGORY_LABEL, type CategoryId, type StarterSuggestion } from '../shared/suggestion-types';
 
 /**
@@ -71,6 +71,7 @@ const EMPTY_DRAFT: Draft = { label: '', prompt: '', category: 'explore' };
 
 export function StarterSuggestionsPanel() {
   const [items, setItems] = useState<StarterSuggestion[]>([]);
+  const [builtinEnabled, setBuiltinEnabled] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null); // null=无编辑，'new'=新增
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [msg, setMsg] = useState<{ text: string; err?: boolean }>({ text: '' });
@@ -79,6 +80,7 @@ export function StarterSuggestionsPanel() {
   const refresh = useCallback(async () => {
     const pool = await loadPool();
     setItems(pool.items);
+    setBuiltinEnabled(pool.settings?.builtinEnabled !== false);
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -149,6 +151,15 @@ export function StarterSuggestionsPanel() {
     void refresh();
   };
 
+  /** 池级开关：关闭/开启「应用自带开场白」（内置 30 条）；AI/手动建议不受影响 */
+  const toggleBuiltin = async () => {
+    const next = !builtinEnabled;
+    setBuiltinEnabled(next); // 乐观更新
+    await savePoolSettings({ builtinEnabled: next });
+    flash(next ? '已开启应用自带开场白' : '已关闭应用自带开场白（仅显示 AI/手动建议）');
+    void refresh();
+  };
+
   /** 让 AI 生成一批：cap.ai.chat 流式总线（dispatch 只回投递确认，正文经 :event 事件流收集，对齐 voice-radio）；JSON 数组白名单校验入池 */
   const generateWithAi = async () => {
     if (generating) return;
@@ -201,6 +212,12 @@ export function StarterSuggestionsPanel() {
         <button className="primary" onClick={() => { setEditingId('new'); setDraft(EMPTY_DRAFT); }}>+ 新增</button>
         <button onClick={generateWithAi} disabled={generating}>{generating ? '生成中…' : 'AI 生成'}</button>
         <button onClick={resetBuiltin}>重置内置</button>
+        <button
+          onClick={toggleBuiltin}
+          title={builtinEnabled ? '隐藏应用自带的 30 条内置开场白（AI/手动建议仍显示）' : '恢复显示应用自带的 30 条内置开场白'}
+        >
+          {builtinEnabled ? '关闭自带开场白' : '开启自带开场白'}
+        </button>
         <span className="ss-count">{items.length} 条</span>
       </div>
 

@@ -29,6 +29,8 @@ export interface StarterSuggestion extends Suggestion {
 export interface SuggestionPool {
   version: 1;
   items: StarterSuggestion[];
+  /** 池级设置：builtinEnabled=false 时隐藏 source='builtin' 的条目（AI/手动建议不受影响） */
+  settings?: { builtinEnabled?: boolean };
 }
 
 /** 内置开场建议种子池（starter-suggestions 首次初始化与 chat-lite 兜底共用） */

@@ -64,18 +64,34 @@ export async function loadPool(): Promise<SuggestionPool> {
       source: 'builtin' as const,
       createdAt: new Date().toISOString(),
     })),
+    settings: { builtinEnabled: true },
   };
   await poolSet(seed);
   return seed;
 }
 
+/** 保存池条目并保留既有 settings（条目操作不碰池级开关） */
 export async function savePool(items: StarterSuggestion[]): Promise<SuggestionPool> {
-  const pool: SuggestionPool = { version: 1, items };
+  const prev = await poolGet();
+  const pool: SuggestionPool = { version: 1, items, settings: prev?.settings ?? { builtinEnabled: true } };
   await poolSet(pool);
-  // 变更通知：宿主事件总线 + 同页 DOM 事件双通道（面板即时刷新，对齐 pocket-ledger）
-  api?.emit('suggestions-changed', { count: items.length });
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('suggestions-changed'));
+  notifyChanged(items.length);
   return pool;
+}
+
+/** 保存池级设置（如关闭应用自带开场白） */
+export async function savePoolSettings(settings: { builtinEnabled: boolean }): Promise<SuggestionPool> {
+  const prev = await loadPool();
+  const pool: SuggestionPool = { ...prev, settings: { ...prev.settings, ...settings } };
+  await poolSet(pool);
+  notifyChanged(pool.items.length);
+  return pool;
+}
+
+/** 变更通知：宿主事件总线 + 同页 DOM 事件双通道（面板即时刷新，对齐 pocket-ledger） */
+function notifyChanged(count: number): void {
+  api?.emit('suggestions-changed', { count });
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('suggestions-changed'));
 }
 
 // ── 校验（白名单 + 长度 + 枚举） ────────────────────────────────────────
