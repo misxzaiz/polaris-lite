@@ -4,8 +4,64 @@
  * 数据经 index.ts 的 kv 层（与 AI 工具同键空间），suggestions-changed 事件驱动刷新。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { loadPool, savePool } from './index';
+import { loadPool, savePool, getPanelHostApi } from './index';
 import { SUGGESTIONS, CATEGORY_LABEL, type CategoryId, type StarterSuggestion } from '../shared/suggestion-types';
+
+/**
+ * cap.ai.chat 一次性调用：dispatch 只回「投递成功」，正文走 cap.ai.chat:event 流式收集
+ * （对齐 voice-radio controller 的下降沿收敛：message.done / loop.done / stream.error）。
+ * 独立 sessionId/messageId 防串台；超时兜底收敛，避免面板永远停在「生成中」。
+ */
+async function requestAiOnce(prompt: string, timeoutMs = 90_000): Promise<string> {
+  const hostApi = getPanelHostApi();
+  if (!hostApi) throw new Error('宿主 API 未就绪（插件尚未 setup）');
+
+  const sessionId = `ss-gen-${Date.now().toString(36)}`;
+  const messageId = `ss-msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return new Promise<string>((resolve, reject) => {
+    let text = '';
+    let settled = false;
+    let off: () => void = () => undefined;
+    const finishOk = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      off();
+      resolve(text);
+    };
+    const finishFail = (msg: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      off();
+      reject(new Error(msg));
+    };
+    const timer = setTimeout(() => finishFail(text ? '生成超时（已收到部分内容）' : '生成超时：AI 无响应'), timeoutMs);
+
+    off = hostApi.listen('cap.ai.chat:event', (raw) => {
+      const ev = (raw ?? {}) as { kind?: string; payload?: { sessionId?: string; messageId?: string; delta?: string; message?: string; interrupted?: boolean } };
+      const inner = ev.payload ?? {};
+      // 防串台：只消费本次生成轮次的事件
+      if (inner.sessionId && inner.sessionId !== sessionId) return;
+      if (inner.messageId && inner.messageId !== messageId) return;
+      if (ev.kind === 'message.delta' && inner.delta) {
+        text += inner.delta;
+      } else if (ev.kind === 'message.reasoning' || ev.kind === 'tool.card' || ev.kind === 'tool.result') {
+        // 思考流/工具卡不进正文
+      } else if (ev.kind === 'loop.done' || ev.kind === 'message.done') {
+        if (inner.interrupted) { finishFail('已中断'); return; }
+        finishOk();
+      } else if (ev.kind === 'stream.error') {
+        finishFail(inner.message ?? '流式请求失败');
+      }
+    });
+
+    void hostApi
+      .dispatch({ target: 'cap.ai.chat', action: 'start', payload: { sessionId, messageId, prompt, history: [] } })
+      .catch((err: unknown) => finishFail(err instanceof Error ? err.message : String(err)));
+  });
+}
 
 const CATEGORIES: CategoryId[] = ['explore', 'tools', 'code', 'write', 'think', 'play'];
 const SOURCE_LABEL: Record<StarterSuggestion['source'], string> = { builtin: '内置', ai: 'AI', user: '手动' };
@@ -93,7 +149,7 @@ export function StarterSuggestionsPanel() {
     void refresh();
   };
 
-  /** 让 AI 生成一批：走 cap.ai.chat 一次性调用，返回 JSON 数组后白名单校验入池 */
+  /** 让 AI 生成一批：cap.ai.chat 流式总线（dispatch 只回投递确认，正文经 :event 事件流收集，对齐 voice-radio）；JSON 数组白名单校验入池 */
   const generateWithAi = async () => {
     if (generating) return;
     setGenerating(true);
@@ -105,21 +161,7 @@ export function StarterSuggestionsPanel() {
         '每条含 label（短标题，不超过20字）和 prompt（用户点击后发给 AI 的完整提示词，不超过200字，具体可执行）。' +
         `已有建议（不要重复）：${JSON.stringify(existing)}。` +
         '只返回 JSON 数组，不要任何其他文字：[{"label":"...","prompt":"...","category":"explore|tools|code|write|think|play"}]';
-      const host = (window as unknown as { __polarisHostApi?: { dispatch: (req: unknown) => Promise<{ ok?: boolean; data?: { text?: string; content?: string } }> } }).__polarisHostApi
-        ?? null;
-      let text = '';
-      if (host) {
-        const res = await host.dispatch({ target: 'cap.ai.chat', action: 'start', payload: { prompt: instruction } });
-        text = res?.data?.text ?? res?.data?.content ?? '';
-      } else {
-        // 兜底：直连服务端 /api/ai（与 real-engine 同端点）
-        const resp = await fetch('/api/ai/chat', {
-          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: instruction, stream: false }),
-        });
-        const j = (await resp.json().catch(() => null)) as { text?: string; content?: string; data?: { text?: string; content?: string } } | null;
-        text = j?.data?.text ?? j?.data?.content ?? j?.text ?? j?.content ?? '';
-      }
+      const text = await requestAiOnce(instruction);
       const match = text.match(/\[[\s\S]*\]/);
       if (!match) throw new Error('AI 未返回有效 JSON 数组');
       const arr = JSON.parse(match[0]) as unknown;

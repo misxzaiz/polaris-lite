@@ -1,5 +1,5 @@
 {
-  "version": "25",
+  "version": "26",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -394,14 +394,16 @@
     },
     "starter-suggestions": {
       "capabilities": [
-        "cap.kv"
+        "cap.kv",
+        "cap.ai.chat"
       ],
       "provides": [
         "cap.tool.suggestions"
       ],
       "events": [
         "tool-registered",
-        "suggestions-changed"
+        "suggestions-changed",
+        "cap.ai.chat:event"
       ]
     }
   }

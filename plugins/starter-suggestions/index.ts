@@ -30,6 +30,11 @@ const VALID_CATEGORIES: CategoryId[] = ['explore', 'tools', 'code', 'write', 'th
 
 let api: SlotHostApi | null = null;
 
+/** 面板侧宿主 API 桥（Panel 与本模块同 bundle，直接共享 setup 注入的 api） */
+let panelApi: SlotHostApi | null = null;
+export function setPanelHostApi(a: SlotHostApi): void { panelApi = a; }
+export function getPanelHostApi(): SlotHostApi | null { return panelApi; }
+
 // ── kv 存取 ─────────────────────────────────────────────────────────────
 
 async function poolGet(): Promise<SuggestionPool | null> {
@@ -185,9 +190,9 @@ export const starterSuggestionsPlugin: LitePlugin = {
     id: 'starter-suggestions',
     name: '开场建议',
     version: '0.1.0',
-    capabilities: ['cap.kv'],
+    capabilities: ['cap.kv', 'cap.ai.chat'],
     provides: ['cap.tool.suggestions'],
-    events: ['tool-registered', 'suggestions-changed'],
+    events: ['tool-registered', 'suggestions-changed', 'cap.ai.chat:event'],
     contributes: {
       // title ≤4 字：panel tab 等分宽约 74px，长名会截断
       slots: [{ slot: 'panel', component: 'StarterSuggestionsPanel', order: 17, title: '开场白' }],
@@ -195,6 +200,7 @@ export const starterSuggestionsPlugin: LitePlugin = {
   },
   setup(a: SlotHostApi) {
     api = a;
+    setPanelHostApi(a);
     a.registerCapability.register('cap.tool.suggestions', createSuggestionsHandler());
     // 迟到广播兜底（loop 晚于本插件装配时也能发现工具）
     a.emit('tool-registered', { cap: 'cap.tool.suggestions', name: 'suggestions' });
