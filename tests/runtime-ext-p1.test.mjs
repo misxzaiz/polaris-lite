@@ -74,8 +74,10 @@ test('p1: mcp_server_add 契约——__tool 分发 + 服务端校验拒绝非法
     await mw({ url: path, method: 'POST', headers: {}, on(ev, cb) { if (ev === 'data' && chunks.length) cb(chunks.shift()); if (ev === 'end') cb(); return this; } }, res, () => {});
     try { return { status: res.code, json: JSON.parse(res.body) }; } catch { return { status: res.code, json: null }; }
   };
-  // add 合法
-  const ok = await call('/api/mcp/servers', { name: 'ai-made', command: 'node', args: ['x.js'], enabled: true });
+  // add 合法（args 须含已存在的脚本路径——服务端新增校验，用真实临时文件）
+  const scriptPath = join(root, 'x.js');
+  writeFileSync(scriptPath, '/* stub */\n');
+  const ok = await call('/api/mcp/servers', { name: 'ai-made', command: 'node', args: [scriptPath], enabled: true });
   assert.equal(ok.json.ok, true);
   const cfg = JSON.parse(readFileSync(join(dataDir, 'mcp-servers.json'), 'utf8'));
   assert.ok(cfg.servers['ai-made'], 'add 应落盘原生配置');

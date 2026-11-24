@@ -39,6 +39,8 @@ export function createServerPart(options = {}) {
 
   /** server name → client 运行态 */
   const clients = new Map();
+  /** server name → 连续启动/列工具失败次数（P2：连续 3 次自动禁用，防僵尸 server 拖慢每次聚合） */
+  const failStreak = new Map();
 
   function loadConfig() {
     try {
@@ -156,6 +158,14 @@ export function createServerPart(options = {}) {
     return st.tools;
   }
 
+  /** upsert/gate 后使运行态失效：kill 旧 client（下次 getClient 按新配置重建），
+   *  tools 缓存随 client 一起丢弃——否则改了配置仍用旧连接/旧工具表。 */
+  function invalidateClient(name) {
+    const st = clients.get(name);
+    if (st) { try { st.child?.kill(); } catch { /* 忽略 */ } clients.delete(name); }
+    failStreak.delete(name);
+  }
+
   async function shutdownAll() {
     for (const [name, st] of clients) {
       try { st.child?.kill(); } catch { /* 忽略 */ }
@@ -214,7 +224,7 @@ export function createServerPart(options = {}) {
           } else {
             status = 'disabled';
           }
-          servers.push({ name, command: s.command, args: s.args ?? [], enabled: s.enabled !== false, status, tools, toolError, source: s.source ?? 'native' });
+          servers.push({ name, command: s.command, args: s.args ?? [], enabled: s.enabled !== false, status, tools, toolError: s.lastError ?? toolError, source: s.source ?? 'native' });
         }
         return sendJson(200, { servers });
       }
@@ -222,13 +232,21 @@ export function createServerPart(options = {}) {
       if (pathname === '/api/mcp/servers' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
         let name = String(body.name ?? '').trim();
+        const autoNamed = !name;
         if (!name) name = 'mcp-' + Date.now().toString(36); // 模型常漏 name：自动补名并在结果中回显
         if (/[^a-zA-Z0-9_-]/.test(name)) return sendJson(400, { error: 'server 名不合法（仅字母数字_-），收到: ' + name });
         if (typeof body.command !== 'string' || !body.command.trim()) return sendJson(400, { error: 'command 必须为非空字符串' });
+        const args = Array.isArray(body.args) ? body.args.map(String) : [];
+        // 脚本参数必须是存在的文件路径（node/x.cjs 形态）——不存在的路径登记了也起不来，
+        // 第一时间拒绝并给出可行动的错误（E2E 实测：模型传错路径/漏 args 高发）。
+        const scriptArg = args.find((a) => /\.(cjs|mjs|js|py|exe|cmd|bat)$/i.test(a));
+        if (scriptArg && !existsSync(resolve(scriptArg))) {
+          return sendJson(400, { error: `脚本文件不存在: ${scriptArg}（args 需含 server 脚本的绝对路径）` });
+        }
         const cfg = loadConfig();
         cfg.servers[name] = {
           command: body.command.trim(),
-          args: Array.isArray(body.args) ? body.args.map(String) : [],
+          args,
           env: body.env && typeof body.env === 'object' ? body.env : {},
           cwd: body.cwd ? String(body.cwd) : undefined,
           enabled: body.enabled !== false,
@@ -236,8 +254,9 @@ export function createServerPart(options = {}) {
           source: 'native',
         };
         saveConfig(cfg);
+        invalidateClient(name); // 覆盖更新时旧连接/旧工具表立即失效
         audit({ kind: 'config', server: name, action: 'upsert' });
-        return sendJson(200, { ok: true });
+        return sendJson(200, { ok: true, name, autoNamed, args });
       }
 
       if (pathname === '/api/mcp/servers/remove' && req.method === 'POST') {
@@ -247,20 +266,23 @@ export function createServerPart(options = {}) {
         if (!cfg.servers[name]) return sendJson(404, { error: `server 不存在: ${name}` });
         delete cfg.servers[name];
         saveConfig(cfg);
-        const st = clients.get(name);
-        if (st) { try { st.child?.kill(); } catch { /* 忽略 */ } clients.delete(name); }
+        invalidateClient(name);
         audit({ kind: 'config', server: name, action: 'remove' });
         return sendJson(200, { ok: true });
       }
 
       if (pathname === '/api/mcp/tools' && req.method === 'GET') {
+        const refresh = new URL(req.url, 'http://x').searchParams.get('refresh') === '1';
         const cfg = loadConfig();
         const gates = loadGates();
         const tools = [];
+        let configDirty = false;
         for (const [name, s] of Object.entries(cfg.servers)) {
           if (s.enabled === false) continue;
+          if (refresh) invalidateClient(name);
           try {
             const list = await listServerTools(name, s);
+            failStreak.delete(name); // 启动/列工具成功：清零失败计数
             for (const t of list) {
               const full = `mcp__${name}__${t.name}`;
               if (gates[full] === false) continue; // per-tool 门控
@@ -273,9 +295,22 @@ export function createServerPart(options = {}) {
               });
             }
           } catch (e) {
-            audit({ kind: 'tools-list-error', server: name, message: String(e?.message ?? e) });
+            // P2：连续启动失败自动禁用（3 次）——僵尸 server 不再拖慢每次工具聚合；
+            // 面板可见（status=disabled + lastError），可手动重开。
+            const n = (failStreak.get(name) ?? 0) + 1;
+            failStreak.set(name, n);
+            if (n >= 3) {
+              s.enabled = false;
+              s.lastError = String(e?.message ?? e).slice(0, 200);
+              configDirty = true;
+              invalidateClient(name);
+              audit({ kind: 'auto-disable', server: name, reason: s.lastError });
+            } else {
+              audit({ kind: 'tools-list-error', server: name, message: String(e?.message ?? e) });
+            }
           }
         }
+        if (configDirty) saveConfig(cfg);
         return sendJson(200, { tools });
       }
 

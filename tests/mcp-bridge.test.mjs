@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerPart } from '../plugins/mcp-bridge/server.mjs';
@@ -145,4 +145,55 @@ test('mcp: PLITE_MCP=0 整体旁路', async (t) => {
   } finally {
     delete process.env.PLITE_MCP;
   }
+});
+
+test('mcp: upsert 覆盖更新使旧 client 失效（改配置后工具表即时更新）', async (t) => {
+  const { serverPath, call } = tempEnv(t);
+  await call('/api/mcp/servers', { name: 'fake', command: process.execPath, args: [serverPath] });
+  let tools = await call('/api/mcp/tools');
+  assert.ok(tools.json.tools.some((x) => x.name === 'mcp__fake__echo'), '首次应拉到 echo');
+
+  // 覆盖更新（同名换脚本）→ 旧 client 被杀，工具表按新配置重建
+  const up = await call('/api/mcp/servers', { name: 'fake', command: process.execPath, args: [serverPath, '--flag'] });
+  assert.equal(up.json.ok, true);
+  assert.equal(up.json.name, 'fake', '回执应带最终生效名');
+  tools = await call('/api/mcp/tools');
+  assert.ok(tools.json.tools.some((x) => x.name === 'mcp__fake__echo'), '更新后工具表应恢复');
+});
+
+test('mcp: 脚本路径不存在 → 400 拒绝（可行动错误），不产生僵尸配置', async (t) => {
+  const { call, dataDir } = tempEnv(t);
+  const bad = await call('/api/mcp/servers', { name: 'ghost', command: 'node', args: ['D:/nonexistent/no-such.cjs'] });
+  assert.equal(bad.status, 400);
+  assert.match(String(bad.json.error), /不存在/);
+  // 坏路径被拒绝时不落盘：要么没有配置文件，要么没有 ghost 条目
+  const cfgPath = join(dataDir, 'mcp-servers.json');
+  if (existsSync(cfgPath)) {
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    assert.ok(!cfg.servers.ghost, '坏路径不应落盘');
+  }
+});
+
+test('mcp: 漏 name 自动补名并在回执回显（autoNamed）', async (t) => {
+  const { serverPath, call } = tempEnv(t);
+  const r = await call('/api/mcp/servers', { command: process.execPath, args: [serverPath] });
+  assert.equal(r.json.ok, true);
+  assert.match(r.json.name, /^mcp-/, '自动补名应回显');
+  assert.equal(r.json.autoNamed, true);
+});
+
+test('mcp: 连续 3 次启动失败自动禁用（僵尸 server 不再拖慢聚合）', async (t) => {
+  const { call, dataDir, root } = tempEnv(t);
+  // 造一个「能通过路径校验、但启动即退」的脚本（不是缺文件——那会在登记时被 400 拒绝）
+  const deadPath = join(root, 'dead-server.cjs');
+  writeFileSync(deadPath, 'process.exit(1);\n');
+  await call('/api/mcp/servers', { name: 'dead', command: process.execPath, args: [deadPath] });
+  // 连续 3 次 tools 聚合失败 → 自动禁用
+  for (let i = 0; i < 3; i += 1) await call('/api/mcp/tools');
+  const cfg = JSON.parse(readFileSync(join(dataDir, 'mcp-servers.json'), 'utf8'));
+  assert.equal(cfg.servers.dead.enabled, false, '连续失败 3 次应自动禁用');
+  assert.ok(cfg.servers.dead.lastError, '应记录 lastError');
+  // 第 4 次聚合：已禁用的 server 不再尝试（不再产生失败）
+  const tools = await call('/api/mcp/tools');
+  assert.ok(!tools.json.tools.some((x) => x.name.startsWith('mcp__dead__')));
 });

@@ -38,14 +38,14 @@ const MCP_OPS_DESCRIPTORS: McpToolDescriptor[] = [
     name: 'mcp_server_add',
     description:
       '登记一个 MCP server（stdio）。写入后立即生效：下一轮对话其工具（mcp__<server>__<tool>）即可用。' +
-      '危险操作需用户审批。command 须为可执行命令（如 node），args 为字符串数组。' +
-      '调用示例：{"name":"my-server","command":"node","args":["D:/path/to/server.cjs"]}——name 必填且只能字母数字_-；args 必须含脚本绝对路径。',
+      '危险操作需用户审批。command 须为可执行命令（如 node），args 为字符串数组，且必须包含 server 脚本已存在的绝对路径（路径不存在会被拒绝）。' +
+      '调用示例：{"name":"my-server","command":"node","args":["D:/path/to/server.cjs"]}——name 必填且只能字母数字_-。',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'server 名（仅字母数字_-，将出现在工具名 mcp__<name>__* 中）' },
         command: { type: 'string', description: '启动命令（如 node / npx）' },
-        args: { type: 'array', items: { type: 'string' }, description: '命令参数数组' },
+        args: { type: 'array', items: { type: 'string' }, description: '命令参数数组，必须含已存在的脚本绝对路径' },
       },
       required: ['name', 'command'],
     },
@@ -103,10 +103,13 @@ function createMcpOpsHandler(api: SlotHostApi): CapabilityHandler {
               enabled: true,
             }),
           });
-          const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+          const j = (await resp.json().catch(() => null)) as { ok?: boolean; error?: string; name?: string; autoNamed?: boolean; args?: string[] } | null;
           if (!resp.ok || !j?.ok) return { ok: false, error: j?.error ?? `HTTP ${resp.status}` };
-          emitToolsChanged(api, String(payload.name ?? ''), 'add');
-          return { ok: true, stdout: `[已登记 MCP server ${String(payload.name)}] 其工具将在下一轮对话中可用。`, exitCode: 0 };
+          // 回执带最终生效的 server 名与参数：漏 name 被自动补名/参数被归一时模型才知道真相。
+          const finalName = String(j.name ?? payload.name ?? '');
+          emitToolsChanged(api, finalName, 'add');
+          const autoNote = j.autoNamed ? '（调用未带 name，已自动补名）' : '';
+          return { ok: true, stdout: `[已登记 MCP server ${finalName}]${autoNote} command=${String(payload.command)} args=${JSON.stringify(j.args ?? payload.args ?? [])}。其工具将在下一轮对话中可用。`, exitCode: 0 };
         }
         if (op === 'mcp_server_remove') {
           const resp = await fetch('/api/mcp/servers/remove', {
@@ -121,10 +124,15 @@ function createMcpOpsHandler(api: SlotHostApi): CapabilityHandler {
           return { ok: true, stdout: `[已移除 MCP server ${String(payload.name)}]`, exitCode: 0 };
         }
         if (op === 'mcp_server_list') {
-          const resp = await fetch('/api/mcp/active', { credentials: 'include' });
-          const j = (await resp.json().catch(() => null)) as { mcpServers?: { server_name: string; command: string; args: string[] }[] } | null;
-          const lines = (j?.mcpServers ?? []).map((s) => `- ${s.server_name}: ${s.command} ${s.args.join(' ')}`);
-          return { ok: true, stdout: lines.length ? lines.join('\n') : '（无已启用的 MCP server）', exitCode: 0 };
+          // 用完整列表（含每 server 的工具名）而非 active 精简形态：模型自省时
+          // 直接看到可调用的 mcp__<server>__<tool> 全名，不用再猜前缀。
+          const resp = await fetch('/api/mcp/servers', { credentials: 'include' });
+          const j = (await resp.json().catch(() => null)) as { servers?: { name: string; command: string; args: string[]; enabled: boolean; status: string; tools: { name: string }[] }[] } | null;
+          const lines = (j?.servers ?? []).map((s) => {
+            const toolNames = s.tools.map((t) => t.name).join(', ');
+            return `- ${s.name} [${s.enabled ? s.status : 'disabled'}]: ${s.command} ${s.args.join(' ')}${toolNames ? `\n  工具: ${toolNames}` : ''}`;
+          });
+          return { ok: true, stdout: lines.length ? lines.join('\n') : '（无已登记的 MCP server）', exitCode: 0 };
         }
         return { ok: false, error: `未知操作: ${op || '(缺 __tool)'}` };
       }
@@ -135,20 +143,19 @@ function createMcpOpsHandler(api: SlotHostApi): CapabilityHandler {
   };
 }
 
-function createMcpToolHandler(): CapabilityHandler {
-  return async (req) => {
-    if (req.action === 'describe') {
-      try {
-        const resp = await fetch('/api/mcp/tools', { credentials: 'include' });
-        const j = (await resp.json().catch(() => null)) as { tools?: McpToolDescriptor[] } | null;
-        // 临时诊断：定位 mcp__ 工具未进模型工具表的问题（验证后移除）
-        try { localStorage.setItem('mcp-debug-describe', JSON.stringify({ at: new Date().toISOString(), status: resp.status, names: (j?.tools ?? []).map(t => t.name) })); } catch { /* 忽略 */ }
-        return { descriptors: j?.tools ?? [] };
-      } catch (e) {
-        try { localStorage.setItem('mcp-debug-describe', JSON.stringify({ at: new Date().toISOString(), failed: e instanceof Error ? e.message : String(e) })); } catch { /* 忽略 */ }
-        return { descriptors: [] };
+  function createMcpToolHandler(): CapabilityHandler {
+    return async (req) => {
+      if (req.action === 'describe') {
+        try {
+          // 刚增删/门控过 server 时走 refresh=1：服务端丢弃旧 client 与 tools 缓存，
+          // 新工具当轮即可见（否则 tools/list 永久缓存，模型会看到「工具未注册」的假象）。
+          const resp = await fetch('/api/mcp/tools?refresh=1', { credentials: 'include' });
+          const j = (await resp.json().catch(() => null)) as { tools?: McpToolDescriptor[] } | null;
+          return { descriptors: j?.tools ?? [] };
+        } catch (e) {
+          return { descriptors: [] };
+        }
       }
-    }
     if (req.action === 'exec') {
       const payload = (req.payload ?? {}) as { name?: string; arguments?: Record<string, unknown> };
       const name = String(payload.name ?? '');

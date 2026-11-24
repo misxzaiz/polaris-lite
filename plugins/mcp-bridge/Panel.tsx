@@ -78,7 +78,16 @@ export function McpPanel() {
     if (!form.name.trim() || !form.command.trim()) return;
     setBusy(true);
     try {
-      const args = form.args.split('\n').map((s) => s.trim()).filter(Boolean);
+      // args 兼容两种输入：JSON 数组粘贴（["a","b"]）或每行一个
+      let args: string[] = [];
+      const raw = form.args.trim();
+      if (raw.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) args = parsed.map(String).filter(Boolean);
+        } catch { /* 非 JSON：按行解析兜底 */ }
+      }
+      if (!args.length) args = raw.split('\n').map((s) => s.trim()).filter(Boolean);
       await admin('add', { name: form.name.trim(), command: form.command.trim(), args, enabled: true });
       setForm({ name: '', command: '', args: '' });
       setShowForm(false);
@@ -144,7 +153,7 @@ export function McpPanel() {
           {servers.map((s) => (
             <div key={s.name} className="mcp-server">
               <div className="mcp-server-head" onClick={() => setExpanded(expanded === s.name ? null : s.name)}>
-                <span className={`mcp-dot ${s.status}`}>{s.status === 'connected' ? '[ok]' : s.status === 'error' ? '[err]' : '[--]'}</span>
+                <span className={`mcp-dot ${s.status}`}>{s.status === 'connected' ? '[ok]' : s.status === 'error' ? '[err]' : s.status === 'disabled' ? '[off]' : '[--]'}</span>
                 <span className="mcp-server-name">{s.name}</span>
                 <span className="mcp-badge">{s.source}</span>
                 <span className="mcp-count">{s.tools.length} 工具</span>
@@ -187,7 +196,7 @@ export function McpPanel() {
             <div className="mcp-form">
               <input className="mcp-input" placeholder="名称（字母数字_-）" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input className="mcp-input" placeholder="command（如 node）" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} />
-              <textarea className="mcp-input" placeholder="args 每行一个（路径可用 ${WORKSPACE}）" value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })} rows={3} />
+              <textarea className="mcp-input" placeholder={'args 每行一个，或直接粘贴 JSON 数组\n如 ["D:/path/server.cjs"]（路径须已存在）'} value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })} rows={3} />
               <div className="mcp-form-actions">
                 <button className="mcp-btn primary" disabled={busy || !form.name.trim() || !form.command.trim()} onClick={addServer}>保存</button>
                 <button className="mcp-btn" onClick={() => setShowForm(false)}>取消</button>

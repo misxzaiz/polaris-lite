@@ -1142,14 +1142,20 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           // workspace，绑定的 world3d 形同虚设（2026-11-22 长任务实测发现）。
           // cap.tool.skill（read_skill）：参数是 {name}，同样会被 safeArgs 剥掉 → 走完整透传
           // （hookArgsOf，与 A3 钩子入参同一透传器；工具 describe 的 parameters 已约束形状）。
+          // cap.tool.mcp-ops（mcp_server_add/remove/list）：参数是 {name,command,args}，
+          // safeArgs 只留 command/timeoutMs 会把 name/args 剥没（E2E 实测：name=undefined
+          // 被服务端自动补名成 mcp-xxx、args=[]，产出永远起不来的僵尸 server）→ 同样完整透传。
           const filesWriteArgs = desc.cap === 'cap.tool.files-write' ? safeArgsFilesWrite(call.arguments) : null;
           const payload = desc.cap === 'cap.tool.files-write'
             ? { ...filesWriteArgs, ...(filesWriteArgs?.rootId ? {} : { rootId: boundRootId }), sessionId, approved: true }
             : desc.cap === 'cap.tool.skill'
               ? { ...hookArgsOf(call.arguments), sessionId, approved: true }
-              : desc.cap === 'cap.tool.mcp'
-                ? { name: call.name, arguments: hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
-              : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
+              : desc.cap === 'cap.tool.mcp-ops'
+                // mcp_server_add/remove/list 按 __tool 分发（同 cap.tool.mcp 的聚合路由约定）
+                ? { ...hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
+                : desc.cap === 'cap.tool.mcp'
+                  ? { name: call.name, arguments: hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
+                  : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
           // EXEC_BUSY（agent-bash 全局单飞锁）：模型并行/连续开火时高发——编排层做
           // 短退避重试（≤2 次 × 2s），对模型透明；比把原始错误甩给模型省两轮修复。
           exec = { ok: false, error: 'exec not attempted' };
