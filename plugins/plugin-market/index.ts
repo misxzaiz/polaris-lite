@@ -23,7 +23,7 @@ const MARKET_TOOL_DESCRIPTORS = [
   {
     cap: 'cap.market.tool',
     name: 'market_list',
-    description: '列出商城源里可安装的插件及安装状态。',
+    description: '列出商城源里可安装的插件及安装状态（含 Claude Code 商城：source 为 marketplace 名、id 为插件名的条目标记为 (cc)）。',
     parameters: { type: 'object', properties: {} },
     danger: 'read' as const,
   },
@@ -31,13 +31,17 @@ const MARKET_TOOL_DESCRIPTORS = [
     cap: 'cap.market.tool',
     name: 'market_install',
     description:
-      '从商城源安装插件（source 为已登记源名，id 为插件 id）。安装经过 sha256 校验；' +
-      '前端半边刷新页面生效。注意：安装即运行外部代码，只安装可信来源。',
+      '从商城安装插件。两种源：' +
+      '（1）普通目录源——source 为已登记源名，安装其 plugin.js bundle（运行外部代码，只装可信来源）；' +
+      '（2）Claude Code 商城——source 直接填 marketplace 名（如 claude-plugins-official），仅导入其声明型资源' +
+      '（skills → 技能、hooks → 钩子桥、stdio mcpServers → MCP 桥），不运行外部 JS；只支持本地已 checkout 的插件。' +
+      'target 决定作用域：global（默认，所有会话可见）/ project（仅当前激活项目工作区可见）。',
     parameters: {
       type: 'object',
       properties: {
-        source: { type: 'string', description: '商城源名' },
+        source: { type: 'string', description: '商城源名或 CC marketplace 名' },
         id: { type: 'string', description: '插件 id' },
+        target: { type: 'string', description: '作用域：global（默认）| project', enum: ['global', 'project'] },
       },
       required: ['source', 'id'],
     },
@@ -65,20 +69,41 @@ function createMarketToolHandler(): CapabilityHandler {
       try {
         if (op === 'market_list') {
           const r = await fetch('/api/market/list', { credentials: 'include' });
-          const j = (await r.json().catch(() => null)) as { items?: { id: string; name: string; version: string; installed: boolean }[] } | null;
+          const j = (await r.json().catch(() => null)) as {
+            items?: { id: string; name: string; version: string; installed: boolean }[];
+            ccMarkets?: { name: string; pluginCount: number; installableCount: number; plugins: { id: string; installable: boolean }[] }[];
+          } | null;
           const lines = (j?.items ?? []).map((i) => '- ' + i.id + ' v' + i.version + (i.installed ? ' [已安装]' : ''));
-          return { ok: true, stdout: lines.length ? lines.join('\n') : '（商城暂无插件）', exitCode: 0 };
+          const ccLines: string[] = [];
+          for (const m of j?.ccMarkets ?? []) {
+            ccLines.push(`[CC商城 ${m.name}] 共 ${m.pluginCount} 个，本地可装 ${m.installableCount} 个：`);
+            for (const p of m.plugins.filter((x) => x.installable)) ccLines.push('- (cc) ' + p.id);
+          }
+          const all = [...lines, ...ccLines];
+          return { ok: true, stdout: all.length ? all.join('\n') : '（商城暂无插件）', exitCode: 0 };
+        }
+        if (op === 'market_cc_install') {
+          const r = await fetch('/api/market/cc-install', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ market: payload.market, id: payload.id }),
+          });
+          const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string; parts?: number; log?: string[] } | null;
+          if (!r.ok || !j?.ok) return { ok: false, error: j?.error ?? 'HTTP ' + r.status };
+          return { ok: true, stdout: `[已导入 CC 插件 ${String(payload.id)}] ${((j.log ?? []).join('；')) || '无资源'}。skills 即刻生效；hooks/mcpServers 下轮会话生效。`, exitCode: 0 };
         }
         if (op === 'market_install') {
           const r = await fetch('/api/market/install', {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source: payload.source, id: payload.id }),
+            body: JSON.stringify({ source: payload.source, id: payload.id, target: payload.target ?? 'global' }),
           });
-          const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string; note?: string } | null;
+          const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string; note?: string; scope?: string; project?: string } | null;
           if (!r.ok || !j?.ok) return { ok: false, error: j?.error ?? 'HTTP ' + r.status };
-          return { ok: true, stdout: '[已安装 ' + String(payload.id) + '] 前端半边刷新页面生效；server 半边重启服务生效。', exitCode: 0 };
+          const scopeNote = j.scope === 'project' ? `（项目级：${j.project}）` : '（全局）';
+          return { ok: true, stdout: '[已安装 ' + String(payload.id) + '] ' + scopeNote + ' ' + String(j.note ?? '') + '。前端 bundle 类插件刷新页面生效；server 半边重启生效。', exitCode: 0 };
         }
         if (op === 'market_uninstall') {
           const r = await fetch('/api/market/uninstall', {

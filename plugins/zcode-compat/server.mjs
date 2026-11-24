@@ -19,7 +19,7 @@
  * 展开后 path.resolve 归一。ZCode 遗留字段迁移（remote→http 等）；http/sse 跳过+warn（P3 再接）。
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync } from 'node:fs';
-import { join, resolve, isAbsolute, basename } from 'node:path';
+import { join, resolve, isAbsolute, basename, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 export function createServerPart(options = {}) {
@@ -209,11 +209,77 @@ export function createServerPart(options = {}) {
     return { found, warns };
   }
 
+  /** CC 商城发现（~/.claude/plugins/marketplaces/<name>/.claude-plugin/marketplace.json）。
+   *  清单条目 + 本地 checkout 补集（个别插件在 plugins/ 下有目录但未列入清单）。
+   *  只列「本地已 checkout」的插件可安装——git-subdir/url 条目没有本地副本，标注 source 供面板提示。 */
+  function discoverCcMarket() {
+    const home = homedir();
+    const marketsRoot = join(home, '.claude', 'plugins', 'marketplaces');
+    const warns = [];
+    const markets = [];
+    if (!existsSync(marketsRoot)) return { markets, warns };
+    let names;
+    try { names = readdirSync(marketsRoot); } catch { return { markets, warns }; }
+    for (const mname of names) {
+      const mroot = join(marketsRoot, mname);
+      let isDir = false;
+      try { isDir = statSync(mroot).isDirectory(); } catch { continue; }
+      if (!isDir) continue;
+      const mf = readJsonSafe(join(mroot, '.claude-plugin', 'marketplace.json'));
+      if (!mf || !Array.isArray(mf.plugins)) { warns.push(`cc-market ${mname}: marketplace.json 不可读，跳过`); continue; }
+      const plugins = [];
+      const seen = new Set();
+      for (const p of mf.plugins) {
+        if (!p || typeof p.name !== 'string' || !p.name) continue;
+        // source: './plugins/xxx' 相对目录（本地已 checkout）→ 可安装；git-subdir/url → 仅展示
+        const src = p.source;
+        const localRel = typeof src === 'string' && src.startsWith('./') ? src.slice(2) : '';
+        const localDir = localRel ? join(mroot, localRel) : '';
+        const installable = localRel && existsSync(join(localDir, '.claude-plugin', 'plugin.json'));
+        seen.add(p.name);
+        plugins.push({
+          id: p.name,
+          name: p.name,
+          description: String(p.description ?? ''),
+          version: String(p.version ?? ''),
+          sourceKind: installable ? 'local' : (src && typeof src === 'object' ? String(src.source ?? 'remote') : 'remote'),
+          installable,
+          localDir: installable ? localDir : '',
+        });
+      }
+      // 本地 checkout 补集：plugins/<name>/ 有 manifest 但清单未列（如 example-plugin）→ 同样可安装
+      const localPluginsDir = join(mroot, 'plugins');
+      if (existsSync(localPluginsDir)) {
+        let extras;
+        try { extras = readdirSync(localPluginsDir); } catch { extras = []; }
+        for (const name of extras) {
+          if (seen.has(name)) continue;
+          const dir = join(localPluginsDir, name);
+          if (!existsSync(join(dir, '.claude-plugin', 'plugin.json'))) continue;
+          const manifest = readJsonSafe(join(dir, '.claude-plugin', 'plugin.json'));
+          seen.add(name);
+          plugins.push({
+            id: name,
+            name,
+            description: String(manifest?.description ?? ''),
+            version: String(manifest?.version ?? ''),
+            sourceKind: 'local',
+            installable: true,
+            localDir: dir,
+          });
+        }
+      }
+      markets.push({ name: mname, owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, plugins });
+    }
+    return { markets, warns };
+  }
+
   function scanAll() {
     const mcp = discoverMcp();
     const skills = discoverSkills();
     const hooks = discoverHooks();
     const plugins = discoverPlugins();
+    const ccMarket = discoverCcMarket();
     return {
       mcp: Object.entries(mcp.merged).map(([name, s]) => ({ name, command: s.command, args: s.args, enabled: s.enabled, source: s.source })),
       skills: skills.found.map(({ name, source, dir }) => ({ name, source, dir })),
@@ -224,7 +290,14 @@ export function createServerPart(options = {}) {
         skills: Array.isArray(manifest.skills) ? manifest.skills.length : (manifest.skills ? Object.keys(manifest.skills).length : 0),
         hooks: Boolean(manifest.hooks),
       })),
-      warns: [...mcp.warns, ...skills.warns, ...hooks.warns, ...plugins.warns],
+      ccMarkets: ccMarket.markets.map((m) => ({
+        name: m.name,
+        owner: m.owner,
+        pluginCount: m.pluginCount,
+        installableCount: m.plugins.filter((p) => p.installable).length,
+        plugins: m.plugins.map((p) => ({ id: p.id, description: p.description, sourceKind: p.sourceKind, installable: p.installable })),
+      })),
+      warns: [...mcp.warns, ...skills.warns, ...hooks.warns, ...plugins.warns, ...ccMarket.warns],
     };
   }
 
@@ -307,6 +380,144 @@ export function createServerPart(options = {}) {
     return { ok: true, log, warns };
   }
 
+  /** CC 商城插件安装（声明型资源三件套导入，不运行外部 JS）：
+   *  skills → <dataDir>/skills/compat-cc-<id>-<skill>/；hooks → 归并进 hooks-import.json；
+   *  mcpServers → mcp-servers.json（cc-<id>-<name> 条目，原生格式）。
+   *  localDir 必须来自 discoverCcMarket 的白名单校验（本地已 checkout 且 manifest 存在）。 */
+  function importCcPlugin(marketName, pluginId, target = 'global') {
+    const { markets } = discoverCcMarket();
+    const market = markets.find((m) => m.name === marketName);
+    if (!market) return { error: `CC 商城不存在：${marketName}` };
+    const entry = market.plugins.find((p) => p.id === pluginId);
+    if (!entry) return { error: `CC 商城 ${marketName} 中不存在插件：${pluginId}` };
+    if (!entry.installable) return { error: `插件 ${pluginId} 无本地副本（source=${entry.sourceKind}），无法安装——只有本地 checkout 的插件可装` };
+    const dir = entry.localDir;
+    const scope = target === 'project' ? 'project' : 'global';
+    // 项目级落点：当前激活 workspace（builtin workspace 不算项目级——那是全局兜底目录）
+    let ws = '';
+    if (scope === 'project') {
+      ws = workspaceDir();
+      if (!ws || ws === join(dataDir, 'workspace')) {
+        return { error: '当前无激活的项目工作区（builtin workspace 不算项目级作用域）——请先在文件面板登记并切换到项目工作区' };
+      }
+    }
+    const log = [];
+    const warns = [];
+    let parts = 0;
+
+    // 1) skills：插件 skills/<name>/SKILL.md → 全局 <dataDir>/skills/compat-cc-* / 项目级 <ws>/.claude/skills/cc-*
+    const skillsDir = join(dir, 'skills');
+    if (existsSync(skillsDir)) {
+      let names;
+      try { names = readdirSync(skillsDir); } catch { names = []; }
+      for (const sk of names) {
+        const srcDir = join(skillsDir, sk);
+        if (!existsSync(join(srcDir, 'SKILL.md'))) continue;
+        const dest = scope === 'project'
+          ? join(ws, '.claude', 'skills', `cc-${pluginId}-${sk}`)
+          : join(dataDir, 'skills', `compat-cc-${pluginId}-${sk}`);
+        try {
+          mkdirSync(dest, { recursive: true });
+          copyFileSync(join(srcDir, 'SKILL.md'), join(dest, 'SKILL.md'));
+          parts += 1;
+        } catch (e) { warns.push(`skill ${sk} 复制失败: ${e?.message ?? e}`); }
+      }
+      log.push(`skills 导入完成（${scope === 'project' ? '项目级' : '全局'}）`);
+    }
+
+    // 2) hooks：hooks/hooks.json（CC 形态 {hooks:{...}}/{events:{...}}）→
+    //    全局归并 hooks-import.json；项目级并入 <ws>/.claude/settings.json 的 hooks 键（hook-bridge 直接扫）
+    const hooksJson = readJsonSafe(join(dir, 'hooks', 'hooks.json')) ?? readJsonSafe(join(dir, 'hooks', 'hooks.local.json'));
+    if (hooksJson) {
+      const events = hooksJson.events ?? hooksJson.hooks ?? null;
+      if (events && typeof events === 'object') {
+        let merged = 0;
+        const expanded = [];
+        for (const [ev, matchers] of Object.entries(events)) {
+          if (!Array.isArray(matchers)) continue;
+          for (const m of matchers) {
+            if (m && typeof m === 'object') {
+              // ${CLAUDE_PLUGIN_ROOT} → 插件目录（hook-bridge 按字面 command 执行）
+              const s = JSON.stringify(m).replaceAll('${CLAUDE_PLUGIN_ROOT}', dir.replaceAll('\\', '/'));
+              expanded.push([ev, JSON.parse(s)]);
+              merged += 1;
+            }
+          }
+        }
+        if (merged > 0) {
+          if (scope === 'project') {
+            const settingsPath = join(ws, '.claude', 'settings.json');
+            const cur = readJsonSafe(settingsPath) ?? {};
+            cur.hooks = cur.hooks ?? {};
+            for (const [ev, m] of expanded) { cur.hooks[ev] = cur.hooks[ev] ?? []; cur.hooks[ev].push(m); }
+            mkdirSync(dirname(settingsPath), { recursive: true });
+            writeFileSync(settingsPath, JSON.stringify(cur, null, 2) + '\n');
+          } else {
+            const importPath = join(dataDir, 'hooks-import.json');
+            const cur = readJsonSafe(importPath) ?? { events: {} };
+            cur.events = cur.events ?? {};
+            for (const [ev, m] of expanded) { cur.events[ev] = cur.events[ev] ?? []; cur.events[ev].push(m); }
+            writeFileSync(importPath, JSON.stringify(cur, null, 2) + '\n');
+          }
+          parts += merged;
+          log.push(`hooks 合并 ${merged} 条（${scope === 'project' ? '项目级' : '全局'}）`);
+        }
+      }
+    }
+
+    // 3) mcpServers：.mcp.json → 全局 mcp-servers.json（cc-<id>-<name>）/ 项目级 <ws>/.mcp.json（CC 原生形态，discoverMcp 的 project:.mcp.json 源直接扫）
+    const mcpJson = readJsonSafe(join(dir, '.mcp.json'));
+    if (mcpJson?.mcpServers && typeof mcpJson.mcpServers === 'object') {
+      if (scope === 'project') {
+        const projMcpPath = join(ws, '.mcp.json');
+        const cur = readJsonSafe(projMcpPath) ?? { mcpServers: {} };
+        cur.mcpServers = cur.mcpServers ?? {};
+        for (const [name, raw] of Object.entries(mcpJson.mcpServers)) {
+          if (!raw || typeof raw !== 'object') { warns.push(`mcp ${name}: 非对象，跳过`); continue; }
+          const type = raw.type ?? (raw.command ? 'stdio' : raw.url ? 'http' : null);
+          if (type !== 'stdio') { warns.push(`mcp ${name}: 传输 ${type ?? '未知'} 暂不支持，跳过（仅 stdio）`); continue; }
+          cur.mcpServers[name] = raw; // 原样落盘（CC 项目级 .mcp.json 原生格式；同名让位由 discoverMcp 把关）
+          parts += 1;
+        }
+        if (Object.keys(cur.mcpServers).length > 0) {
+          mkdirSync(dirname(projMcpPath), { recursive: true });
+          writeFileSync(projMcpPath, JSON.stringify(cur, null, 2) + '\n');
+          log.push(`mcpServers 导入完成（项目级 .mcp.json）`);
+        }
+      } else {
+        const cfgPath = join(dataDir, 'mcp-servers.json');
+        const cfg = readJsonSafe(cfgPath) ?? { servers: {} };
+        cfg.servers = cfg.servers ?? {};
+        for (const [name, raw] of Object.entries(mcpJson.mcpServers)) {
+          if (!raw || typeof raw !== 'object') { warns.push(`mcp ${name}: 非对象，跳过`); continue; }
+          const type = raw.type ?? (raw.command ? 'stdio' : raw.url ? 'http' : null);
+          if (type !== 'stdio') { warns.push(`mcp ${name}: 传输 ${type ?? '未知'} 暂不支持，跳过（仅 stdio）`); continue; }
+          if (typeof raw.command !== 'string' || !raw.command.trim()) { warns.push(`mcp ${name}: 无 command，跳过`); continue; }
+          cfg.servers[`cc-${pluginId}-${name}`] = {
+            command: String(raw.command),
+            args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+            env: raw.env && typeof raw.env === 'object' ? raw.env : {},
+            enabled: true,
+            timeoutMs: 30000,
+            source: 'native',
+          };
+          parts += 1;
+        }
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+        log.push(`mcpServers 导入完成（全局）`);
+      }
+    }
+
+    if (parts === 0) {
+      return { error: `插件 ${pluginId} 没有可导入的声明型资源（skills/hooks/mcpServers 均为空）` };
+    }
+    return {
+      ok: true, id: pluginId, market: marketName, scope, parts, log, warns,
+      ...(scope === 'project' ? { project: ws } : {}),
+      note: scope === 'project' ? `已导入到项目 ${ws}：skills/hooks 即刻生效；mcpServers 下轮会话生效` : '已导入（全局）：skills 即刻生效；hooks/mcpServers 下轮会话生效',
+    };
+  }
+
   return async function compatApi(req, res, next) {
     if (hardOff) return next?.();
     const [pathname] = (req.url ?? '').split('?');
@@ -331,6 +542,16 @@ export function createServerPart(options = {}) {
     try {
       if (pathname === '/api/compat/scan' && req.method === 'GET') {
         return sendJson(200, scanAll());
+      }
+      if (pathname === '/api/compat/cc-market' && req.method === 'GET') {
+        const { markets, warns } = discoverCcMarket();
+        return sendJson(200, { markets, warns });
+      }
+      if (pathname === '/api/compat/cc-market/install' && req.method === 'POST') {
+        const body = JSON.parse((await readBody()) || '{}');
+        const r = importCcPlugin(String(body.market ?? ''), String(body.id ?? ''), String(body.target ?? 'global'));
+        if (r.error) return sendJson(400, r);
+        return sendJson(200, r);
       }
       if (pathname === '/api/compat/import' && req.method === 'POST') {
         await readBody(); // 无参数；导入即确认

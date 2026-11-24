@@ -28,6 +28,18 @@ interface MarketSource {
   type: string;
   ref: string;
 }
+interface CcPlugin {
+  id: string;
+  description: string;
+  installable: boolean;
+}
+interface CcMarket {
+  name: string;
+  owner: string;
+  pluginCount: number;
+  installableCount: number;
+  plugins: CcPlugin[];
+}
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const resp = await fetch(path, {
@@ -42,9 +54,11 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export function MarketPanel() {
-  const [tab, setTab] = useState<'store' | 'installed' | 'sources' | 'about'>('store');
+  const [tab, setTab] = useState<'store' | 'cc' | 'installed' | 'sources' | 'about'>('store');
   const [items, setItems] = useState<MarketItem[]>([]);
   const [sources, setSources] = useState<MarketSource[]>([]);
+  const [ccMarkets, setCcMarkets] = useState<CcMarket[]>([]);
+  const [ccQuery, setCcQuery] = useState('');
   const [warns, setWarns] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,9 +69,10 @@ export function MarketPanel() {
 
   const refresh = useCallback(async () => {
     try {
-      const d = await api<{ items?: MarketItem[]; sources?: MarketSource[]; warns?: string[] }>('/api/market/list');
+      const d = await api<{ items?: MarketItem[]; sources?: MarketSource[]; ccMarkets?: CcMarket[]; warns?: string[] }>('/api/market/list');
       setItems(d.items ?? []);
       setSources(d.sources ?? []);
+      setCcMarkets(d.ccMarkets ?? []);
       setWarns(d.warns ?? []);
       setError('');
     } catch (e) {
@@ -73,6 +88,20 @@ export function MarketPanel() {
       await api('/api/market/install', { source, id });
       setFlash(`已安装 ${id}，重载后可用`);
       setNeedsReload(true);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const installCc = async (market: string, id: string, target: 'global' | 'project') => {
+    setBusy(`cc-${id}`);
+    try {
+      const r = await api<{ parts?: number; log?: string[]; note?: string; scope?: string; project?: string }>('/api/market/install', { source: market, id, target });
+      const scopeNote = r.scope === 'project' ? `项目级（${r.project}）` : '全局';
+      setFlash(`已导入 CC 插件 ${id}（${scopeNote}，${r.parts ?? '?'} 项：${(r.log ?? []).join('；') || '无资源'}）。skills 即刻生效；hooks/mcp 下轮会话生效。`);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -123,15 +152,19 @@ export function MarketPanel() {
   };
 
   const installedItems = items.filter((i) => i.installed);
+  const ccAll = ccMarkets.flatMap((m) => m.plugins.map((p) => ({ ...p, market: m.name })));
+  const ccFiltered = ccQuery.trim()
+    ? ccAll.filter((p) => `${p.id} ${p.description}`.toLowerCase().includes(ccQuery.trim().toLowerCase()))
+    : ccAll;
 
   return (
     <div className="mk-panel">
       <div className="mk-tabs" role="tablist">
-        {(['store', 'installed', 'sources', 'about'] as const).map((k) => (
+        {(['store', 'cc', 'installed', 'sources', 'about'] as const).map((k) => (
           <button key={k} role="tab" aria-selected={tab === k}
             className={tab === k ? 'mk-tab active' : 'mk-tab'}
             onClick={() => setTab(k)}>
-            {k === 'store' ? '商城' : k === 'installed' ? '已装' : k === 'sources' ? '源' : '说明'}
+            {k === 'store' ? '商城' : k === 'cc' ? 'CC' : k === 'installed' ? '已装' : k === 'sources' ? '源' : '说明'}
           </button>
         ))}
       </div>
@@ -178,6 +211,49 @@ export function MarketPanel() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {tab === 'cc' && (
+        <div>
+          <div className="mk-hint">
+            Claude Code 插件商城（本机 ~/.claude/plugins/marketplaces/）。安装 = 导入其<b>声明型资源</b>
+            （skills → 技能面板、hooks → 钩子桥、stdio mcpServers → MCP 桥），<b>不运行外部 JS</b>。
+            仅本地已 checkout 的插件可安装；远程条目需先在 Claude Code 侧安装/clone。
+          </div>
+          {ccMarkets.length === 0 && <div className="mk-empty">未发现 CC 商城（~/.claude/plugins/marketplaces/ 不存在或为空）。</div>}
+          {ccMarkets.map((m) => (
+            <div key={m.name} className="mk-item">
+              <div className="mk-item-head">
+                <span className="mk-name">{m.name}</span>
+                <span className="mk-badge">{m.owner}</span>
+                <span className="mk-badge">{m.pluginCount} 插件</span>
+                <span className="mk-badge ok">{m.installableCount} 可装</span>
+              </div>
+            </div>
+          ))}
+          {ccMarkets.length > 0 && (
+            <input className="mk-input" type="search" placeholder="搜索 CC 插件（id/描述）…" value={ccQuery} onChange={(e) => setCcQuery(e.target.value)} />
+          )}
+          {ccFiltered.slice(0, 60).map((p) => (
+            <div key={`${p.market}/${p.id}`} className="mk-item">
+              <div className="mk-item-head">
+                <span className="mk-name">{p.id}</span>
+                <span className="mk-badge">{p.market}</span>
+                {!p.installable && <span className="mk-badge warn">远程（未 checkout）</span>}
+              </div>
+              {p.description && <div className="mk-desc">{p.description}</div>}
+              <div className="mk-actions">
+                {p.installable && (
+                  <>
+                    <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>导入（全局）</button>
+                    <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          {ccFiltered.length > 60 && <div className="mk-hint">共 {ccFiltered.length} 条，仅显示前 60——请用搜索缩小范围。</div>}
         </div>
       )}
 

@@ -310,7 +310,7 @@ async function decideApproval(
   if (mode === 'yolo') return 'ok';
   // 扩展自建管理工具免审批（用户定调『AI 自己启动 hook/mcp/插件，不要人工确认』）：
   // 服务端仍有校验（sha256/路径围栏/名字合法性）且全量审计，面板可随时卸载/移除。
-  const FREE_PASS_TOOLS = new Set(['mcp_server_list', 'mcp_server_add', 'mcp_server_remove', 'market_list', 'market_install', 'market_uninstall']);
+  const FREE_PASS_TOOLS = new Set(['mcp_server_list', 'mcp_server_add', 'mcp_server_remove', 'market_list', 'market_install', 'market_uninstall', 'market_cc_install']);
   if (FREE_PASS_TOOLS.has(call.name)) return 'ok';
   // 会话级信任工具（审批卡「本会话信任」沉淀）：命中直接放行
   const trusted = sessionTrustedTools.get(sessionId);

@@ -168,7 +168,55 @@ export function createServerPart(options = {}) {
         });
       }
     }
-    return { sources, items, warns, extCount: (reg?.plugins ?? []).filter((p) => p && String(p.module ?? '').startsWith('/ext-plugins/')).length };
+    // CC 商城（claude code marketplaces）：声明型资源插件（skills/hooks/mcpServers），
+    // 安装走 /api/compat/cc-market/install（zcode-compat 转译），不经 /ext-plugins。
+    const ccMarkets = readCcMarkets();
+    return { sources, items, ccMarkets, warns, extCount: (reg?.plugins ?? []).filter((p) => p && String(p.module ?? '').startsWith('/ext-plugins/')).length };
+  }
+
+  /** 读 CC 商城清单（同进程内直接调 zcode-compat 的发现逻辑不可行——跨插件；
+   *  改为读它的 /api/compat/cc-market？也不行——那是 HTTP 端点需会话。
+   *  最简：这里复制轻量版发现（只列 installable 摘要），与 zcode-compat 的 discoverCcMarket 同口径。 */
+  function readCcMarkets() {
+    const home = process.env.USERPROFILE || process.env.HOME || '';
+    const marketsRoot = join(home, '.claude', 'plugins', 'marketplaces');
+    const out = [];
+    if (!home || !existsSync(marketsRoot)) return out;
+    let names;
+    try { names = readdirSync(marketsRoot); } catch { return out; }
+    for (const mname of names) {
+      const mroot = join(marketsRoot, mname);
+      let isDir = false;
+      try { isDir = statSync(mroot).isDirectory(); } catch { continue; }
+      if (!isDir) continue;
+      let mf;
+      try { mf = JSON.parse(readFileSync(join(mroot, '.claude-plugin', 'marketplace.json'), 'utf8')); } catch { continue; }
+      if (!mf || !Array.isArray(mf.plugins)) continue;
+      const plugins = [];
+      const seen = new Set();
+      for (const p of mf.plugins) {
+        if (!p || typeof p.name !== 'string') continue;
+        const src = p.source;
+        const localRel = typeof src === 'string' && src.startsWith('./') ? src.slice(2) : '';
+        const localDir = localRel ? join(mroot, localRel) : '';
+        const installable = localRel && existsSync(join(localDir, '.claude-plugin', 'plugin.json'));
+        seen.add(p.name);
+        plugins.push({ id: p.name, description: String(p.description ?? ''), installable });
+      }
+      const localPluginsDir = join(mroot, 'plugins');
+      if (existsSync(localPluginsDir)) {
+        let extras;
+        try { extras = readdirSync(localPluginsDir); } catch { extras = []; }
+        for (const name of extras) {
+          if (seen.has(name)) continue;
+          if (!existsSync(join(localPluginsDir, name, '.claude-plugin', 'plugin.json'))) continue;
+          seen.add(name);
+          plugins.push({ id: name, description: '', installable: true });
+        }
+      }
+      out.push({ name: mname, owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
+    }
+    return out;
   }
 
   function uninstall(id) {
@@ -257,8 +305,21 @@ export function createServerPart(options = {}) {
       }
       if (pathname === '/api/market/install' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
-        const source = loadSources().find((s) => s.name === body.source);
-        if (!source) return sendJson(400, { error: `源不存在：${body.source}` });
+        const sourceName = String(body.source ?? '');
+        // CC 商城源（source = marketplace 名）：走声明型资源转译导入（不运行外部 JS）。
+        // target: 'global'（默认，落 <dataDir>）/ 'project'（落当前激活 workspace）。
+        const ccMarkets = readCcMarkets();
+        if (ccMarkets.some((m) => m.name === sourceName)) {
+          const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? '5000'}/api/compat/cc-market/install`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(bearerOk ? { Authorization: `Bearer ${bearer.slice(7)}` } : {}), ...(session ? { Cookie: req.headers.cookie ?? '' } : {}) },
+            body: JSON.stringify({ market: sourceName, id: body.id, target: body.target ?? 'global' }),
+          });
+          const j = await r.json().catch(() => null);
+          return sendJson(r.status, j ?? { ok: false, error: `HTTP ${r.status}` });
+        }
+        const source = loadSources().find((s) => s.name === sourceName);
+        if (!source) return sendJson(400, { error: `源不存在：${sourceName}（CC 商城请用商城名，如 claude-plugins-official）` });
         const r = installFromDir(source, String(body.id ?? ''));
         if (r.error) return sendJson(400, r);
         return sendJson(200, r);
