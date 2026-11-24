@@ -24,6 +24,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, statSyn
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { renderBgm } from './bgm.mjs';
+import { BGM_LOOP_SECONDS } from './core-constants.mjs';
 
 const UPSTREAM_TIMEOUT_MS = 90 * 1000; // 与 Polaris mimo-tts 同：合成 90s 上限
 const upstreamAgent = new Agent({ headersTimeout: UPSTREAM_TIMEOUT_MS, bodyTimeout: UPSTREAM_TIMEOUT_MS });
@@ -293,6 +295,20 @@ export function createServerPart(options = {}) {
           const msg = e instanceof Error ? e.message : String(e);
           return sendJson(200, { ok: false, error: msg });
         }
+      }
+
+      // GET /api/voice-radio/bgm?style=calm → 算法合成的循环垫乐 WAV dataUrl（确定性，磁盘缓存）
+      if (pathname === '/api/voice-radio/bgm' && req.method === 'GET') {
+        const url = new URL(req.url, 'http://x');
+        const style = String(url.searchParams.get('style') ?? 'calm');
+        const allowed = ['calm', 'upbeat', 'story', 'tech'];
+        if (!allowed.includes(style)) return sendJson(400, { ok: false, error: `未知 BGM 风格：${style}` });
+        const key = `bgm-${style}`;
+        const hit = cacheGet(key);
+        if (hit) return sendJson(200, { ok: true, dataUrl: `data:audio/wav;base64,${hit.toString('base64')}`, cached: true, seconds: BGM_LOOP_SECONDS });
+        const { wavBase64 } = renderBgm(style, BGM_LOOP_SECONDS, 7);
+        cachePut(key, Buffer.from(wavBase64, 'base64'));
+        return sendJson(200, { ok: true, dataUrl: `data:audio/wav;base64,${wavBase64}`, cached: false, seconds: BGM_LOOP_SECONDS });
       }
 
       return sendJson(404, { error: 'not found' });

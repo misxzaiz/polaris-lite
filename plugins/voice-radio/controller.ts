@@ -29,6 +29,9 @@ import {
   promptForInterject,
   promptForSupplement,
   TOOL_MODE_SYSTEM_SUFFIX,
+  VOICE_DIRECTION_SUFFIX,
+  extractVoiceDirection,
+  BGM_BY_DIRECTION,
   sanitizeForSpeech,
   DIRECTION_LABEL,
   shortId,
@@ -55,6 +58,10 @@ export interface StartOptions {
   modelId?: string;
   /** 工具查证模式：on = 走 agent-loop 编排（AI 可调工具），off = 纯聊天直连 */
   toolsMode?: boolean;
+  /** 背景音乐：on = 服务端合成垫乐循环播放（音量低垫） */
+  bgmMode?: boolean;
+  /** BGM 风格（calm/upbeat/story/tech；缺省按方向自动映射） */
+  bgmStyle?: string;
 }
 
 type Listener = (snapshot: RadioSnapshot) => void;
@@ -88,6 +95,8 @@ export class RadioController {
   private providerId?: string;
   private modelId?: string;
   private toolsMode = false;
+  private bgmMode = false;
+  private bgmStyle = 'auto';
 
   // 睡眠定时
   private sleepUntil = 0;
@@ -177,6 +186,8 @@ export class RadioController {
     this.providerId = opts.providerId || undefined;
     this.modelId = opts.modelId || undefined;
     this.toolsMode = opts.toolsMode === true;
+    this.bgmMode = opts.bgmMode === true;
+    this.bgmStyle = opts.bgmStyle || 'auto';
     this.startedAt = Date.now();
     this.stopReason = null;
     this.sleepUntil = 0;
@@ -240,8 +251,27 @@ export class RadioController {
       return;
     }
 
+    // 背景音乐：fire-and-forget 拉取垫乐循环（失败静默——BGM 是增强不是依赖）
+    if (this.bgmMode) {
+      void this.startBgm();
+    }
+
     // 进入主循环：请求第一段
     this.requestNextSegment();
+  }
+
+  /** 拉取（服务端缓存）并启动 BGM 循环 */
+  private async startBgm(): Promise<void> {
+    try {
+      const style = this.bgmStyle && this.bgmStyle !== 'auto'
+        ? this.bgmStyle
+        : BGM_BY_DIRECTION[this.direction.kind];
+      const resp = await fetch(`/api/voice-radio/bgm?style=${encodeURIComponent(style)}`, { credentials: 'include' });
+      const j = (await resp.json().catch(() => null)) as { ok?: boolean; dataUrl?: string } | null;
+      if (j?.ok && j.dataUrl && this.running && !this.stopped) {
+        this.player.startBgm(j.dataUrl);
+      }
+    } catch { /* BGM 失败不影响播报 */ }
   }
 
   /** 停止播报：三路中断（AI 流 + 播放器 + 在途段），幂等，回 idle */
@@ -478,6 +508,7 @@ export class RadioController {
 
   private requestNextSegmentWithPrompt(prompt: string, kind: SegmentKind): void {
     const systemPrompt = promptForDirection(this.direction.kind, this.direction.text)
+      + VOICE_DIRECTION_SUFFIX
       + (this.toolsMode ? TOOL_MODE_SYSTEM_SUFFIX : '');
     this.setStatus('generating');
     this.runSegment(prompt, systemPrompt, kind);
@@ -544,7 +575,11 @@ export class RadioController {
       this.unbindStream();
       this.segmentCancel = null;
       this.pendingSegment = false;
-      const clean = sanitizeForSpeech(text);
+      // AI 自行配音：剥离首行 [voice:…] 语气标注，作为本段合成 style；
+      // 无标注（模型未遵守/旧格式）时回退全局 style，行为不变。
+      const extracted = extractVoiceDirection(sanitizeForSpeech(text));
+      const clean = extracted.text;
+      const segStyle = extracted.style || this.style;
       if (!clean.trim()) {
         this.consecutiveErrors++;
         this.checkErrorThreshold('段文本为空');
@@ -559,7 +594,7 @@ export class RadioController {
         } else {
           this.segmentIndex++;
         }
-        this.player.enqueueSegment(clean);
+        this.player.enqueueSegment(clean, segStyle);
       }
       this.emit();
       this.afterSegmentFinished();

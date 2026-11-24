@@ -48,6 +48,9 @@ export class VoiceRadioPlayer {
   private rate = 1;
   /** 锁屏会话标题（话题名） */
   private mediaTitle: string | null = null;
+  /** BGM 循环音频（独立元素，低音量与人声并行；不参与代际/队列） */
+  private bgmAudio: HTMLAudioElement | null = null;
+  private bgmVolume = 0.14;
 
   setCallbacks(cb: PlayerCallbacks): void {
     this.callbacks = { ...this.callbacks, ...cb };
@@ -63,6 +66,35 @@ export class VoiceRadioPlayer {
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
     if (this.audio) this.audio.volume = this.volume;
+  }
+
+  /** 开启/更换 BGM（dataUrl 循环播放，音量固定低垫）。url 为空则停止 BGM。 */
+  startBgm(url: string): void {
+    this.stopBgm();
+    try {
+      const a = new Audio(url);
+      a.loop = true;
+      a.volume = this.bgmVolume;
+      a.preload = 'auto';
+      this.bgmAudio = a;
+      void a.play().catch(() => { /* 自动播放被拒：随人声播放后再启动 */ });
+    } catch { /* 忽略 */ }
+  }
+
+  stopBgm(): void {
+    if (this.bgmAudio) {
+      try { this.bgmAudio.pause(); } catch { /* 忽略 */ }
+      this.bgmAudio = null;
+    }
+  }
+
+  /** BGM 跟随人声暂停/恢复（半双工插话时静音垫乐） */
+  private syncBgmPlayback(playing: boolean): void {
+    if (!this.bgmAudio) return;
+    try {
+      if (playing) void this.bgmAudio.play().catch(() => {});
+      else this.bgmAudio.pause();
+    } catch { /* 忽略 */ }
   }
 
   setRate(rate: number): void {
@@ -113,16 +145,18 @@ export class VoiceRadioPlayer {
     if (this.audio === audio) audio.pause();
   }
 
-  /** 加入一段清洗后的文本：切句后逐句预取 */
-  enqueueSegment(text: string): void {
+  /** 加入一段清洗后的文本：切句后逐句预取。segStyle = 本段 AI 语气标注（[voice:…]），
+   *  为空时回退会话级 style。 */
+  enqueueSegment(text: string, segStyle?: string): void {
     if (!text || !text.trim()) return;
     const sentences = text
       .split(/(?<=[。！？!?；;\n])/)
       .map((s) => s.trim())
       .filter(Boolean);
     if (sentences.length === 0) return;
+    const style = (segStyle ?? this.style)?.trim() || undefined;
     for (const sentence of sentences) {
-      this.queue.push({ id: shortId('q'), text: sentence, url: null, status: 'pending', gen: this.generation, synthAttempts: 0 });
+      this.queue.push({ id: shortId('q'), text: sentence, url: null, status: 'pending', gen: this.generation, synthAttempts: 0, style });
     }
     this.pump();
   }
@@ -145,6 +179,7 @@ export class VoiceRadioPlayer {
       this.audio = null;
     }
     this.current = null;
+    this.stopBgm();
     this.syncPlaybackState('paused');
     this.callbacks.onQueueDrained?.();
   }
@@ -152,6 +187,7 @@ export class VoiceRadioPlayer {
   /** 播放暂停（不中断队列与合成；移动端锁屏保活靠音频元素持续出声） */
   pause(): void {
     this.audio?.pause();
+    this.syncBgmPlayback(false);
     this.syncPlaybackState('paused');
   }
 
@@ -159,6 +195,7 @@ export class VoiceRadioPlayer {
   resume(): void {
     if (this.current && this.current.url && this.audio) {
       void this.audio.play().catch(() => { /* 恢复失败：下一句播自然接管 */ });
+      this.syncBgmPlayback(true);
       this.syncPlaybackState('playing');
     }
   }
@@ -220,7 +257,7 @@ export class VoiceRadioPlayer {
       }
     }, SYNTH_TIMEOUT_MS);
 
-    synthesizeVoice({ text: item.text, voice: this.voice, style: this.style, signal: abort.signal })
+    synthesizeVoice({ text: item.text, voice: this.voice, style: item.style ?? this.style, signal: abort.signal })
       .then((res) => {
         clearTimeout(timer);
         if (abort.signal.aborted) return;
@@ -272,6 +309,7 @@ export class VoiceRadioPlayer {
         audio.pause();
         return;
       }
+      this.syncBgmPlayback(true);
       this.callbacks.onStart?.(item.text);
     };
 

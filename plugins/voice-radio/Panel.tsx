@@ -97,6 +97,8 @@ export function VoiceRadioPanel() {
   const [busy, setBusy] = useState(false);
   /** 工具查证模式：on = AI 可先调工具（browser/MCP 等）查资料再播报；off = 纯聊天直连 */
   const [toolsMode, setToolsMode] = useState(false);
+  /** 背景音乐：on = 播报时低音量垫乐循环 */
+  const [bgmMode, setBgmMode] = useState(true);
   /** 插话/临时补充输入 */
   const [interjectText, setInterjectText] = useState('');
 
@@ -130,6 +132,7 @@ export function VoiceRadioPanel() {
         if (typeof p.providerId === 'string') setProviderId(p.providerId);
         if (typeof p.modelId === 'string') setModelId(p.modelId);
         if (typeof p.toolsMode === 'boolean') setToolsMode(p.toolsMode);
+        if (typeof p.bgmMode === 'boolean') setBgmMode(p.bgmMode);
       })
       .catch(() => undefined);
   }, []);
@@ -137,9 +140,9 @@ export function VoiceRadioPanel() {
   useEffect(() => {
     const api = radioHost;
     if (!api) return;
-    const prefs = { kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode };
+    const prefs = { kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode, bgmMode };
     void api.dispatch({ target: 'cap.kv', action: 'set', payload: { namespace: 'voice-radio', key: 'prefs', value: prefs } }).catch(() => undefined);
-  }, [kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode]);
+  }, [kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode, bgmMode]);
 
   // 控制器订阅
   useEffect(() => {
@@ -205,11 +208,12 @@ export function VoiceRadioPanel() {
         providerId: providerId || undefined,
         modelId: modelId || undefined,
         toolsMode,
+        bgmMode,
       });
     } finally {
       setBusy(false);
     }
-  }, [busy, directionText, kind, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode]);
+  }, [busy, directionText, kind, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode, bgmMode]);
 
   const handleStop = useCallback(() => {
     void radioController.stop('manual');
@@ -504,6 +508,20 @@ export function VoiceRadioPanel() {
                 <p className="vr-hint">
                   开启后 AI 在生成播报前可调用工具（browser 搜索/读网页、MCP、文件等）核实或补充资料，再继续播报；
                   播报节奏会变慢（工具调用需要时间）。关闭即为纯聊天直连，出稿最快。
+                </p>
+                {/* 背景音乐（可开关；默认开） */}
+                <label className="vr-switch-row">
+                  <span className="vr-switch-label">背景音乐</span>
+                  <input
+                    type="checkbox"
+                    checked={bgmMode}
+                    onChange={(e) => setBgmMode(e.target.checked)}
+                    aria-label="背景音乐"
+                  />
+                </label>
+                <p className="vr-hint">
+                  开启后播报时自动垫低音量背景乐（按方向自动匹配风格：学习=舒缓、新闻=明快、故事=叙事、技术=电子），
+                  服务端一次合成循环播放，不额外消耗 TTS 额度。AI 还会为每段自动选择播报语气。
                 </p>
               </div>
 

@@ -195,6 +195,38 @@ test('voice-radio：插话/补充/工具模式契约', async (t) => {
   assert.ok(panel.includes('工具查证模式'), 'Panel 必须有工具模式开关');
 });
 
+test('voice-radio：AI 配音标注 + BGM 合成契约', async (t) => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const core = readFileSync(resolve(root, 'plugins/voice-radio/core.ts'), 'utf8');
+  const controller = readFileSync(resolve(root, 'plugins/voice-radio/controller.ts'), 'utf8');
+  const bgm = resolve(root, 'plugins/voice-radio/bgm.mjs');
+
+  // 配音协议：system 后缀要求首行 [voice:…]；extractVoiceDirection 剥离
+  assert.ok(core.includes('[voice:'), '协议要求 AI 输出 [voice:…] 语气标注');
+  assert.ok(core.includes('extractVoiceDirection'), '必须有标注剥离函数');
+  // controller 消费标注并传给合成
+  assert.ok(controller.includes('extractVoiceDirection'), 'controller 必须剥离语气标注');
+  assert.ok(controller.includes('enqueueSegment(clean, segStyle)'), '段 style 必须传入句队列');
+  // BGM：算法合成器存在 + 服务端端点 + controller 拉取
+  assert.ok(core.includes('BGM_BY_DIRECTION'), '方向→BGM 风格映射必须存在');
+  assert.ok(controller.includes('startBgm'), 'controller 必须拉取并启动 BGM');
+  const server = readFileSync(resolve(root, 'plugins/voice-radio/server.mjs'), 'utf8');
+  assert.ok(server.includes("'/api/voice-radio/bgm'"), 'server 必须提供 /bgm 端点');
+
+  // BGM 合成器真跑：确定性 + WAV 头 + 时长
+  const { renderBgm } = await import(bgm.href ?? `file://${bgm.replace(/\\/g, '/')}`);
+  const a = renderBgm('calm', 2, 7);
+  const b = renderBgm('calm', 2, 7);
+  assert.equal(a.wavBase64, b.wavBase64, '同参数必须确定性一致（可缓存）');
+  assert.ok(a.wavBase64.startsWith('UklGRg==') || a.wavBase64.slice(0, 6) === 'UklGRj' || Buffer.from(a.wavBase64.slice(0, 8), 'base64').slice(0, 4).toString() === 'RIFF', '必须是 WAV（RIFF）');
+  assert.equal(a.seconds, 2);
+  const c = renderBgm('upbeat', 2, 7);
+  assert.notEqual(a.wavBase64, c.wavBase64, '不同风格产物必须不同');
+});
+
 test('voice-radio server：磁盘缓存 key 覆盖 voice/style/text/baseUrl', async (t) => {
   const { readFileSync } = await import('node:fs');
   const { resolve, dirname } = await import('node:path');

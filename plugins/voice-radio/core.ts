@@ -24,6 +24,8 @@ export interface QueueItem {
   gen: number;
   /** 合成失败已重试次数（失败重试 1 次后仍失败才跳过） */
   synthAttempts?: number;
+  /** 本句合成语气（来自 AI 的 [voice:…] 段标注；空 = 会话默认） */
+  style?: string;
 }
 
 /** 字幕跟读单行 */
@@ -142,6 +144,41 @@ export function promptForDirection(key: DirectionKind, direction: string): strin
   const preset = PRESET_PROMPTS[key] ?? PRESET_PROMPTS.custom;
   return preset.split('{direction}').join(direction);
 }
+
+/**
+ * AI 自行配音协议：要求 AI 在每段正文**之前**输出一行语气标注 `[voice:…]`，
+ * 前端剥离该行后把标注作为 MiMo style 指令（或映射为文本音频标签）合成。
+ * MiMo 实测支持：句首 (风格) 标签 + 句中 [情绪] 标签 + 自然语言 style。
+ */
+export const VOICE_DIRECTION_SUFFIX = `
+输出格式（严格遵守）：
+0. 第一行输出语气标注，格式固定为 [voice:<播音风格描述>]，例如 [voice:低沉缓慢，像纪录片旁白]、[voice:轻快明亮，像早间新闻]。风格要贴合内容情绪，相邻段落不要千篇一律。
+1. 从第二行开始输出正文本身（150~350 字），正文中不要出现方括号标注。`;
+
+/** 从段文本中剥离首行 [voice:…] 标注，返回 { style, text }；无标注则 style 为空 */
+export function extractVoiceDirection(text: string): { style: string; text: string } {
+  const m = /^\s*\[voice:([^\]]+)\]\s*\n?/.exec(text);
+  if (!m) return { style: '', text: text.trim() };
+  return { style: m[1].trim().slice(0, 120), text: text.slice(m[0].length).trim() };
+}
+
+// ── 背景音乐（Web Audio 轻量垫乐；服务端离线合成 WAV，前端 <audio> 循环） ──
+
+/** BGM 风格预设（按方向自动匹配，也可面板手选） */
+export const BGM_STYLES = ['auto', 'none', 'calm', 'upbeat', 'story', 'tech', 'news'] as const;
+export type BgmStyle = (typeof BGM_STYLES)[number];
+
+/** 方向 → 默认 BGM 风格（auto 时按此映射） */
+export const BGM_BY_DIRECTION: Record<DirectionKind, Exclude<BgmStyle, 'auto' | 'none'>> = {
+  study: 'calm',
+  story: 'story',
+  tech: 'tech',
+  news: 'upbeat',
+  custom: 'calm',
+};
+
+/** BGM 循环时长（秒）：服务端一次合成，前端循环播放 */
+export const BGM_LOOP_SECONDS = 48;
 
 /** 换台岔题指令（同会话切换方向，不停声） */
 export function promptForSwitchTopic(direction: string): string {
