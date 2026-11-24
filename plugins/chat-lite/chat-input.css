@@ -548,7 +548,7 @@
   white-space: nowrap;
   font-size: 11px;
   color: var(--text-faint);
-  border-left: 1px solid var(--border-strong);
+  border-left: 1px solid var(--border);
   padding-left: 8px;
   margin-left: 2px;
 }
@@ -570,6 +570,37 @@
 }
 .side-toggle:hover { border-color: var(--accent); color: var(--accent-bright); }
 .side-toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-bright); }
+/* 通知入口行（会话设置面板内）：铃铛 + 未读数徽标 + 摘要，点击面板直达 */
+.chat-notify-row { gap: 8px; width: 100%; text-align: left; }
+.chat-notif-ico {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--plite-danger-soft);
+  color: var(--plite-danger);
+}
+.chat-notif-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--plite-danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+}
+.chat-notif-sum { margin-left: auto; font-size: 11px; color: var(--text-dim); }
 
 .chat-picker-done {
   margin-left: auto;

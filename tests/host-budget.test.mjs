@@ -31,8 +31,12 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** 预算上限（见上：A 档水位 + 1% 缓冲；B/C 档达成时下调本值）
- *  2026-11-22 上调 4800 → 4880：移动端优化（键盘让位+边缘手势进核心，理由见豁免台账） */
-const CORE_BUDGET = 4880;
+ *  2026-11-22 上调 4800 → 4880：移动端优化（键盘让位+边缘手势进核心，理由见豁免台账）
+ *  2026-11-25 上调 4880 → 4915：面板槽位高度链修复（styles.css +29 行）——
+ *  .slot 基类无高度/flex，tab 化面板内 absolute 插件面板塌 0 高（plite-guide 列表
+ *  不可见）；宿主各锚点本就有「谁包 .slot 谁撑满」专属规则，面板 tabpanel 缺同款。
+ *  属壳层布局职责修复，非新功能进核心。 */
+const CORE_BUDGET = 4915;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

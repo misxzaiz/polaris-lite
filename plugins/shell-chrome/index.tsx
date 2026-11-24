@@ -15,23 +15,9 @@
  *
  * 宿主禁用本插件时：SlotOutlet 回退内置简版 tab 条（裸按钮），不破可用性。
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { LitePlugin, SlotHostApi, TabChromeProps } from '@sdk';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';import type { LitePlugin, SlotHostApi, TabChromeProps } from '@sdk';
 import { getIsNarrow, subscribeNarrow } from './narrowBridge';
 import './chrome.css';
-
-function StarIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} aria-hidden="true">
-      <path
-        d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 /** ⟳ 刷新图标（SVG 替代文本字形：390px 视口下字形渲染偏小且基线不稳） */
 function RefreshIcon() {
@@ -49,7 +35,7 @@ function RefreshIcon() {
 }
 
 /** tab 条 chrome 主组件：签名严格对齐 @sdk 的 TabChromeProps */
-export function SlotTabChrome({ slot, tabs, activeKey, onSelect, onTogglePin, onRefresh }: TabChromeProps) {
+export function SlotTabChrome({ slot, tabs, activeKey, onSelect, onRefresh }: TabChromeProps) {
   const [focusIdx, setFocusIdx] = useState(() => Math.max(0, tabs.findIndex((t) => t.key === activeKey)));
   const [menuOpen, setMenuOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -211,7 +197,7 @@ export function SlotTabChrome({ slot, tabs, activeKey, onSelect, onTogglePin, on
   const q = query.trim().toLowerCase();
   const menuItems = q ? tabs.filter((t) => t.title.toLowerCase().includes(q)) : tabs;
 
-  /** 收纳菜单 JSX：桌面（＋n 下拉）与窄屏（sheet 化全宽下拉）共用同一份内容 */
+  /** 收纳菜单 JSX：三列网格平铺全部面板（无收藏） */
   const renderMenu = (): React.ReactNode => (
     <div className="sc-menu" role="menu" aria-label="全部面板">
       {tabs.length > 8 && (
@@ -226,30 +212,20 @@ export function SlotTabChrome({ slot, tabs, activeKey, onSelect, onTogglePin, on
       )}
       {menuItems.length === 0 && <div className="sc-menu-empty">无匹配面板</div>}
       {menuItems.map((t) => (
-        <div className={`sc-menu-row ${t.key === activeKey ? 'active' : ''}`} key={t.key}>
-          <button
-            type="button"
-            role="menuitem"
-            className="sc-menu-item"
-            onClick={() => {
-              onSelect(t.key);
-              setMenuOpen(false);
-              setQuery('');
-            }}
-          >
-            {t.title}
-          </button>
-          <button
-            type="button"
-            className={`sc-menu-pin ${t.pinned ? 'pinned' : ''}`}
-            aria-pressed={t.pinned}
-            aria-label={t.pinned ? `取消置顶${t.title}` : `置顶${t.title}`}
-            title={t.pinned ? '取消置顶' : '置顶'}
-            onClick={() => onTogglePin(t.key)}
-          >
-            <StarIcon filled={t.pinned} />
-          </button>
-        </div>
+        <button
+          type="button"
+          role="menuitem"
+          className={`sc-menu-cell ${t.key === activeKey ? 'active' : ''}`}
+          key={t.key}
+          title={t.title}
+          onClick={() => {
+            onSelect(t.key);
+            setMenuOpen(false);
+            setQuery('');
+          }}
+        >
+          {t.title}
+        </button>
       ))}
     </div>
   );

@@ -115,8 +115,6 @@ export interface TabChromeProps {
   activeKey: string;
   /** 选择（点击/键盘/菜单统一入口） */
   onSelect(key: string): void;
-  /** 切换置顶 */
-  onTogglePin(key: string): void;
   /** 刷新当前面板（宿主自持重挂载序号） */
   onRefresh(): void;
   /** 槽位 id（a11y 命名空间用） */

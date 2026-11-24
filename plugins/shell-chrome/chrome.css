@@ -150,9 +150,9 @@
   max-width: min(300px, 100%);
   max-height: 60vh;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
   padding: 6px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -160,7 +160,8 @@
   box-shadow: var(--plite-shadow-2);
 }
 .sc-menu-search {
-  margin: 2px 2px 6px;
+  grid-column: 1 / -1;
+  margin: 2px 2px 4px;
   padding: 0 10px;
   height: var(--plite-h-sm);
   border: 1px solid var(--border);
@@ -171,47 +172,23 @@
   outline: none;
 }
 .sc-menu-search:focus-visible { border-color: var(--accent); }
-.sc-menu-empty { padding: 10px; color: var(--text-faint); font-size: var(--plite-fs-sm); text-align: center; }
-.sc-menu-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border-radius: var(--plite-radius-sm, 6px);
-}
-.sc-menu-row.active { background: var(--accent-soft); }
-.sc-menu-item {
-  flex: 1 1 auto;
+.sc-menu-empty { grid-column: 1 / -1; padding: 10px; color: var(--text-faint); font-size: var(--plite-fs-sm); text-align: center; }
+.sc-menu-cell {
   min-width: 0;
-  padding: 7px 10px;
+  padding: 8px 4px;
   border: none;
+  border-radius: var(--plite-radius-sm, 6px);
   background: transparent;
   color: var(--text);
-  font-size: var(--plite-fs-md);
-  text-align: left;
+  font-size: var(--plite-fs-sm);
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.sc-menu-item:hover { background: var(--bg-hover); }
-.sc-menu-row.active .sc-menu-item { color: var(--accent-bright); }
-.sc-menu-pin {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  margin-right: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--plite-radius-sm, 6px);
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.sc-menu-pin svg { width: 15px; height: 15px; }
-.sc-menu-pin:hover { background: var(--bg-hover); color: var(--text); }
-.sc-menu-pin.pinned { color: var(--accent-bright); }
+.sc-menu-cell:hover { background: var(--bg-hover); }
+.sc-menu-cell.active { background: var(--accent-soft); color: var(--accent-bright); }
 
 
 /* ===== 窄屏（迁自宿主 @media 段）：收纳菜单下拉加宽 =====
@@ -262,10 +239,8 @@
   }
   .sc-nmore:hover, .sc-nmore[aria-expanded='true'] { color: var(--accent-bright); }
   .sc-nmore-chev { width: 12px; height: 12px; }
-  /* 菜单行触控目标加大（原 7px 上下 padding / 30px 星标对手指太小；行高≥44px 触控标准） */
-  .sc-menu-item { padding: 14px 10px; }
-  .sc-menu-pin { width: 40px; height: 40px; }
-  .sc-menu-pin svg { width: 16px; height: 16px; }
+  /* 菜单格触控目标加大（行高≥44px 触控标准） */
+  .sc-menu-cell { padding: 14px 4px; font-size: 14px; }
   .sc-menu-search { height: 40px; font-size: 14px; }
   .sc-wrap.sc-narrow .sc-refresh { width: 46px; }
 }

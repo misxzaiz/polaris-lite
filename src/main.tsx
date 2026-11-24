@@ -35,6 +35,12 @@ async function bootstrap(): Promise<void> {
   (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT_DOM__ =
     (reactDomMod as unknown as { default?: unknown }).default ?? reactDomMod;
 
+  // react-dom/client 的 createRoot/hydrateRoot 一并暴露：shim 在 dev 下拉不到
+  // /node_modules/.vite/deps/react-dom_client.js（dev server 对它做 SPA HTML fallback），
+  // 插件自挂 UI（如 notification-center 的 toast host）依赖它。
+  (window as unknown as Record<string, unknown>).__POLARIS_LITE_REACT_DOM_CLIENT__ =
+    await import('react-dom/client');
+
   // 1. 安装核心内建能力（meta 是核心自有 cap；布局能力已随 workspace-layout 插件走,P2-2）
   //    meta 传入视图/槽位注册表：describe 返回 views 与 slots 清单（自省型面板的免授权数据源）
   installMetaCapability(host.bus, () => host.policyTable(), viewRegistry, host.slots);

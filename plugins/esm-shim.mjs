@@ -31,6 +31,14 @@ if (!ReactDOMInstance) {
 const createPortal = ReactDOMInstance?.createPortal;
 const flushSync = ReactDOMInstance?.flushSync;
 const findDOMNode = ReactDOMInstance?.findDOMNode;
+// react-dom/client 的 createRoot/hydrateRoot：与宿主同一 reconciler 实例。
+// 注意：vite 预打包的 react-dom.js（default）不含 createRoot；dev 下
+// /node_modules/.vite/deps/* 由 dev server 以 HTML fallback 处理（拿不到 JS），
+// 所以主应用把 react-dom/client 的命名导出预先放到
+// globalThis.__POLARIS_LITE_REACT_DOM_CLIENT__（main.tsx bootstrap），这里只读它。
+const clientApi = globalThis.__POLARIS_LITE_REACT_DOM_CLIENT__ ?? null;
+const createRoot = clientApi?.createRoot;
+const hydrateRoot = clientApi?.hydrateRoot;
 
 export {
   useState, useEffect, useRef, useCallback, useMemo, useContext, useReducer,
@@ -42,3 +50,6 @@ export {
   createPortal, flushSync, findDOMNode,
 };
 export default ReactInstance;
+
+/** react-dom/client 命名导出（import map 'react-dom/client' 也指向本 shim） */
+export { createRoot, hydrateRoot };

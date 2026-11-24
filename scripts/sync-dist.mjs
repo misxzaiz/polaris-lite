@@ -52,5 +52,7 @@ if (existsSync(pluginsDir)) {
   }
 }
 copy(join('public', 'plugins', 'registry.json'));
+// esm-shim：插件 import map 的解析目标，随插件产物一起同步（漏同步会用到陈旧 shim）
+if (existsSync(join(publicDir, 'plugins', 'esm-shim.mjs'))) copy(join('public', 'plugins', 'esm-shim.mjs'));
 
 console.log(`[sync-dist] 已同步 ${copied} 个文件到 dist/（grants/插件产物/registry）`);

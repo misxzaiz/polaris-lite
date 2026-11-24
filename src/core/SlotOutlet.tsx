@@ -24,6 +24,8 @@ import type { TabChromeProps } from './types';
 import { orderEntriesByUserOrder, orderEntriesWithPins } from './slotRegistry';
 
 const ACTIVE_KEY_PREFIX = 'plite.slot.active.';
+/** 面板直达意图事件名（与 @sdk CHANNEL_PANEL_INTENT 值对齐；核心不 import 插件，就地字面量） */
+const PANEL_INTENT_EVENT = 'plite-panel-intent';
 const PIN_KEY_PREFIX = 'plite.slot.pins.';
 const USER_ORDER_KEY_PREFIX = 'plite.slot.order.';
 
@@ -48,7 +50,7 @@ function writeActiveKey(slot: SlotId, key: string): void {
   }
 }
 
-/** 读取置顶清单；坏数据（非字符串数组）一律回空，脏 localStorage 不应炸掉面板 */
+/** 读取置顶清单（兼容历史数据，仅用于置顶排序）；坏数据一律回空 */
 function readPinKeys(slot: SlotId): string[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -59,14 +61,6 @@ function readPinKeys(slot: SlotId): string[] {
     return parsed.filter((k): k is string => typeof k === 'string');
   } catch {
     return [];
-  }
-}
-
-function writePinKeys(slot: SlotId, keys: string[]): void {
-  try {
-    window.localStorage.setItem(PIN_KEY_PREFIX + slot, JSON.stringify(keys));
-  } catch {
-    /* 同 active key：持久化失败不阻断（会话内仍生效） */
   }
 }
 
@@ -103,7 +97,8 @@ function SlotEntryView({ pluginId, component, slot }: { pluginId: string; compon
 export function SlotOutlet({ slot }: { slot: SlotId }) {
   const entries = host.slots.list(slot);
   const [activeKey, setActiveKey] = useState<string | null>(() => readActiveKey(slot));
-  const [pins, setPins] = useState<string[]>(() => readPinKeys(slot));
+  // 置顶清单仅读作排序（兼容历史收藏数据）；收藏入口已移除，不再写入
+  const [pins] = useState<string[]>(() => readPinKeys(slot));
   // 用户自定义顺序（插件管理面板写入 localStorage；本组件经 storage 事件跨实例同步）
   const [userOrder, setUserOrder] = useState<string[]>(() => readUserOrder(slot));
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
@@ -139,8 +134,8 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
       const hit = ordered.find((en) => nameOf(en) === detail.title);
       if (hit) select(entryKey(hit.pluginId, hit.component));
     };
-    window.addEventListener('plite-panel-intent', onIntent);
-    return () => window.removeEventListener('plite-panel-intent', onIntent);
+    window.addEventListener(PANEL_INTENT_EVENT, onIntent);
+    return () => window.removeEventListener(PANEL_INTENT_EVENT, onIntent);
   });
 
   // 多面板槽：Tab 切换（tab 名 = SlotDescriptor.title ?? 插件 manifest.name）。
@@ -212,12 +207,6 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
     setReloadSeq((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
   };
 
-  const togglePin = (key: string): void => {
-    const next = pins.includes(key) ? pins.filter((k) => k !== key) : [...pins, key];
-    setPins(next);
-    writePinKeys(slot, next);
-  };
-
   // ---- TabChromeProps：宿主是唯一状态权威，chrome 组件零自持状态 ----
   const chromeProps: TabChromeProps = {
     slot,
@@ -228,7 +217,6 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
     })),
     activeKey: entryKey(ordered[activeIdx].pluginId, ordered[activeIdx].component),
     onSelect: select,
-    onTogglePin: togglePin,
     onRefresh: refreshActive,
   };
 

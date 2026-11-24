@@ -184,6 +184,30 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const [drawer, setDrawerState] = useState<Drawer>(readDrawer);
   useEffect(() => subscribeDrawer(setDrawerState), []);
 
+  // ---- 通知未读数（notification-center 广播 notifications-changed；无插件时静默为 0）----
+  const [notifUnread, setNotifUnread] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const read = async (): Promise<void> => {
+      try {
+        const raw = localStorage.getItem('plite.slot.active.panel');
+        void raw; // 激活键与本行无关；读 inbox 走 kv HTTP（与面板同源）
+        const r = await fetch('/api/kv/get?namespace=notification-center&key=inbox', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = (await r.json()) as { value?: { read?: boolean }[] | null };
+        const list = Array.isArray(j.value) ? j.value : [];
+        if (alive) setNotifUnread(list.filter((n) => !n.read).length);
+      } catch { /* 无数据/未登录：保持 0 */ }
+    };
+    void read();
+    const onChanged = (): void => { void read(); };
+    window.addEventListener('notifications-changed', onChanged);
+    return () => {
+      alive = false;
+      window.removeEventListener('notifications-changed', onChanged);
+    };
+  }, []);
+
   const openModelPop = (kind: 'provider' | 'model') => {
     setModelPos(computeModelPos());
     setModelPop(kind);
@@ -381,8 +405,15 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             onClick={() => openPanelDirect('通知')}
             title="打开通知中心：历史、未读与全部已读"
           >
+            <span className="chat-notif-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none">
+                <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M10.3 21a2 2 0 0 0 3.4 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              {notifUnread > 0 && <span className="chat-notif-badge">{notifUnread > 99 ? '99+' : notifUnread}</span>}
+            </span>
             <span className="chat-assistant-key">消息通知</span>
-            <span className="chat-ws-chip">通知中心</span>
+            <span className="chat-notif-sum">{notifUnread > 0 ? `${notifUnread} 条未读` : '无未读'}</span>
             <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
           </button>
 
