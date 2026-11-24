@@ -25,6 +25,7 @@
  * → confirm 模式弹审批卡 / 会话信任 / 白名单）。服务端只做门禁+边界+审计，
  * 不重复审批（与 agent-bash 的 approved 语义一致）。
  */
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, realpathSync, unlinkSync } from 'node:fs';
 import { resolve, sep, extname, dirname } from 'node:path';
 
@@ -66,6 +67,9 @@ export function createServerPart(options = {}) {
   const dataDirZone = resolve(dataDir);
   const builtinRoot = resolve(dataDir, 'workspace');
   mkdirSync(builtinRoot, { recursive: true });
+  // 与 file-browser 同款根 id（sha256(path) 前 10 位）：builtin 根 id 不落盘，
+  // 写面校验需要它来识别「编排方传来的内建 workspace 根 id」。
+  const hashId = (p) => 'r-' + createHash('sha256').update(p).digest('hex').slice(0, 10);
 
   /** read 工具的 mtime 登记（edit 冲突检测）：realPath → mtimeMs。进程内存态。 */
   const readRegistry = new Map();
@@ -98,12 +102,14 @@ export function createServerPart(options = {}) {
     }
     let rootPath = null;
     if (rootId) {
-      // rootId 兼容三种形态：登记根 id（file-browser roots 返回的 r-*）/ 完整路径 /
-      // 路径尾段。此前只按路径匹配，编排方（agent-loop）按 id 传默认根时会
-      // `unknown rootId`（2026-11-22 长任务实测：会话绑定根后 files_write 全部失败）。
+      // rootId 兼容形态：登记根 id（file-browser roots 返回的 r-*）/ 完整路径 / 路径尾段 /
+      // 内建 workspace 的动态 id（file-browser currentRoots 会补 builtin 根但不落盘，
+      // 这里按 rootId===builtin 根 id 或路径命中内建 workspace）。此前只按登记表路径匹配，
+      // 编排方（agent-loop）按 builtin id 传默认根时 `unknown rootId`，files_write 全灭。
       const roots = readRoots();
       const hit = roots.find((r) => r.id === rootId || r.path === rootId || r.path.endsWith(rootId));
       if (hit) rootPath = hit.path;
+      else if (rootId === hashId(builtinRoot)) rootPath = builtinRoot;
       else return { error: `unknown rootId: ${rootId}`, code: 'ROOT_NOT_FOUND' };
     }
     const raw = String(absOrRel);
