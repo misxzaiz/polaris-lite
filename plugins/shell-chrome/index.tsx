@@ -15,7 +15,8 @@
  *
  * 宿主禁用本插件时：SlotOutlet 回退内置简版 tab 条（裸按钮），不破可用性。
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';import type { LitePlugin, SlotHostApi, TabChromeProps } from '@sdk';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { LitePlugin, SlotHostApi, TabChromeProps } from '@sdk';
 import { getIsNarrow, subscribeNarrow } from './narrowBridge';
 import './chrome.css';
 

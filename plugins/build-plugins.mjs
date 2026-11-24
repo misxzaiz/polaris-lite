@@ -561,8 +561,6 @@ function preflight() {
     'plite-drawer-changed',
     'plite-panel-intent',
     'mock-auth.session.v1',
-    // CustomEvent 名也属跨插件契约（同一事件名双方都必须经 @sdk 登记）
-    'plite-panel-intent',
   ];
   const darkHits = [];
   for (const p of plugins) {
