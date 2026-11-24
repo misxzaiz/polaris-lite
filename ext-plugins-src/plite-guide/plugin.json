@@ -1,7 +1,7 @@
 {
   "id": "plite-guide",
   "name": "使用说明",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "polaris-lite 规范与使用说明：面板分���浏览 + AI 技能 + MCP 检索工具（guide_sections/guide_get/guide_search）",
   "contributes": {
     "slots": [
