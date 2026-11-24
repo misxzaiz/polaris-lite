@@ -114,6 +114,8 @@ const plugins = [
   { id: 'shell-chrome', config: 'shell-chrome/vite.config.ts', dist: 'shell-chrome/dist', order: 30 },
   // workspace-layout = 工作区布局树插件化（host-slimming-report §7.1/P2-2;layout-root 容器）
   { id: 'workspace-layout', config: 'workspace-layout/vite.config.ts', dist: 'workspace-layout/dist', order: 31 },
+  // personal-hub = 个人空间（自 Polaris PersonalHub 迁移）：Supabase 直连的导航/书签/待办
+  { id: 'personal-hub', config: 'personal-hub/vite.config.ts', dist: 'personal-hub/dist', order: 32 },
   // voice-radio = AI 无限语音电台（自 Polaris Radio Broadcast 移植）：cap.ai.chat 段循环 + MiMo TTS 服务端代理
   { id: 'voice-radio', config: 'voice-radio/vite.config.ts', dist: 'voice-radio/dist', order: 33 },
 ].sort((a, b) => a.order - b.order);

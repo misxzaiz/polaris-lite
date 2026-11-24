@@ -1,5 +1,5 @@
 {
-  "version": "22",
+  "version": "23",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -370,6 +370,13 @@
       "events": [
         "git-operation"
       ]
+    },
+    "personal-hub": {
+      "capabilities": [
+        "cap.config"
+      ],
+      "provides": [],
+      "events": []
     },
     "voice-radio": {
       "capabilities": [
