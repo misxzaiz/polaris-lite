@@ -35,16 +35,16 @@ export const GUIDE_DOCS: GuideDoc[] = [
     ].join('\n'),
   },
   {
-    id: 'overview-ports',
+    id: 'overview-instances',
     section: 'ops',
-    title: '环境与端口',
+    title: '实例与发版纪律',
     summary: '5000=开发，9825=生产，9826=钉住分析实例；判断环境只看端口。',
     body: [
-      '· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/；账号 root/1234。开发调试一律用它。',
-      '· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/；账号 boss。只读观察可以，禁止 AI 写入/重启。',
+      '· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/。开发调试一律用它。',
+      '· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/。生产只读观察，禁止把测试数据写进去。',
       '· 9826 分析实例：代码在独立 clone polaris-lite-9826，数据目录 .polaris-lite-pm2/，PM2 托管；升级走 npm run deploy:9826。',
       '· 发版：一律 npm run release（自动 commit→push→deploy:9826→build+restart 9825→三处一致性终检）。禁止手工拼 deploy/build/restart 组合，会出现版本漂移。',
-      '· 数据库/密钥等运行态目录（.polaris-lite*）绝不入库。',
+      '· 运行态数据目录（.polaris-lite*）不入库；其中的敏感配置不属于插件说明范畴。',
     ].join('\n'),
   },
   {
@@ -243,7 +243,7 @@ export const GUIDE_DOCS: GuideDoc[] = [
     summary: 'typecheck → test → build:plugins；dev:standalone 起开发环境。',
     body: [
       '常用命令：',
-      '  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/，root/1234）',
+      '  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/）',
       '  npm run typecheck             # tsc 主工程 + 插件工程',
       '  npm test                      # 全量 node:test（含 server-boundary/arch 等边界守卫）',
       '  npm run build:plugins         # 构建全部内置插件 + registry.json',

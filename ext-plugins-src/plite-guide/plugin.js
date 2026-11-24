@@ -1,4 +1,4 @@
-import x, { useState as d, useMemo as I } from "react";
+import x, { useState as d, useMemo as w } from "react";
 var b = { exports: {} }, c = {};
 /**
  * @license React
@@ -9,13 +9,13 @@ var b = { exports: {} }, c = {};
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
-var w = x, S = Symbol.for("react.element"), P = Symbol.for("react.fragment"), C = Object.prototype.hasOwnProperty, _ = w.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentOwner, N = { key: !0, ref: !0, __self: !0, __source: !0 };
+var I = x, S = Symbol.for("react.element"), P = Symbol.for("react.fragment"), C = Object.prototype.hasOwnProperty, _ = I.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentOwner, N = { key: !0, ref: !0, __self: !0, __source: !0 };
 function j(n, i, a) {
-  var r, o = {}, l = null, p = null;
-  a !== void 0 && (l = "" + a), i.key !== void 0 && (l = "" + i.key), i.ref !== void 0 && (p = i.ref);
-  for (r in i) C.call(i, r) && !N.hasOwnProperty(r) && (o[r] = i[r]);
-  if (n && n.defaultProps) for (r in i = n.defaultProps, i) o[r] === void 0 && (o[r] = i[r]);
-  return { $$typeof: S, type: n, key: l, ref: p, props: o, _owner: _.current };
+  var r, l = {}, o = null, p = null;
+  a !== void 0 && (o = "" + a), i.key !== void 0 && (o = "" + i.key), i.ref !== void 0 && (p = i.ref);
+  for (r in i) C.call(i, r) && !N.hasOwnProperty(r) && (l[r] = i[r]);
+  if (n && n.defaultProps) for (r in i = n.defaultProps, i) l[r] === void 0 && (l[r] = i[r]);
+  return { $$typeof: S, type: n, key: o, ref: p, props: l, _owner: _.current };
 }
 c.Fragment = P;
 c.jsx = j;
@@ -42,16 +42,16 @@ const f = "0.1.0", u = [
 `)
   },
   {
-    id: "overview-ports",
+    id: "overview-instances",
     section: "ops",
-    title: "环境与端口",
+    title: "实例与发版纪律",
     summary: "5000=开发，9825=生产，9826=钉住分析实例；判断环境只看端口。",
     body: [
-      "· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/；账号 root/1234。开发调试一律用它。",
-      "· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/；账号 boss。只读观察可以，禁止 AI 写入/重启。",
+      "· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/。开发调试一律用它。",
+      "· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/。生产只读观察，禁止把测试数据写进去。",
       "· 9826 分析实例：代码在独立 clone polaris-lite-9826，数据目录 .polaris-lite-pm2/，PM2 托管；升级走 npm run deploy:9826。",
       "· 发版：一律 npm run release（自动 commit→push→deploy:9826→build+restart 9825→三处一致性终检）。禁止手工拼 deploy/build/restart 组合，会出现版本漂移。",
-      "· 数据库/密钥等运行态目录（.polaris-lite*）绝不入库。"
+      "· 运行态数据目录（.polaris-lite*）不入库；其中的敏感配置不属于插件说明范畴。"
     ].join(`
 `)
   },
@@ -260,7 +260,7 @@ const f = "0.1.0", u = [
     summary: "typecheck → test → build:plugins；dev:standalone 起开发环境。",
     body: [
       "常用命令：",
-      "  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/，root/1234）",
+      "  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/）",
       "  npm run typecheck             # tsc 主工程 + 插件工程",
       "  npm test                      # 全量 node:test（含 server-boundary/arch 等边界守卫）",
       "  npm run build:plugins         # 构建全部内置插件 + registry.json",
@@ -327,7 +327,7 @@ const f = "0.1.0", u = [
 `);
 function E() {
   var v;
-  const [n, i] = d("all"), [a, r] = d(""), [o, l] = d(((v = u[0]) == null ? void 0 : v.id) ?? null), [p, m] = d("idle"), [g, y] = d(!1), h = I(() => {
+  const [n, i] = d("all"), [a, r] = d(""), [l, o] = d(((v = u[0]) == null ? void 0 : v.id) ?? null), [p, m] = d("idle"), [g, y] = d(!1), h = w(() => {
     const s = a.trim().toLowerCase();
     return u.filter((t) => n === "all" || t.section === n ? s ? `${t.id} ${t.title} ${t.summary} ${t.body}`.toLowerCase().includes(s) : !0 : !1);
   }, [n, a]), k = async () => {
@@ -380,9 +380,9 @@ function E() {
     /* @__PURE__ */ e.jsxs("div", { className: "pg-list", children: [
       h.length === 0 && /* @__PURE__ */ e.jsx("div", { className: "pg-empty", children: "没有匹配的条目" }),
       h.map((s) => {
-        const t = o === s.id;
+        const t = l === s.id;
         return /* @__PURE__ */ e.jsxs("div", { className: `pg-item ${t ? "open" : ""}`, children: [
-          /* @__PURE__ */ e.jsxs("button", { type: "button", className: "pg-item-head", onClick: () => l(t ? null : s.id), children: [
+          /* @__PURE__ */ e.jsxs("button", { type: "button", className: "pg-item-head", onClick: () => o(t ? null : s.id), children: [
             /* @__PURE__ */ e.jsx("span", { className: "pg-item-title", children: s.title }),
             /* @__PURE__ */ e.jsx("span", { className: "pg-item-summary", children: s.summary }),
             /* @__PURE__ */ e.jsx("span", { className: "pg-item-id", children: s.id })

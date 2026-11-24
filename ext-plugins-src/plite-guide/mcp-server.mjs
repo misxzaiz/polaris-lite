@@ -19,11 +19,11 @@ const DOCS = [
     "body": "polaris-lite 是参考 Polaris 产出的轻量版：在 AI 对话交互布局完全不变的前提下，把「核心只留平台能力、业务全部插件化」走完。\n\n核心（src/ + server/）只保留：cap 总线（权限/审计/转发）、插件生命周期、会话契约、主题/i18n/窗口壳、鉴权/供应商/模型中继/静态服务。\n所有业务功能——AI 对话 UI、文件浏览、Git、浏览器、翻译、账本、商城……——都由 plugins/ 下的插件提供。\n\n三条硬边界（构建期 + 测试期 + 运行时三层强制）：\n1. 核心零业务：server/ 目录不得出现领域端点（tests/server-boundary.test.mjs 守卫）；\n2. 插件不经宿主 import：插件只能 import @sdk（类型契约），误引宿主实现会构建失败；\n3. 申请 ≠ 授权：插件 manifest 声明权限，实际生效 = manifest ∩ grants.json。"
   },
   {
-    "id": "overview-ports",
+    "id": "overview-instances",
     "section": "ops",
-    "title": "环境与端口",
+    "title": "实例与发版纪律",
     "summary": "5000=开发，9825=生产，9826=钉住分析实例；判断环境只看端口。",
-    "body": "· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/；账号 root/1234。开发调试一律用它。\n· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/；账号 boss。只读观察可以，禁止 AI 写入/重启。\n· 9826 分析实例：代码在独立 clone polaris-lite-9826，数据目录 .polaris-lite-pm2/，PM2 托管；升级走 npm run deploy:9826。\n· 发版：一律 npm run release（自动 commit→push→deploy:9826→build+restart 9825→三处一致性终检）。禁止手工拼 deploy/build/restart 组合，会出现版本漂移。\n· 数据库/密钥等运行态目录（.polaris-lite*）绝不入库。"
+    "body": "· 5000 开发环境：npm run dev:standalone 启动；数据目录 .polaris-lite-dev/。开发调试一律用它。\n· 9825 生产环境：npm run build && npm start；数据目录 .polaris-lite/。生产只读观察，禁止把测试数据写进去。\n· 9826 分析实例：代码在独立 clone polaris-lite-9826，数据目录 .polaris-lite-pm2/，PM2 托管；升级走 npm run deploy:9826。\n· 发版：一律 npm run release（自动 commit→push→deploy:9826→build+restart 9825→三处一致性终检）。禁止手工拼 deploy/build/restart 组合，会出现版本漂移。\n· 运行态数据目录（.polaris-lite*）不入库；其中的敏感配置不属于插件说明范畴。"
   },
   {
     "id": "arch-dual-entry",
@@ -93,7 +93,7 @@ const DOCS = [
     "section": "ops",
     "title": "构建 / 测试 / 常用命令",
     "summary": "typecheck → test → build:plugins；dev:standalone 起开发环境。",
-    "body": "常用命令：\n  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/，root/1234）\n  npm run typecheck             # tsc 主工程 + 插件工程\n  npm test                      # 全量 node:test（含 server-boundary/arch 等边界守卫）\n  npm run build:plugins         # 构建全部内置插件 + registry.json\n  npm run check:plugins         # 只跑静态一致性校验（CI 快速门禁）\n  npm run build                 # typecheck + check:plugins + vite build + sw manifest + sync-dist\n  npm run release               # 一键发版（commit→push→deploy:9826→build+restart 9825→终检）\n  npm run deploy:9826 / status:9826   # 分析实例发布/查看落后\n\n插件约束的门禁落点：manifest-views.mjs（viewType/槽位校验）、build-plugins.mjs（fail-fast 清单校验）、\nlintPluginCss（样式越界）、server-boundary.test.mjs（核心零业务）、arch.test.mjs（依赖方向）。\n改契约 = 同步改门禁 + 守卫测试 + docs/plugin-contract.md 三处；不一致时以代码门禁为准。"
+    "body": "常用命令：\n  npm run dev:standalone        # 开发环境（5000，.polaris-lite-dev/）\n  npm run typecheck             # tsc 主工程 + 插件工程\n  npm test                      # 全量 node:test（含 server-boundary/arch 等边界守卫）\n  npm run build:plugins         # 构建全部内置插件 + registry.json\n  npm run check:plugins         # 只跑静态一致性校验（CI 快速门禁）\n  npm run build                 # typecheck + check:plugins + vite build + sw manifest + sync-dist\n  npm run release               # 一键发版（commit→push→deploy:9826→build+restart 9825→终检）\n  npm run deploy:9826 / status:9826   # 分析实例发布/查看落后\n\n插件约束的门禁落点：manifest-views.mjs（viewType/槽位校验）、build-plugins.mjs（fail-fast 清单校验）、\nlintPluginCss（样式越界）、server-boundary.test.mjs（核心零业务）、arch.test.mjs（依赖方向）。\n改契约 = 同步改门禁 + 守卫测试 + docs/plugin-contract.md 三处；不一致时以代码门禁为准。"
   },
   {
     "id": "ops-extquad",

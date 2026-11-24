@@ -11,9 +11,9 @@
     {
       "id": "plite-guide",
       "name": "使用说明",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "polaris-lite 规范与使用说明：面板分节浏览 + AI 技能 + MCP 检索工具",
-      "sha256": "aa1b148be01fac0f2b500a94447283f12927648720aab9e4331e953f2c3531f1"
+      "sha256": "6254367142e435359a13ea78957ae326bd90373a2bcd4311760454f1ca723e08"
     }
   ]
 }
