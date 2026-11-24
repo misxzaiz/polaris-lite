@@ -1,12 +1,24 @@
 /**
- * voice-radio — 播报控制器（状态机 + 无限段循环 + 三路中断）。
- * 自 Polaris radioBroadcastController 移植；AI 通道从「kind 会话 + kernel 订阅」
- * 改为 lite 的 cap.ai.chat 流式总线（每段一个一次性轮次，message.done 下降沿取全文）。
+ * voice-radio — 播报控制器（状态机 + 无限段循环 + 三路中断 + 插话/补充 + 可选工具查证）。
+ * 自 Polaris radioBroadcastController 移植；AI 通道用 lite 的流式总线，每段一个一次性轮次，
+ * 段末（message.done / loop.done / stream.error）下降沿取全文。
+ *
+ * AI 通道双模（toolsMode 开关，面板可切）：
+ *  - off（默认）：cap.ai.chat 直连——纯聊天，最快出稿；
+ *  - on：cap.agent.loop 编排——AI 可在生成播报前调用工具（browser 搜索/读正文、
+ *    files、MCP 等）查证，查完输出正文。工具卡事件转发到对话流可见。
+ *    注意：无工具注册时 agent-loop 直通 cap.ai.chat，行为与 off 一致。
  *
  * 无限播报循环（两个触发点汇聚到 requestNextSegment）：
  *  1. 段级提前量：每句播完 onEnd → maybeAdvanceByLookahead，队列低水位且无段在途时
  *     提前生成下一段（播当前段时后台并行生成，消除段间静默）；
  *  2. 队列播空 onQueueDrained → 无段在途则请求下一段。
+ *
+ * 插话 / 临时补充（对齐 Polaris P2-2 半双工）：
+ *  - interject(text)：播放暂停 → 以插话为 prompt 生成回应段（不计轮次）→ 回复入队时恢复播放；
+ *    段在途时插话暂存，收尾后自动响应。
+ *  - supplement(text)：立即中断当前在途段（AI interrupt + 清播放队列，不停主循环）→
+ *    以补充内容为 prompt 立即请求下一段。
  */
 import {
   SEGMENT_LOOKAHEAD_SENTENCES,
@@ -14,6 +26,9 @@ import {
   MAX_CONSECUTIVE_ERRORS,
   promptForDirection,
   promptForSwitchTopic,
+  promptForInterject,
+  promptForSupplement,
+  TOOL_MODE_SYSTEM_SUFFIX,
   sanitizeForSpeech,
   DIRECTION_LABEL,
   shortId,
@@ -38,6 +53,8 @@ export interface StartOptions {
   maxSeconds?: number;
   providerId?: string;
   modelId?: string;
+  /** 工具查证模式：on = 走 agent-loop 编排（AI 可调工具），off = 纯聊天直连 */
+  toolsMode?: boolean;
 }
 
 type Listener = (snapshot: RadioSnapshot) => void;
@@ -47,6 +64,9 @@ interface ChatEventEnvelope {
   payload?: Record<string, unknown>;
   source?: string;
 }
+
+/** 段请求种类（决定 prompt 与轮次计数） */
+type SegmentKind = 'normal' | 'switch' | 'interject' | 'supplement';
 
 export class RadioController {
   private api: SlotHostApi | null = null;
@@ -67,6 +87,7 @@ export class RadioController {
   private maxSeconds?: number;
   private providerId?: string;
   private modelId?: string;
+  private toolsMode = false;
 
   // 睡眠定时
   private sleepUntil = 0;
@@ -78,13 +99,17 @@ export class RadioController {
   private stopped = false;
   private running = false;
   private stopReason: StopReason | null = null;
-  /** 当前在途段的中断柄（stop 时调用） */
+  /** 当前在途段的中断柄（stop/中断补充时调用） */
   private segmentCancel: (() => void) | null = null;
   private pendingSegment = false;
   /** 段级流式聚合的退订（每段注册、段末退订） */
   private offStream: (() => void) | null = null;
   private lastSegmentSummary = '';
   private topicSwitchPending = false;
+  /** 待响应插话（段在途时暂存，收尾后响应） */
+  private queueInterject: string | null = null;
+  /** 当前在途段是否插话回应（回复入队时恢复播放、不计轮次） */
+  private interjectActive = false;
 
   setHostApi(api: SlotHostApi): void {
     this.api = api;
@@ -151,6 +176,7 @@ export class RadioController {
     this.maxSeconds = opts.maxSeconds && opts.maxSeconds > 0 ? opts.maxSeconds : undefined;
     this.providerId = opts.providerId || undefined;
     this.modelId = opts.modelId || undefined;
+    this.toolsMode = opts.toolsMode === true;
     this.startedAt = Date.now();
     this.stopReason = null;
     this.sleepUntil = 0;
@@ -164,6 +190,8 @@ export class RadioController {
     this.pendingSegment = false;
     this.lastSegmentSummary = '';
     this.topicSwitchPending = false;
+    this.queueInterject = null;
+    this.interjectActive = false;
 
     this.player.setCallbacks({
       onStart: (text) => {
@@ -230,11 +258,7 @@ export class RadioController {
     this.player.stop();
 
     // 路 2：AI 生成中断（退订本段流事件 + 通知引擎 interrupt）
-    this.unbindStream();
-    const cancel = this.segmentCancel;
-    this.segmentCancel = null;
-    cancel?.();
-    this.pendingSegment = false;
+    this.abortSegment();
 
     this.nowPlayingText = null;
     this.consecutiveErrors = 0;
@@ -244,9 +268,25 @@ export class RadioController {
     this.sleepAfterSegment = false;
     this.sleepFading = false;
     this.paused = false;
+    this.queueInterject = null;
+    this.interjectActive = false;
 
     this.setStatus('idle');
     this.emit();
+  }
+
+  /**
+   * 中断当前在途段（不停播报主循环）：「立即中断补充」的前半步。
+   * - 退订本段流事件 + interrupt 当前轮次 + 清播放队列（代际+1，丢掉未播句）；
+   * - running/stopped 不动 → afterSegmentFinished 收尾后自然继续主循环。
+   */
+  private abortSegment(): void {
+    this.unbindStream();
+    const cancel = this.segmentCancel;
+    this.segmentCancel = null;
+    cancel?.();
+    this.pendingSegment = false;
+    this.interjectActive = false;
   }
 
   /** 播放暂停（AI 保持生成；移动端熄屏场景用） */
@@ -302,14 +342,55 @@ export class RadioController {
   switchTopic(direction: RadioDirection): void {
     const text = direction.text.trim();
     if (!text) return;
-    if (this.stopped || !this.running) return;
-    if (this.status === 'stopping' || this.status === 'idle' || this.status === 'error') return;
+    if (!this.canInterrupt()) return;
     this.direction = { kind: direction.kind, text };
     this.topicSwitchPending = true;
     this.lastSegmentSummary = '';
     this.player.setOptions({ mediaTitle: `${DIRECTION_LABEL[direction.kind]} · ${text}` });
     this.emit();
     if (!this.pendingSegment) this.requestNextSegment();
+  }
+
+  /**
+   * 插话（临时补充，半双工，对齐 Polaris P2-2）：暂停当前播放 → 以插话为请求生成
+   * 回应段（不计轮次）→ 回复入队时恢复播放。段在途时暂存，收尾后自动响应。
+   */
+  interject(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed || !this.canInterrupt()) return;
+    if (this.pendingSegment) {
+      // 在途段未完：暂存插话，收尾衔接点以后续请求消费
+      this.queueInterject = trimmed;
+      return;
+    }
+    this.queueInterject = trimmed;
+    this.requestNextSegment();
+  }
+
+  /**
+   * 立即中断补充：中止当前在途段（AI 流 + 未播队列立即停），马上以补充内容为
+   * 请求生成下一段。与 interject 的区别：不播完当前段等收尾，立即掉头。
+   */
+  supplement(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed || !this.canInterrupt()) return;
+    // 无条件中断：在途 AI 段（若有）abort + 播放器代际+1 清队列（未播句立即静音，
+    // 在途合成一并中止）。注意 pendingSegment 为 false 时队列里仍可能堆着未播句
+    // （合成/播放滞后于生成），必须同样清掉——否则补充内容会排在旧内容后面。
+    this.abortSegment();
+    this.player.stop();
+    this.paused = false;
+    this.queueInterject = null;
+    this.lastSegmentSummary = ''; // 补充内容重新起头，不续旧摘要
+    this.emit();
+    this.requestNextSegmentWithPrompt(promptForSupplement(trimmed), 'supplement');
+  }
+
+  /** 播报中是否可打断（idle/error/stopping 不可） */
+  private canInterrupt(): boolean {
+    if (this.stopped || !this.running) return false;
+    if (this.status === 'stopping' || this.status === 'idle' || this.status === 'error') return false;
+    return true;
   }
 
   private startSleepTimer(): void {
@@ -380,10 +461,26 @@ export class RadioController {
       return;
     }
 
+    // 插话优先（半双工）：请求发出即暂停当前播放，回复到达（finishOk）时恢复
+    if (this.queueInterject) {
+      const text = this.queueInterject;
+      this.queueInterject = null;
+      this.player.pause();
+      this.paused = true;
+      this.requestNextSegmentWithPrompt(promptForInterject(text), 'interject');
+      return;
+    }
+
+    const kind: SegmentKind = this.topicSwitchPending ? 'switch' : 'normal';
     const prompt = this.buildNextSegmentPrompt();
-    const systemPrompt = promptForDirection(this.direction.kind, this.direction.text);
+    this.requestNextSegmentWithPrompt(prompt, kind);
+  }
+
+  private requestNextSegmentWithPrompt(prompt: string, kind: SegmentKind): void {
+    const systemPrompt = promptForDirection(this.direction.kind, this.direction.text)
+      + (this.toolsMode ? TOOL_MODE_SYSTEM_SUFFIX : '');
     this.setStatus('generating');
-    this.runSegment(prompt, systemPrompt);
+    this.runSegment(prompt, systemPrompt, kind);
   }
 
   private afterSegmentFinished(): void {
@@ -420,17 +517,20 @@ export class RadioController {
   }
 
   /**
-   * 执行一次段生成：cap.ai.chat 流式（一次性轮次，独立 sessionId 隔离）。
-   * message.delta 累积全文；message.done / stream.error 为下降沿 → 清洗入队。
+   * 执行一次段生成。toolsMode=on 走 cap.agent.loop（AI 可先调工具查证再出稿），
+   * off 走 cap.ai.chat 直连。每段独立 sessionId 隔离；事件按 sessionId+messageId 防串台。
+   * 下降沿：message.done / loop.done / stream.error → 清洗入队。
    */
-  private runSegment(prompt: string, systemPrompt: string): void {
+  private runSegment(prompt: string, systemPrompt: string, kind: SegmentKind): void {
     const api = this.api;
     if (!api) return;
     const sessionId = shortId('radio-s');
     const messageId = shortId('radio-m');
+    const useLoop = this.toolsMode;
     let text = '';
     let settled = false;
     this.pendingSegment = true;
+    if (kind === 'interject') this.interjectActive = true;
 
     const timeout = setTimeout(() => {
       if (settled) return;
@@ -451,7 +551,14 @@ export class RadioController {
       } else {
         this.consecutiveErrors = 0;
         this.lastSegmentSummary = clean.slice(0, 120);
-        this.segmentIndex++;
+        if (this.interjectActive) {
+          // 插话回应：不计轮次；恢复半双工播放
+          this.interjectActive = false;
+          this.player.resume();
+          this.paused = false;
+        } else {
+          this.segmentIndex++;
+        }
         this.player.enqueueSegment(clean);
       }
       this.emit();
@@ -465,13 +572,20 @@ export class RadioController {
       this.unbindStream();
       this.segmentCancel = null;
       this.pendingSegment = false;
+      if (this.interjectActive) {
+        // 插话请求失败：恢复播放不滞留暂停
+        this.interjectActive = false;
+        this.player.resume();
+        this.paused = false;
+      }
       this.consecutiveErrors++;
       this.checkErrorThreshold(msg);
       this.emit();
       this.afterSegmentFinished();
     };
 
-    const off = api.listen('cap.ai.chat:event', (raw) => {
+    const eventChannel = useLoop ? 'cap.agent.loop:event' : 'cap.ai.chat:event';
+    const off = api.listen(eventChannel, (raw) => {
       const ev = (raw ?? {}) as ChatEventEnvelope;
       const inner = (ev.payload ?? {}) as { sessionId?: string; messageId?: string; delta?: string; message?: string; interrupted?: boolean };
       // 防串台：只消费本段轮次的事件
@@ -479,9 +593,9 @@ export class RadioController {
       if (inner.messageId && inner.messageId !== messageId) return;
       if (ev.kind === 'message.delta' && inner.delta) {
         text += inner.delta;
-      } else if (ev.kind === 'message.reasoning') {
-        // 思考流不进正文（Polaris 同语义：思考不是播报内容）
-      } else if (ev.kind === 'message.done') {
+      } else if (ev.kind === 'message.reasoning' || ev.kind === 'tool.card' || ev.kind === 'tool.result') {
+        // 思考流/工具卡不进正文；工具卡事件由对话流自行渲染（电台字幕只显示正文）
+      } else if (ev.kind === 'loop.done' || ev.kind === 'message.done') {
         if (inner.interrupted) {
           settleFail('已中断');
           return;
@@ -494,18 +608,22 @@ export class RadioController {
     this.offStream = off;
 
     this.segmentCancel = () => {
-      void api.dispatch({ target: 'cap.ai.chat.interrupt', action: 'interrupt', payload: { sessionId, messageId } }).catch(() => undefined);
+      void api.dispatch({
+        target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat.interrupt',
+        action: 'interrupt',
+        payload: { sessionId, messageId },
+      }).catch(() => undefined);
       off();
     };
 
     void api
       .dispatch({
-        target: 'cap.ai.chat',
+        target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
         action: 'start',
         payload: {
           sessionId,
           messageId,
-          // 首条 system 消息带方向模板：real-engine history 直传支持 system role
+          // 首条 system 消息带方向模板（+工具纪律附录）；real-engine/agent-loop 均支持 system role
           history: [{ role: 'system', content: systemPrompt }],
           prompt,
           ...(this.providerId ? { providerId: this.providerId } : {}),
@@ -527,9 +645,7 @@ export class RadioController {
     if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
       this.lastError = `连续失败 ${this.consecutiveErrors} 次，已停止播报（最后错误：${detail}）`;
       this.running = false;
-      this.unbindStream();
-      this.segmentCancel = null;
-      this.pendingSegment = false;
+      this.abortSegment();
       this.setStatus('error');
     }
   }

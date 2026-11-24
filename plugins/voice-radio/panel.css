@@ -134,3 +134,13 @@
 @media (max-width: 768px) {
   .vr-voice-list { grid-template-columns: 1fr; }
 }
+
+/* 插话 / 临时补充 */
+.vr-interject { display: flex; flex-direction: column; gap: 6px; }
+.vr-interject-btns { display: flex; gap: 8px; }
+.vr-interject-btns .vr-btn { flex: 1; }
+
+/* 工具查证开关行 */
+.vr-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.vr-switch-label { font-size: 12px; color: var(--text-dim); }
+.vr-switch-row input[type='checkbox'] { width: 15px; height: 15px; accent-color: var(--accent); }

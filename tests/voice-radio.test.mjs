@@ -166,6 +166,35 @@ test('voice-radio core：清洗/切句/提示词模板契约', async (t) => {
   assert.ok(controller.includes('cap.ai.chat.interrupt'), '中断必须走 cap.ai.chat.interrupt');
 });
 
+test('voice-radio：插话/补充/工具模式契约', async (t) => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const core = readFileSync(resolve(root, 'plugins/voice-radio/core.ts'), 'utf8');
+  const controller = readFileSync(resolve(root, 'plugins/voice-radio/controller.ts'), 'utf8');
+  const panel = readFileSync(resolve(root, 'plugins/voice-radio/Panel.tsx'), 'utf8');
+
+  // 插话模板：先回应再接续（对齐 Polaris promptForInterject）
+  assert.ok(core.includes('这是听众插话'), '必须有插话 prompt 模板');
+  // 补充模板：立即放下当前内容
+  assert.ok(core.includes('听众临时补充'), '必须有补充 prompt 模板');
+  // controller 三入口
+  assert.ok(controller.includes('interject(text'), 'controller 必须有 interject');
+  assert.ok(controller.includes('supplement(text'), 'controller 必须有 supplement（立即中断补充）');
+  assert.ok(controller.includes('abortSegment'), '补充路径必须有 abortSegment（中断在途段）');
+  // 插话半双工：请求时暂停、回复到达恢复
+  assert.ok(controller.includes('interjectActive'), '插话回复到达必须恢复播放且不计轮次');
+  // 工具查证双模：off=cap.ai.chat 直连；on=cap.agent.loop 编排（AI 可调工具）
+  assert.ok(controller.includes('cap.agent.loop:event'), '工具模式必须监听 loop 事件通道');
+  assert.ok(controller.includes("useLoop ? 'cap.agent.loop' : 'cap.ai.chat'"), 'AI 通道必须按 toolsMode 切换');
+  assert.ok(core.includes('TOOL_MODE_SYSTEM_SUFFIX'), '工具模式必须有 system 纪律附录');
+  // Panel：插话输入 + 立即中断补充按钮 + 开关
+  assert.ok(panel.includes('handleInterject'), 'Panel 必须有插话入口');
+  assert.ok(panel.includes('handleSupplement'), 'Panel 必须有立即中断补充入口');
+  assert.ok(panel.includes('工具查证模式'), 'Panel 必须有工具模式开关');
+});
+
 test('voice-radio server：磁盘缓存 key 覆盖 voice/style/text/baseUrl', async (t) => {
   const { readFileSync } = await import('node:fs');
   const { resolve, dirname } = await import('node:path');

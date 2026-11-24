@@ -148,6 +148,22 @@ export function promptForSwitchTopic(direction: string): string {
   return `用户换台了：立即切换主题，开始播报新方向「${direction}」。不要总结、告别或提及旧话题，直接从新内容第一句讲起（150~350 字）。`;
 }
 
+/** 听众插话指令：先直接回应插话（一两句），再自然接续当前话题播报 */
+export function promptForInterject(text: string): string {
+  return `这是听众插话：「${text}」。请先用一两句话直接回应插话，然后自然接续当前话题的播报。`;
+}
+
+/** 听众临时补充指令：立即中止当前内容，接续讲补充内容 */
+export function promptForSupplement(text: string): string {
+  return `听众临时补充了内容：「${text}」。请立即放下当前正在讲的内容，自然地把这个补充融入接下来的播报（先简短承接这句话，再继续当前方向的播报）。`;
+}
+
+/** 工具查证模式附加系统提示（开启时注入每段 system） */
+export const TOOL_MODE_SYSTEM_SUFFIX = `
+另外，本次会话可以使用工具（bash/browser/files/MCP 等）。纪律：
+- 仅当播报内容需要事实核实、数据支撑或最新信息时才调用工具；查完立即继续输出播报正文。
+- 每段仍以可朗读正文收尾；不要输出工具调用说明给听众。`;
+
 /** 清洗 TTS 文本：去 Markdown/代码/链接等不宜朗读符号（对齐 Polaris cleanTextForSpeech + 表格过滤） */
 export function sanitizeForSpeech(text: string): string {
   let cleaned = text

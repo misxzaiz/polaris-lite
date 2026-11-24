@@ -22,10 +22,10 @@ export const voiceRadioPlugin: LitePlugin = {
   manifest: {
     id: 'voice-radio',
     name: 'AI 电台',
-    version: '0.1.0',
-    capabilities: ['cap.kv', 'cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.model.admin'],
+    version: '0.2.0',
+    capabilities: ['cap.kv', 'cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.model.admin', 'cap.agent.loop'],
     provides: [],
-    events: ['cap.ai.chat:event'],
+    events: ['cap.ai.chat:event', 'cap.agent.loop:event'],
     contributes: {
       slots: [{ slot: 'panel', component: 'VoiceRadioPanel', order: 33, title: '电台' }],
     },

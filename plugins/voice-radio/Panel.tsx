@@ -95,6 +95,10 @@ export function VoiceRadioPanel() {
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
   const [busy, setBusy] = useState(false);
+  /** 工具查证模式：on = AI 可先调工具（browser/MCP 等）查资料再播报；off = 纯聊天直连 */
+  const [toolsMode, setToolsMode] = useState(false);
+  /** 插话/临时补充输入 */
+  const [interjectText, setInterjectText] = useState('');
 
   // 模型选择
   const [providers, setProviders] = useState<Array<{ id: string; name: string; activeModel: string; models: { id: string }[] }>>([]);
@@ -125,6 +129,7 @@ export function VoiceRadioPanel() {
         if (typeof p.maxSeconds === 'string') setMaxSeconds(p.maxSeconds);
         if (typeof p.providerId === 'string') setProviderId(p.providerId);
         if (typeof p.modelId === 'string') setModelId(p.modelId);
+        if (typeof p.toolsMode === 'boolean') setToolsMode(p.toolsMode);
       })
       .catch(() => undefined);
   }, []);
@@ -132,9 +137,9 @@ export function VoiceRadioPanel() {
   useEffect(() => {
     const api = radioHost;
     if (!api) return;
-    const prefs = { kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId };
+    const prefs = { kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode };
     void api.dispatch({ target: 'cap.kv', action: 'set', payload: { namespace: 'voice-radio', key: 'prefs', value: prefs } }).catch(() => undefined);
-  }, [kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId]);
+  }, [kind, directionText, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode]);
 
   // 控制器订阅
   useEffect(() => {
@@ -199,11 +204,12 @@ export function VoiceRadioPanel() {
         maxSeconds: maxSeconds && /^\d+$/.test(maxSeconds) ? Number(maxSeconds) * 60 : undefined,
         providerId: providerId || undefined,
         modelId: modelId || undefined,
+        toolsMode,
       });
     } finally {
       setBusy(false);
     }
-  }, [busy, directionText, kind, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId]);
+  }, [busy, directionText, kind, voice, volume, rate, maxRounds, maxSeconds, providerId, modelId, toolsMode]);
 
   const handleStop = useCallback(() => {
     void radioController.stop('manual');
@@ -213,6 +219,22 @@ export function VoiceRadioPanel() {
     if (snap.paused) radioController.resume();
     else radioController.pause();
   }, [snap.paused]);
+
+  /** 插话：半双工——暂停当前播报，AI 回应后自动续播（不计轮次） */
+  const handleInterject = useCallback(() => {
+    const t = interjectText.trim();
+    if (!t) return;
+    radioController.interject(t);
+    setInterjectText('');
+  }, [interjectText]);
+
+  /** 立即中断补充：中止当前段与未播队列，马上以补充内容继续 */
+  const handleSupplement = useCallback(() => {
+    const t = interjectText.trim();
+    if (!t) return;
+    radioController.supplement(t);
+    setInterjectText('');
+  }, [interjectText]);
 
   const cycleSpeed = useCallback(() => {
     const steps = [1, 1.25, 1.5, 2, 0.75];
@@ -296,6 +318,28 @@ export function VoiceRadioPanel() {
                 <button type="button" className="vr-btn danger" onClick={handleStop}>
                   停止
                 </button>
+              </div>
+
+              {/* 插话 / 立即中断补充 */}
+              <div className="vr-interject">
+                <input
+                  className="vr-input"
+                  value={interjectText}
+                  onChange={(e) => setInterjectText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleInterject();
+                  }}
+                  placeholder="插话：说点什么，AI 回应后继续播报…"
+                  aria-label="插话"
+                />
+                <div className="vr-interject-btns">
+                  <button type="button" className="vr-btn" onClick={handleInterject} disabled={!interjectText.trim()}>
+                    插话
+                  </button>
+                  <button type="button" className="vr-btn danger" onClick={handleSupplement} disabled={!interjectText.trim()} title="立即中断当前内容，马上讲这条补充">
+                    立即中断补充
+                  </button>
+                </div>
               </div>
 
               <div className="vr-chiprow">
@@ -447,6 +491,20 @@ export function VoiceRadioPanel() {
                   />
                 </div>
                 <p className="vr-hint">填「播 N 轮」= 播满 N 段后自动停止；填「播 N 分钟」按时长兜底。都不填则无限连续播报。</p>
+                {/* 工具查证模式（可开关；默认关） */}
+                <label className="vr-switch-row">
+                  <span className="vr-switch-label">工具查证模式</span>
+                  <input
+                    type="checkbox"
+                    checked={toolsMode}
+                    onChange={(e) => setToolsMode(e.target.checked)}
+                    aria-label="工具查证模式"
+                  />
+                </label>
+                <p className="vr-hint">
+                  开启后 AI 在生成播报前可调用工具（browser 搜索/读网页、MCP、文件等）核实或补充资料，再继续播报；
+                  播报节奏会变慢（工具调用需要时间）。关闭即为纯聊天直连，出稿最快。
+                </p>
               </div>
 
               {isActive && (
