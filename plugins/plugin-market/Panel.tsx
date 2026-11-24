@@ -64,8 +64,9 @@ export function MarketPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState('');
   const [needsReload, setNeedsReload] = useState(false);
-  const [form, setForm] = useState({ name: '', ref: '' });
+  const [form, setForm] = useState({ name: '', type: 'cc-marketplace', ref: '' });
   const [armRemove, setArmRemove] = useState<string | null>(null);
+  const [showRemote, setShowRemote] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -128,8 +129,9 @@ export function MarketPanel() {
   const addSource = async () => {
     setBusy('add-source');
     try {
-      await api('/api/market/sources', { name: form.name.trim(), type: 'dir', ref: form.ref.trim() });
-      setForm({ name: '', ref: '' });
+      await api('/api/market/sources', { name: form.name.trim(), type: form.type, ref: form.ref.trim() });
+      setForm({ name: '', type: form.type, ref: '' });
+      setFlash(form.type === 'cc-marketplace' ? 'CC 商城源已添加，商城 tab 即可浏览/安装' : '源已添加');
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -184,7 +186,11 @@ export function MarketPanel() {
       {tab === 'store' && (
         <div>
           {items.length === 0 && (
-            <div className="mk-empty">商城暂无插件。先在「源」页签添加一个本地目录源（目录内含 index.json 清单与插件包）。</div>
+            <div className="mk-empty">
+              商城暂无 JS 插件。想装什么？
+              <br />· <b>Claude Code 的技能/钩子/MCP 插件</b> → 切到「CC」页签（开箱即用，本机已有 {ccMarkets.reduce((n, m) => n + m.installableCount, 0)} 个可装）
+              <br />· 自制 JS 插件 → 在「源」页签添加本地目录源（内含 index.json 清单与插件包）
+            </div>
           )}
           {items.map((i) => (
             <div key={`${i.source}/${i.id}`} className="mk-item">
@@ -217,11 +223,10 @@ export function MarketPanel() {
       {tab === 'cc' && (
         <div>
           <div className="mk-hint">
-            Claude Code 插件商城（本机 ~/.claude/plugins/marketplaces/）。安装 = 导入其<b>声明型资源</b>
-            （skills → 技能面板、hooks → 钩子桥、stdio mcpServers → MCP 桥），<b>不运行外部 JS</b>。
-            仅本地已 checkout 的插件可安装；远程条目需先在 Claude Code 侧安装/clone。
+            Claude Code 插件商城。安装 = 导入其<b>声明型资源</b>（skills → 技能面板、hooks → 钩子桥、
+            stdio mcpServers → MCP 桥），<b>不运行外部 JS</b>。可在「源」页签添加更多 CC 商城源（填 GitHub 仓库 owner/repo，自动 clone）。
           </div>
-          {ccMarkets.length === 0 && <div className="mk-empty">未发现 CC 商城（~/.claude/plugins/marketplaces/ 不存在或为空）。</div>}
+          {ccMarkets.length === 0 && <div className="mk-empty">未发现 CC 商城。可在「源」页签添加（类型选 CC 商城，如 anthropics/claude-plugins-official）。</div>}
           {ccMarkets.map((m) => (
             <div key={m.name} className="mk-item">
               <div className="mk-item-head">
@@ -232,28 +237,43 @@ export function MarketPanel() {
               </div>
             </div>
           ))}
-          {ccMarkets.length > 0 && (
+          {ccAll.length > 0 && (
             <input className="mk-input" type="search" placeholder="搜索 CC 插件（id/描述）…" value={ccQuery} onChange={(e) => setCcQuery(e.target.value)} />
           )}
-          {ccFiltered.slice(0, 60).map((p) => (
+          {ccFiltered.filter((p) => p.installable).slice(0, 60).map((p) => (
             <div key={`${p.market}/${p.id}`} className="mk-item">
               <div className="mk-item-head">
                 <span className="mk-name">{p.id}</span>
                 <span className="mk-badge">{p.market}</span>
-                {!p.installable && <span className="mk-badge warn">远程（未 checkout）</span>}
               </div>
               {p.description && <div className="mk-desc">{p.description}</div>}
               <div className="mk-actions">
-                {p.installable && (
-                  <>
-                    <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>导入（全局）</button>
-                    <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
-                  </>
-                )}
+                <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>导入（全局）</button>
+                <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
               </div>
             </div>
           ))}
-          {ccFiltered.length > 60 && <div className="mk-hint">共 {ccFiltered.length} 条，仅显示前 60——请用搜索缩小范围。</div>}
+          {(() => {
+            const remote = ccFiltered.filter((p) => !p.installable);
+            if (remote.length === 0) return null;
+            return (
+              <div>
+                <button className="mk-btn" style={{ width: '100%', marginTop: 8 }} onClick={() => setShowRemote(!showRemote)}>
+                  {showRemote ? '▾' : '▸'} 未在本机 checkout 的远程插件（{remote.length}）——需先在 Claude Code 侧安装
+                </button>
+                {showRemote && remote.slice(0, 80).map((p) => (
+                  <div key={`${p.market}/${p.id}`} className="mk-item" style={{ opacity: 0.6 }}>
+                    <div className="mk-item-head">
+                      <span className="mk-name">{p.id}</span>
+                      <span className="mk-badge warn">远程</span>
+                    </div>
+                    {p.description && <div className="mk-desc">{p.description}</div>}
+                  </div>
+                ))}
+                {showRemote && remote.length > 80 && <div className="mk-hint">共 {remote.length} 条远程条目，仅显示前 80。</div>}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -306,8 +326,23 @@ export function MarketPanel() {
             </div>
           ))}
           <div className="mk-form">
+            <div className="mk-form-row">
+              <label style={{ fontSize: 11, opacity: 0.7 }}>类型</label>
+              <select className="mk-input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+                <option value="cc-marketplace">CC 商城（GitHub 仓库，推荐）</option>
+                <option value="dir">本地目录（自制 JS 插件清单）</option>
+              </select>
+            </div>
             <input className="mk-input" placeholder="源名（如 my-plugins）" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <input className="mk-input" placeholder="本地目录绝对路径（含 index.json）" value={form.ref} onChange={(e) => setForm({ ...form, ref: e.target.value })} />
+            <input
+              className="mk-input"
+              placeholder={form.type === 'cc-marketplace' ? 'GitHub 仓库 owner/repo（如 anthropics/claude-plugins-official）' : '本地目录绝对路径（含 index.json）'}
+              value={form.ref}
+              onChange={(e) => setForm({ ...form, ref: e.target.value })}
+            />
+            {form.type === 'cc-marketplace' && (
+              <div className="mk-hint">添加后自动 clone 商城仓库（本机 ~/.claude 已有则直接复用）；其技能/钩子/MCP 型插件即可在「CC」页签导入。</div>
+            )}
             <div className="mk-form-actions">
               <button className="mk-btn primary" disabled={busy === 'add-source' || !form.name.trim() || !form.ref.trim()} onClick={addSource}>添加源</button>
             </div>
@@ -318,10 +353,11 @@ export function MarketPanel() {
 
       {tab === 'about' && (
         <div className="mk-about">
-          <p><b>外部插件</b>：从商城安装的插件存放在 <code>&lt;dataDir&gt;/plugins/</code>，与内置插件物理隔离；其 bundle 经 <code>/ext-plugins/</code> 自服务路由加载。</p>
-          <p className="mk-warn">[!] 外部插件与宿主**同进程**运行（前端 bundle + server 半边中间件）。请只安装可信来源——安装即信任其全部声明权限（unlistedPolicy=declare）。</p>
-          <p>安装校验：sha256 指纹比对 + plugin.json 声明校验 + id 冲突拒绝 + 路径逃逸拒绝。安装/卸载后<b>刷新页面生效</b>（前端半边立即加载；server 半边需重启服务）。</p>
-          <p>源格式：目录内 <code>index.json</code>（<code>{'{'}"name":…, "plugins":[{'{'}"id",…,"sha256"…{'}'}]{'}'}</code>）+ 每插件一个同名子目录（<code>plugin.json</code> + <code>plugin.js</code> [+ <code>style.css</code>]）。</p>
+          <p><b>两类商城源</b>：</p>
+          <p>① <b>CC 商城</b>（推荐）：Claude Code 插件仓库。安装 = 导入其<b>声明型资源</b>——skills → 技能面板、hooks → 钩子桥、stdio mcpServers → MCP 桥，<b>不运行外部 JS</b>，安全面最小。支持全局/项目两种作用域。源地址填 GitHub 仓库（owner/repo），自动 clone（本机 ~/.claude 已有的直接复用）。</p>
+          <p>② <b>本地目录源</b>：自制 JS 插件清单（index.json + plugin.json/plugin.js）。安装会<b>运行外部代码</b>——bundle 与宿主同进程，经 sha256 校验 + id 冲突拒绝 + 路径逃逸拒绝，只装可信来源。</p>
+          <p><b>生效时机</b>：CC 声明型导入——skills 即刻生效，hooks/mcpServers 下轮会话生效；JS 插件——刷新页面生效（server 半边需重启）。</p>
+          <p className="mk-warn">[!] 只添加可信来源。来源不明的仓库/目录可能包含恶意指令或代码。</p>
         </div>
       )}
     </div>

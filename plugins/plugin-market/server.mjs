@@ -18,10 +18,12 @@
  * 安全：会话门禁；PLITE_MARKET=0；sha256 对目录源 = 清单里登记的目标文件指纹（安装时重算）；
  * 路径逃逸拒绝；registry 双写复用 plugin-manager 惯例（dist+public 双写 + ?v=bump）。
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync, renameSync } from 'node:fs';
 import { join, resolve, dirname, basename, extname, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 const MIME = {
   '.js': 'application/javascript; charset=utf-8',
@@ -170,25 +172,32 @@ export function createServerPart(options = {}) {
     }
     // CC 商城（claude code marketplaces）：声明型资源插件（skills/hooks/mcpServers），
     // 安装走 /api/compat/cc-market/install（zcode-compat 转译），不经 /ext-plugins。
-    const ccMarkets = readCcMarkets();
+    // 扫描 ~/.claude 本机的 + 用户以 cc-marketplace 类型添加的源（clone 到 <dataDir>/marketplaces/）。
+    const ccMarkets = readCcMarkets(sources.filter((s) => s.type === 'cc-marketplace'));
     return { sources, items, ccMarkets, warns, extCount: (reg?.plugins ?? []).filter((p) => p && String(p.module ?? '').startsWith('/ext-plugins/')).length };
   }
 
   /** 读 CC 商城清单（同进程内直接调 zcode-compat 的发现逻辑不可行——跨插件；
    *  改为读它的 /api/compat/cc-market？也不行——那是 HTTP 端点需会话。
-   *  最简：这里复制轻量版发现（只列 installable 摘要），与 zcode-compat 的 discoverCcMarket 同口径。 */
-  function readCcMarkets() {
+   *  最简：这里复制轻量版发现（只列 installable 摘要），与 zcode-compat 的 discoverCcMarket 同口径。
+   *  roots：待扫描的 marketplace 目录列表（~/.claude 本机的 + 用户加的 cc-marketplace 源 localRoot）。 */
+  function readCcMarkets(extraRoots = []) {
+    const roots = new Map(); // path → 别名（去重）
     const home = process.env.USERPROFILE || process.env.HOME || '';
     const marketsRoot = join(home, '.claude', 'plugins', 'marketplaces');
+    if (home && existsSync(marketsRoot)) {
+      let names;
+      try { names = readdirSync(marketsRoot); } catch { names = []; }
+      for (const n of names) {
+        const p = join(marketsRoot, n);
+        try { if (statSync(p).isDirectory()) roots.set(p, n); } catch { /* 忽略 */ }
+      }
+    }
+    for (const s of extraRoots) {
+      if (s?.localRoot && existsSync(s.localRoot)) roots.set(s.localRoot, s.name);
+    }
     const out = [];
-    if (!home || !existsSync(marketsRoot)) return out;
-    let names;
-    try { names = readdirSync(marketsRoot); } catch { return out; }
-    for (const mname of names) {
-      const mroot = join(marketsRoot, mname);
-      let isDir = false;
-      try { isDir = statSync(mroot).isDirectory(); } catch { continue; }
-      if (!isDir) continue;
+    for (const [mroot, alias] of roots) {
       let mf;
       try { mf = JSON.parse(readFileSync(join(mroot, '.claude-plugin', 'marketplace.json'), 'utf8')); } catch { continue; }
       if (!mf || !Array.isArray(mf.plugins)) continue;
@@ -214,7 +223,7 @@ export function createServerPart(options = {}) {
           plugins.push({ id: name, description: '', installable: true });
         }
       }
-      out.push({ name: mname, owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
+      out.push({ name: alias, owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
     }
     return out;
   }
@@ -285,11 +294,47 @@ export function createServerPart(options = {}) {
         const body = JSON.parse((await readBody()) || '{}');
         const name = String(body.name ?? '').trim();
         const ref = String(body.ref ?? '').trim();
+        const type = String(body.type ?? 'dir');
         if (!name || !ref) return sendJson(400, { error: 'name 与 ref 必填' });
-        if (body.type !== 'dir') return sendJson(400, { error: '暂只支持 dir 类型源（本地目录）' });
-        if (!existsSync(ref)) return sendJson(400, { error: `源目录不存在：${ref}` });
         const list = loadSources();
         if (list.some((s) => s.name === name)) return sendJson(400, { error: `源名已存在：${name}` });
+        if (type === 'cc-marketplace') {
+          // CC 商城源：ref = github owner/repo（或已存在的本地 marketplace 目录）。
+          // 对齐 Claude Code 心智：加源 = clone 商城仓库到 <dataDir>/marketplaces/<name>/；
+          // 已有本地 clone（~/.claude/plugins/marketplaces/<name>）则直接复用不重复下载。
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(ref)) {
+            return sendJson(400, { error: `cc-marketplace 源 ref 应为 owner/repo 形态（如 anthropics/claude-plugins-official），收到: ${ref}` });
+          }
+          const repoName = ref.split('/')[1];
+          const ccRoot = join(homedir(), '.claude', 'plugins', 'marketplaces', repoName);
+          const localRoot = existsSync(join(ccRoot, '.claude-plugin', 'marketplace.json'))
+            ? ccRoot
+            : join(dataDir, 'marketplaces', repoName);
+          if (localRoot !== ccRoot && !existsSync(join(localRoot, '.claude-plugin', 'marketplace.json'))) {
+            // clone 到临时目录再改名：失败/中断不留半成品目录（半成品会让下次 clone 报 dir not empty）
+            const tmpRoot = `${localRoot}.tmp-${Date.now().toString(36)}`;
+            const clone = spawnSync('git', ['clone', '--depth', '1', `https://github.com/${ref}.git`, tmpRoot], {
+              stdio: 'ignore', timeout: 180_000, windowsHide: true,
+            });
+            const ok = clone.status === 0 && existsSync(join(tmpRoot, '.claude-plugin', 'marketplace.json'));
+            if (!ok) {
+              try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* 清理失败忽略 */ }
+              try { rmSync(localRoot, { recursive: true, force: true }); } catch { /* 清掉上次残留的半成品 */ }
+              return sendJson(400, { error: `clone 商城仓库失败：https://github.com/${ref}.git（检查网络/仓库名；也可用本地已 clone 的目录）` });
+            }
+            try { rmSync(localRoot, { recursive: true, force: true }); } catch { /* 无旧目录 */ }
+            mkdirSync(dirname(localRoot), { recursive: true });
+            try { renameSync(tmpRoot, localRoot); } catch (e) {
+              try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* 忽略 */ }
+              return sendJson(400, { error: `clone 成功但落位失败：${e?.message ?? e}` });
+            }
+          }
+          list.push({ name, type: 'cc-marketplace', ref, localRoot });
+          saveSources(list);
+          return sendJson(200, { ok: true, localRoot, reused: localRoot === ccRoot });
+        }
+        if (type !== 'dir') return sendJson(400, { error: '源类型仅支持 dir（本地目录清单）或 cc-marketplace（Claude Code 商城）' });
+        if (!existsSync(ref)) return sendJson(400, { error: `源目录不存在：${ref}` });
         list.push({ name, type: 'dir', ref: resolve(ref) });
         saveSources(list);
         return sendJson(200, { ok: true });

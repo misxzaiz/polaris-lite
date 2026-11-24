@@ -217,13 +217,27 @@ export function createServerPart(options = {}) {
     const marketsRoot = join(home, '.claude', 'plugins', 'marketplaces');
     const warns = [];
     const markets = [];
-    if (!existsSync(marketsRoot)) return { markets, warns };
-    let names;
-    try { names = readdirSync(marketsRoot); } catch { return { markets, warns }; }
-    for (const mname of names) {
-      const mroot = join(marketsRoot, mname);
-      let isDir = false;
-      try { isDir = statSync(mroot).isDirectory(); } catch { continue; }
+    // 待扫目录：~/.claude 本机 marketplaces + 用户经商城加的 cc-marketplace 源（clone 到 <dataDir>/marketplaces/）
+    const scanRoots = [];
+    if (existsSync(marketsRoot)) {
+      let names;
+      try { names = readdirSync(marketsRoot); } catch { names = []; }
+      for (const n of names) {
+        const p = join(marketsRoot, n);
+        try { if (statSync(p).isDirectory()) scanRoots.push([n, p]); } catch { /* 忽略 */ }
+      }
+    }
+    const ownMarkets = join(dataDir, 'marketplaces');
+    if (existsSync(ownMarkets)) {
+      let names;
+      try { names = readdirSync(ownMarkets); } catch { names = []; }
+      for (const n of names) {
+        const p = join(ownMarkets, n);
+        try { if (statSync(p).isDirectory()) scanRoots.push([n, p]); } catch { /* 忽略 */ }
+      }
+    }
+    for (const [mname, mroot] of scanRoots) {
+      const isDir = true;
       if (!isDir) continue;
       const mf = readJsonSafe(join(mroot, '.claude-plugin', 'marketplace.json'));
       if (!mf || !Array.isArray(mf.plugins)) { warns.push(`cc-market ${mname}: marketplace.json 不可读，跳过`); continue; }
