@@ -2,7 +2,38 @@
 import { useEffect, useState } from 'react';
 import { requestCompose } from './index';
 import { ArrowUpRightIcon, PolarisMark, RefreshIcon } from './icons';
-import { CATEGORY_LABEL, sampleSuggestions, type CategoryId, type Suggestion } from './suggestions';
+import { CATEGORY_LABEL, sampleSuggestions, SUGGESTIONS, type CategoryId, type Suggestion } from './suggestions';
+
+/** starter-suggestions 插件写入 kv 的池条目（只取渲染所需字段，其余忽略） */
+interface PoolItem {
+  label?: unknown;
+  prompt?: unknown;
+  category?: unknown;
+  enabled?: unknown;
+}
+
+/** 从 kv 池读取可展示建议；任何异常都回退 null（调用方用内置池兜底） */
+async function loadPoolSuggestions(): Promise<Suggestion[] | null> {
+  try {
+    const resp = await fetch('/api/kv/get?namespace=starter-suggestions&key=pool', { credentials: 'include' });
+    if (!resp.ok) return null;
+    const j = (await resp.json()) as { value?: { items?: PoolItem[] } | null };
+    const items = j?.value?.items;
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const out: Suggestion[] = [];
+    for (const it of items) {
+      if (it?.enabled === false) continue;
+      const label = typeof it.label === 'string' ? it.label : '';
+      const prompt = typeof it.prompt === 'string' ? it.prompt : '';
+      if (!label || !prompt) continue;
+      const category = (CATEGORY_LABEL as Record<string, string>)[String(it.category)] ? (it.category as CategoryId) : 'explore';
+      out.push({ label, prompt, category });
+    }
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
 
 /** no-session 偏「建立惊艳感」，no-message 偏「工作流」。 */
 const PREFER: Record<'no-session' | 'no-message', CategoryId[]> = {
@@ -12,14 +43,25 @@ const PREFER: Record<'no-session' | 'no-message', CategoryId[]> = {
 
 export function EmptyState({ variant }: { variant: 'no-session' | 'no-message' }) {
   const first = variant === 'no-session';
+  // 首帧直接用内置池同步抽样（无闪烁）；kv 池到达后替换为合并池
+  const [pool, setPool] = useState<Suggestion[]>(SUGGESTIONS);
+
+  useEffect(() => {
+    let alive = true;
+    void loadPoolSuggestions().then((remote) => {
+      if (alive && remote) setPool(remote);
+    });
+    return () => { alive = false; };
+  }, []);
+
   const [items, setItems] = useState<Suggestion[]>([]);
 
   useEffect(() => {
-    setItems(sampleSuggestions({ count: 4, prefer: PREFER[variant] }));
-  }, [variant]);
+    setItems(sampleSuggestions({ count: 4, prefer: PREFER[variant], source: pool }));
+  }, [variant, pool]);
 
   const reshuffle = () => {
-    setItems((prev) => sampleSuggestions({ count: 4, prefer: PREFER[variant], exclude: prev.map((s) => s.prompt) }));
+    setItems((prev) => sampleSuggestions({ count: 4, prefer: PREFER[variant], exclude: prev.map((s) => s.prompt), source: pool }));
   };
 
   return (

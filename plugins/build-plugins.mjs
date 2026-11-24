@@ -118,6 +118,8 @@ const plugins = [
   { id: 'personal-hub', config: 'personal-hub/vite.config.ts', dist: 'personal-hub/dist', order: 32 },
   // voice-radio = AI 无限语音电台（自 Polaris Radio Broadcast 移植）：cap.ai.chat 段循环 + MiMo TTS 服务端代理
   { id: 'voice-radio', config: 'voice-radio/vite.config.ts', dist: 'voice-radio/dist', order: 33 },
+  // starter-suggestions = 新会话开场建议池（cap.kv 持久化 + cap.tool.suggestions 供 AI 实时增改 + panel 管理面）
+  { id: 'starter-suggestions', config: 'starter-suggestions/vite.config.ts', dist: 'starter-suggestions/dist', order: 34 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
