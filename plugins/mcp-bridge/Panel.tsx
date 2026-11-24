@@ -45,6 +45,49 @@ async function admin<T>(action: string, payload?: Record<string, unknown>): Prom
   return r.data as T;
 }
 
+/** 英文判定：无 CJK、含拉丁字母、长度达标（与 translate 插件同口径） */
+function isEnglishDesc(text: string): boolean {
+  if (!text || text.length < 12) return false;
+  if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text)) return false;
+  return /[a-zA-Z]/.test(text);
+}
+
+/** 就地翻译一条描述：百度代理优先，失败静默返回 null（面板不打断） */
+async function translateDesc(text: string): Promise<string | null> {
+  try {
+    const res = await fetch('/api/translate/translate', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, to: 'zh' }),
+    });
+    const j = (await res.json().catch(() => null)) as { ok?: boolean; result?: string } | null;
+    return j?.ok && j.result ? j.result : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 单条工具描述 + 「译」按钮（译文就地展开；不弹层不切面板） */
+function TranslatableToolDesc({ text }: { text: string }) {
+  const [zh, setZh] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!isEnglishDesc(text)) return <span className="mcp-tool-desc">{text}</span>;
+  const run = async () => {
+    if (busy || zh) return;
+    setBusy(true);
+    const r = await translateDesc(text);
+    setBusy(false);
+    if (r) setZh(r);
+  };
+  return (
+    <span className="mcp-tool-desc-wrap">
+      <span className="mcp-tool-desc">{text}</span>
+      <button className="mcp-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : zh ? '已译' : '译'}</button>
+      {zh && <span className="mcp-tool-desc zh">{zh}</span>}
+    </span>
+  );
+}
+
 export function McpPanel() {
   const [tab, setTab] = useState<'servers' | 'about'>('servers');
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -166,7 +209,7 @@ export function McpPanel() {
                   {s.tools.map((t) => (
                     <div key={t.name} className="mcp-tool">
                       <code className="mcp-tool-name">{t.name}</code>
-                      <span className="mcp-tool-desc">{t.description}</span>
+                      <TranslatableToolDesc text={t.description} />
                       <button
                         className={t.gated ? 'mcp-gate off' : 'mcp-gate'}
                         disabled={busy}

@@ -120,6 +120,8 @@ const plugins = [
   { id: 'voice-radio', config: 'voice-radio/vite.config.ts', dist: 'voice-radio/dist', order: 33 },
   // starter-suggestions = 新会话开场建议池（cap.kv 持久化 + cap.tool.suggestions 供 AI 实时增改 + panel 管理面）
   { id: 'starter-suggestions', config: 'starter-suggestions/vite.config.ts', dist: 'starter-suggestions/dist', order: 34 },
+  // translate = 翻译（自 Polaris 翻译功能移植）：百度翻译 server 代理 + cap.tool.translate 供 AI 调用 + panel 面板
+  { id: 'translate', config: 'translate/vite.config.ts', dist: 'translate/dist', order: 35 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}

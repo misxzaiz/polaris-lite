@@ -116,7 +116,8 @@
         "cap.tool.mcp",
         "cap.tool.mcp-ops",
         "cap.market.tool",
-        "cap.tool.transcript"
+        "cap.tool.transcript",
+        "cap.tool.translate"
       ],
       "provides": [
         "cap.agent.loop"
@@ -404,6 +405,18 @@
         "tool-registered",
         "suggestions-changed",
         "cap.ai.chat:event"
+      ]
+    },
+    "translate": {
+      "capabilities": [
+        "cap.kv"
+      ],
+      "provides": [
+        "cap.tool.translate"
+      ],
+      "events": [
+        "tool-registered",
+        "translate-history-changed"
       ]
     }
   }

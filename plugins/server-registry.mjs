@@ -43,6 +43,8 @@ export const SERVER_PLUGINS = [
   { id: 'git-core', entry: './git-core/server.mjs' },
   // voice-radio：AI 无限语音电台（MiMo TTS 服务端代理 + 磁盘缓存；Key 只在服务端）
   { id: 'voice-radio', entry: './voice-radio/server.mjs' },
+  // translate：百度翻译代理（签名 + 错误码中文化 + LRU 缓存；SecretKey 只在服务端）
+  { id: 'translate', entry: './translate/server.mjs' },
 ];
 
 /**

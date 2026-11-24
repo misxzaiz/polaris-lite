@@ -4,6 +4,7 @@
  * 功能：技能列表（来源徽标）/ 详情展开（SKILL.md 全文）/ 重新扫描 / 斜杠用法说明。
  * 只读面板：技能文件即真相（放目录即生效），不做新建/编辑。
  * 数据面：直接 fetch /api/skills/*（同源 cookie），无自注册 cap。
+ * 英文描述就地翻译：点「译」按钮 → translate 插件 server 代理（失败静默，不打断面板）。
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -12,6 +13,48 @@ interface SkillRow {
   description: string;
   whenToUse: string;
   source: string;
+}
+
+/** 英文判定：无 CJK、含拉丁字母、长度达标（与 translate 插件同口径） */
+function isEnglishDesc(text: string): boolean {
+  if (!text || text.length < 12) return false;
+  if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text)) return false;
+  return /[a-zA-Z]/.test(text);
+}
+
+/** 就地翻译一条描述：百度代理优先，失败静默返回 null（面板不打断） */
+async function translateDesc(text: string): Promise<string | null> {
+  try {
+    const res = await fetch('/api/translate/translate', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, to: 'zh' }),
+    });
+    const j = (await res.json().catch(() => null)) as { ok?: boolean; result?: string } | null;
+    return j?.ok && j.result ? j.result : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 单条描述 + 「译」按钮（译文就地展开在原文下方；不弹层不切面板） */
+function TranslatableDesc({ text }: { text: string }) {
+  const [zh, setZh] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!isEnglishDesc(text)) return <div className="sk-desc">{text}</div>;
+  const run = async () => {
+    if (busy || zh) return;
+    setBusy(true);
+    const r = await translateDesc(text);
+    setBusy(false);
+    if (r) setZh(r);
+  };
+  return (
+    <div className="sk-desc-wrap">
+      <div className="sk-desc">{text}<button className="sk-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : zh ? '已译' : '译'}</button></div>
+      {zh && <div className="sk-desc zh">{zh}</div>}
+    </div>
+  );
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -92,7 +135,7 @@ export function SkillPanel() {
             <span className="sk-name">{s.name}</span>
             <span className="sk-badge">{SOURCE_LABEL[s.source] ?? s.source}</span>
           </div>
-          {s.description && <div className="sk-desc">{s.description}</div>}
+          {s.description && <TranslatableDesc text={s.description} />}
           {s.whenToUse && <div className="sk-when">何时用：{s.whenToUse}</div>}
           {expanded === s.name && (
             <pre className="sk-body">{detail[s.name] ?? '加载中…'}</pre>

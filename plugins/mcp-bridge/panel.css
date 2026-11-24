@@ -20,6 +20,16 @@
 .mcp-tool { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
 .mcp-tool-name { font-size: 11px; color: var(--text); word-break: break-all; }
 .mcp-tool-desc { flex: 1; color: var(--text-dim, var(--text)); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-desc-wrap { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
+.mcp-tool-desc-wrap .mcp-tool-desc { flex: 0 1 auto; min-width: 0; }
+.mcp-tool-desc.zh { flex-basis: 100%; color: var(--text); white-space: normal; padding-left: 6px; border-left: 2px solid var(--accent, var(--border)); }
+.mcp-tr-btn {
+  flex: 0 0 auto; min-width: 26px; height: 18px;
+  border: 1px solid var(--border); border-radius: 4px; background: transparent;
+  color: var(--text-dim, var(--text)); cursor: pointer; font-size: 10px; padding: 0 6px;
+}
+.mcp-tr-btn:hover:not(:disabled) { color: var(--accent, var(--text)); border-color: var(--accent, var(--border)); }
+.mcp-tr-btn:disabled { opacity: 0.5; cursor: default; }
 .mcp-tool-none { color: var(--text-dim, var(--text)); font-size: 11px; }
 .mcp-gate { border: 1px solid var(--border); background: transparent; border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; color: var(--text); }
 .mcp-gate.off { opacity: 0.55; }

@@ -12,6 +12,17 @@
 .sk-name { font-weight: 600; }
 .sk-badge { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--text-dim, var(--text)); }
 .sk-desc { color: var(--text-dim, var(--text)); margin-top: 4px; line-height: 1.5; word-break: break-word; }
+.sk-desc-wrap .sk-desc { display: flex; gap: 6px; align-items: flex-start; }
+.sk-desc-wrap .sk-desc zh,
+.sk-desc-wrap .sk-desc .sk-tr-btn { flex: 0 0 auto; }
+.sk-desc.zh { color: var(--text); margin-top: 2px; padding-left: 8px; border-left: 2px solid var(--accent, var(--border)); }
+.sk-tr-btn {
+  flex: 0 0 auto; min-width: 26px; height: 18px; margin-left: auto;
+  border: 1px solid var(--border); border-radius: 4px; background: transparent;
+  color: var(--text-dim, var(--text)); cursor: pointer; font-size: 10px; padding: 0 6px;
+}
+.sk-tr-btn:hover:not(:disabled) { color: var(--accent, var(--text)); border-color: var(--accent, var(--border)); }
+.sk-tr-btn:disabled { opacity: 0.5; cursor: default; }
 .sk-when { color: var(--text-dim, var(--text)); margin-top: 2px; font-size: 11px; word-break: break-word; }
 .sk-body { margin: 6px 0 0; border-top: 1px dashed var(--border); padding-top: 6px; font-family: var(--font-mono, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; color: var(--text); }
 .sk-hint { margin-top: 10px; color: var(--text-dim, var(--text)); line-height: 1.6; font-size: 11px; }
