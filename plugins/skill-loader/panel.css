@@ -16,6 +16,7 @@
 .sk-desc-wrap .sk-desc zh,
 .sk-desc-wrap .sk-desc .sk-tr-btn { flex: 0 0 auto; }
 .sk-desc.zh { color: var(--text); margin-top: 2px; padding-left: 8px; border-left: 2px solid var(--accent, var(--border)); }
+.sk-desc.zh.when-zh { margin-top: 2px; font-size: 11px; }
 .sk-tr-btn {
   flex: 0 0 auto; min-width: 26px; height: 18px; margin-left: auto;
   border: 1px solid var(--border); border-radius: 4px; background: transparent;

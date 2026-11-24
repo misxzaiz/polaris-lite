@@ -37,11 +37,15 @@ async function translateDesc(text: string): Promise<string | null> {
   }
 }
 
-/** 单条描述 + 「译」按钮（译文就地展开在原文下方；不弹层不切面板） */
-function TranslatableDesc({ text }: { text: string }) {
+/** 单条描述 + 「译」按钮（译文就地展开在原文下方；不弹层不切面板）。variant 控制外层 class（desc/when） */
+function TranslatableDesc({ text, variant = 'desc' }: { text: string; variant?: 'desc' | 'when' }) {
   const [zh, setZh] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!isEnglishDesc(text)) return <div className="sk-desc">{text}</div>;
+  if (!isEnglishDesc(text)) {
+    return variant === 'when'
+      ? <div className="sk-when">何时用：{text}</div>
+      : <div className="sk-desc">{text}</div>;
+  }
   const run = async () => {
     if (busy || zh) return;
     setBusy(true);
@@ -51,8 +55,10 @@ function TranslatableDesc({ text }: { text: string }) {
   };
   return (
     <div className="sk-desc-wrap">
-      <div className="sk-desc">{text}<button className="sk-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : zh ? '已译' : '译'}</button></div>
-      {zh && <div className="sk-desc zh">{zh}</div>}
+      {variant === 'when'
+        ? <div className="sk-when">何时用：{text}<button className="sk-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : zh ? '已译' : '译'}</button></div>
+        : <div className="sk-desc">{text}<button className="sk-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : zh ? '已译' : '译'}</button></div>}
+      {zh && <div className={`sk-desc zh ${variant === 'when' ? 'when-zh' : ''}`}>{zh}</div>}
     </div>
   );
 }
@@ -136,7 +142,7 @@ export function SkillPanel() {
             <span className="sk-badge">{SOURCE_LABEL[s.source] ?? s.source}</span>
           </div>
           {s.description && <TranslatableDesc text={s.description} />}
-          {s.whenToUse && <div className="sk-when">何时用：{s.whenToUse}</div>}
+          {s.whenToUse && <TranslatableDesc text={s.whenToUse} variant="when" />}
           {expanded === s.name && (
             <pre className="sk-body">{detail[s.name] ?? '加载中…'}</pre>
           )}

@@ -61,6 +61,69 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   return j;
 }
 
+/** 英文判定：无 CJK、含拉丁字母、长度达标（与 translate 插件同口径） */
+function isEnglishDesc(text: string): boolean {
+  if (!text || text.length < 12) return false;
+  if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text)) return false;
+  return /[a-zA-Z]/.test(text);
+}
+
+/** 就地翻译一条描述：translate 插件 server 代理，失败静默返回 null */
+async function translateDesc(text: string): Promise<string | null> {
+  try {
+    const res = await fetch('/api/translate/translate', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, to: 'zh' }),
+    });
+    const j = (await res.json().catch(() => null)) as { ok?: boolean; result?: string } | null;
+    return j?.ok && j.result ? j.result : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 批量预取：一次翻 ≤50 条英文描述（exec_batch），面板挂载时调用；失败静默返回空表 */
+async function translateBatch(texts: string[]): Promise<Record<string, string>> {
+  const uniq = [...new Set(texts.filter((t) => isEnglishDesc(t)))].slice(0, 50);
+  if (!uniq.length) return {};
+  try {
+    const res = await fetch('/api/translate/translate-batch', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: uniq, to: 'zh' }),
+    });
+    const j = (await res.json().catch(() => null)) as { ok?: boolean; results?: (string | null)[] } | null;
+    if (!j?.ok || !j.results) return {};
+    const map: Record<string, string> = {};
+    uniq.forEach((t, i) => { if (j.results?.[i]) map[t] = j.results[i] as string; });
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+/** 插件描述 + 「译」按钮（译文就地展开；批量预取结果经 props 注入，点按钮才显示） */
+function TranslatableDesc({ text, preset }: { text: string; preset?: Record<string, string> }) {
+  const [zh, setZh] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const ready = zh ?? (preset && preset[text]) ?? null;
+  if (!isEnglishDesc(text)) return <div className="mk-desc">{text}</div>;
+  const run = async () => {
+    if (busy || ready) return;
+    setBusy(true);
+    const r = preset?.[text] ?? (await translateDesc(text));
+    setBusy(false);
+    if (r) setZh(r);
+  };
+  return (
+    <div className="mk-desc-wrap">
+      <div className="mk-desc">{text}<button className="mk-tr-btn" disabled={busy} onClick={run} title="翻译为中文">{busy ? '…' : ready ? '已译' : '译'}</button></div>
+      {ready && <div className="mk-desc zh">{ready}</div>}
+    </div>
+  );
+}
+
 export function MarketPanel() {
   const [tab, setTab] = useState<'store' | 'cc' | 'installed' | 'sources' | 'about'>('store');
   const [items, setItems] = useState<MarketItem[]>([]);
@@ -76,6 +139,7 @@ export function MarketPanel() {
   const [form, setForm] = useState({ name: '', type: 'cc-marketplace', ref: '' });
   const [armRemove, setArmRemove] = useState<string | null>(null);
   const [ccPage, setCcPage] = useState(0);
+  const [trMap, setTrMap] = useState<Record<string, string>>({});
   const CC_PAGE_SIZE = 30;
 
   const refresh = useCallback(async () => {
@@ -87,6 +151,12 @@ export function MarketPanel() {
       setCcInstalled(d.ccInstalled ?? []);
       setWarns(d.warns ?? []);
       setError('');
+      // 批量预取英文描述译文（商城 JS 插件 + CC 插件一次一批；失败静默，不影响面板）
+      const descs = [
+        ...(d.items ?? []).map((i) => i.description),
+        ...(d.ccMarkets ?? []).flatMap((m) => m.plugins.map((p) => p.description)),
+      ].filter(Boolean);
+      void translateBatch(descs).then(setTrMap);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -220,7 +290,7 @@ export function MarketPanel() {
                   </span>
                 )}
               </div>
-              {i.description && <div className="mk-desc">{i.description}</div>}
+              {i.description && <TranslatableDesc text={i.description} preset={trMap} />}
               {i.sha256 && <div className="mk-hash">sha256: {i.sha256.slice(0, 16)}…</div>}
               <div className="mk-actions">
                 {i.installed ? (
@@ -273,7 +343,7 @@ export function MarketPanel() {
                         {installed && <span className="mk-badge ok">已导入</span>}
                         {isRemote && <span className="mk-badge" title="安装时自动从 GitHub clone 到本机">远程自动拉取</span>}
                       </div>
-                      {p.description && <div className="mk-desc">{p.description}</div>}
+                      {p.description && <TranslatableDesc text={p.description} preset={trMap} />}
                       <div className="mk-actions">
                         <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} title={isRemote ? '将自动 clone 该插件仓库后导入' : ''} onClick={() => installCc(p.market, p.id, 'global')}>{installed ? '重新导入（全局）' : '导入（全局）'}</button>
                         <button className="mk-btn" disabled={busy === `cc-${p.id}`} title={isRemote ? '将自动 clone 该插件仓库后导入' : '仅导入到当前激活的项目工作区'} onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
@@ -303,7 +373,7 @@ export function MarketPanel() {
         <div>
           {ccInstalled.length > 0 && (
             <>
-              <div className="mk-hint">CC 商城导入的声明型资源（技能/钩子/MCP）：</div>
+              <div className="mk-hint">CC 商城导入的声明型资源（技能/钩子/MCP 名称不翻译，原文即 id）：</div>
               {ccInstalled.map((c) => (
                 <div key={c.id} className="mk-item">
                   <div className="mk-item-head">

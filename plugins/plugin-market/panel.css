@@ -14,6 +14,16 @@
 .mk-badge.ok { color: #4caf7d; border-color: #4caf7d; }
 .mk-badge.warn { color: #d9a441; border-color: #d9a441; }
 .mk-desc { color: var(--text-dim, var(--text)); margin-top: 4px; line-height: 1.5; word-break: break-word; }
+.mk-desc-wrap .mk-desc { display: flex; gap: 6px; align-items: flex-start; }
+.mk-desc-wrap .mk-desc .mk-tr-btn { flex: 0 0 auto; }
+.mk-desc.zh { flex-basis: 100%; color: var(--text); padding-left: 8px; border-left: 2px solid var(--accent, var(--border)); }
+.mk-tr-btn {
+  flex: 0 0 auto; min-width: 26px; height: 18px; margin-left: auto;
+  border: 1px solid var(--border); border-radius: 4px; background: transparent;
+  color: var(--text-dim, var(--text)); cursor: pointer; font-size: 10px; padding: 0 6px;
+}
+.mk-tr-btn:hover:not(:disabled) { color: var(--accent, var(--text)); border-color: var(--accent, var(--border)); }
+.mk-tr-btn:disabled { opacity: 0.5; cursor: default; }
 .mk-hash { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-dim, var(--text)); margin-top: 4px; word-break: break-all; }
 .mk-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; align-items: center; }
 .mk-arm { color: #d64545; font-size: 11px; }
