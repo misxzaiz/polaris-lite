@@ -28,7 +28,9 @@ export interface ToolDescriptor {
 const DESC_BASE =
   '在工作区执行 shell 命令并返回 stdout/stderr/exitCode。' +
   '可用于读写文件、运行脚本、安装依赖、调用任意 CLI——需要衍生新能力时先想 bash。' +
-  '限制：cwd 锁定工作区目录；单条超时默认 30s（最长 300s）；输出上限 64KB；' +
+  '限制：cwd 锁定工作区目录；单条超时默认 30s（最长 300s）；输出上限 64KB（超长截断，响应带 truncated 标记）；' +
+  '命令串行执行，并发调用自动 FIFO 排队（队列满才拒绝）；' +
+  '写文件优先用 files_write 工具（bash heredoc/引号转义易出错，含反引号的脚本会被安全检测拦截）。' +
   '危险命令（rm -rf、curl|sh、改配置存储等）会被无条件拒绝。';
 
 /** 按 server 实际执行环境给模型写对语法（config.shell 由 server.mjs 提供）。

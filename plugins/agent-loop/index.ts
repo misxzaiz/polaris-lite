@@ -1156,11 +1156,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
                 : desc.cap === 'cap.tool.mcp'
                   ? { name: call.name, arguments: hookArgsOf(call.arguments), __tool: call.name, sessionId, approved: true }
                   : { ...safeArgs(call.arguments), __tool: call.name, sessionId, approved: true, ...(execCwd ? { cwd: execCwd } : {}) };
-          // EXEC_BUSY（agent-bash 全局单飞锁）：模型并行/连续开火时高发——编排层做
-          // 短退避重试（≤2 次 × 2s），对模型透明；比把原始错误甩给模型省两轮修复。
+          // EXEC_BUSY（agent-bash 队列满，>32 才会）：模型并行/连续开火时高发——编排层做
+          // 指数退避重试（2s/4s/8s），对模型透明；比把原始错误甩给模型省两轮修复。
+          // 2026-11-24 服务端已改 FIFO 排队，BUSY 只在队列满时出现，重试大概率入队成功。
           exec = { ok: false, error: 'exec not attempted' };
-          for (let busyRetry = 0; busyRetry < 3; busyRetry += 1) {
-            if (busyRetry > 0) await new Promise((r) => setTimeout(r, 2000));
+          for (let busyRetry = 0; busyRetry < 4; busyRetry += 1) {
+            if (busyRetry > 0) await new Promise((r) => setTimeout(r, 2000 * 2 ** (busyRetry - 1)));
             if (abortedFlag) break;
             try {
               const res = await hostApi.dispatch<{ ok: boolean; stdout?: string; stderr?: string; exitCode?: number; durationMs?: number; truncated?: boolean; error?: string; denied?: boolean }>({
@@ -1172,7 +1173,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             } catch (err) {
               exec = { ok: false, error: err instanceof Error ? err.message : String(err) };
             }
-            if (!(exec.error ?? '').includes('still running')) break;
+            if (!(exec.error ?? '').includes('queue is full')) break;
           }
         } catch (err) {
           exec = { ok: false, error: err instanceof Error ? err.message : String(err) };

@@ -32,7 +32,8 @@ const TAIL_KEEP = 32 * 1024;           // 超限时保留尾部
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 const CONFIRM_WAIT_MS = 120_000;       // confirm 模式审批等待（超时=拒绝）
-const BUSY_WAIT_MS = 20_000;           // 并发 1 排队等待上限（超时才回 BUSY）
+const BUSY_WAIT_MS = 20_000;           // 兼容保留：旧字段名（现在只用于日志文案）
+const QUEUE_MAX_DEPTH = 32;            // FIFO 排队深度上限（超过才回 429 BUSY）
 
 /** 危险命令模式：命中直接拒绝，任何模式（含 yolo）都不可豁免。
  *  教训：不要对整串做 \b 词边界匹配——PowerShell 的 -Format 参数、管道后的
@@ -197,23 +198,26 @@ export function createServerPart(options = {}) {
   const isAllowedPrefix = (cmd, prefixes) =>
     prefixes.some((p) => cmd === p || cmd.startsWith(`${p} `) || cmd.startsWith(`${p}\t`));
 
-  /** 等在途命令结束（并发 1 排队）。返回 true=已腾出；false=等待超时。 */
-  function waitForInflight() {
-    return new Promise((resolve) => {
-      const deadline = Date.now() + BUSY_WAIT_MS;
-      const tick = () => {
-        if (!inflight) return resolve(true);
-        if (Date.now() >= deadline) return resolve(false);
-        setTimeout(tick, 120);
-      };
-      tick();
-    });
+  /** 在途执行表 + FIFO 队列（并发 1 + 中断杀树）。
+   *  万次压测实测（2026-11-24）：20s 轮询等待 + 429 在 6 并发下雪崩——5017 次 fetch failed
+   *  （accept 队列被挂起请求堆满）+ 194 次 BUSY。改成真 FIFO：请求入队，前一条结束自动
+   *  接续下一条；队列深度超 QUEUE_MAX_DEPTH 才回 429（此时几乎必然是死锁/卡死场景）。 */
+  let inflight = null; // { id, kill, sessionId, command, startedAt }
+  const waitQueue = []; // [{ run: () => void, command, enqueuedAt }]
+
+  function pumpQueue() {
+    while (!inflight && waitQueue.length > 0) {
+      const next = waitQueue.shift();
+      next.run();
+    }
   }
 
-  /** 在途执行表（并发 1 + 中断杀树）。BUSY 不再直接拒绝：排队等待（见
-   *  toolExec ④''），因为编排层对模型并行/连发没有防抖，直接 429 会演变成
-   *  「重试也 429 → 模型误判环境坏了 → 连 echo 都试」的雪崩（2026-11-23 转录实测）。 */
-  let inflight = null; // { id, kill, sessionId, command, startedAt }
+  /** 把当前请求挂入队列；返回 false=队列已满（调用方回 429）。 */
+  function enqueue(command, run) {
+    if (waitQueue.length >= QUEUE_MAX_DEPTH) return false;
+    waitQueue.push({ command, enqueuedAt: Date.now(), run });
+    return true;
+  }
 
   function killTree(child) {
     if (!child || child.exitCode !== null || child.killed) return;
@@ -466,40 +470,56 @@ export function createServerPart(options = {}) {
     }
     mkdirSync(cwdReal, { recursive: true });
 
-    // ⑦ 并发 1 的排队等待：在途命令结束（或被杀）后自动接续。
+    // ⑦ 并发 1 + FIFO 队列：在途命令结束（或被杀）后自动接续下一条。
     //    直接 429 会演变成「模型重试也 429 → 误判环境坏了 → 连 echo 都试」的雪崩
     //    （2026-11-23 转录实测：一条卡住的命令让后续 5 个工具全废）。
     //    卡死自杀：在途命令与本次完全相同 = 模型在重试同一条 = 前一条大概率挂起
     //    （交互式程序等 stdin、PowerShell 冷启动等），杀旧树让本条直接执行。
+    //    万次压测（2026-11-24）：20s 轮询等待在 6 并发下雪崩（5017 次 fetch failed），
+    //    改为真 FIFO 排队，队列满（>32）才回 429。
+    const runNow = async () => {
+      const abort = new AbortController();
+      res.on('close', () => abort.abort()); // 编排方中断（fetch abort）→ 杀树
+
+      const execId = randomUUID().slice(0, 8);
+      inflight = { id: execId, kill: () => abort.abort(), sessionId, command, startedAt: Date.now() };
+      let result;
+      try {
+        result = await runCommand(command, cwdReq, timeoutMs, sessionId, abort.signal);
+      } finally {
+        inflight = null;
+        pumpQueue(); // 队列自动接续
+      }
+      audit({
+        at: Date.now(), sessionId, execId, command,
+        verdict: result.exitCode === 0 ? 'ok' : `exit-${result.exitCode}`,
+        durationMs: result.durationMs, truncated: result.truncated,
+        timedOut: result.timedOut, mode: cfg.mode, queued: waitQueue.length,
+      });
+
+      if (!res.headersSent) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result));
+      }
+    };
+
     if (inflight) {
       if (inflight.command === command) {
+        // 同命令重试 = 前一条大概率挂起：杀旧树，本条直接执行（不经队列）
         audit({ at: Date.now(), sessionId, command, verdict: 'busy-same-cmd-kill-prev', mode: cfg.mode });
         try { inflight.kill(); } catch { /* 已退出 */ }
         inflight = null;
-      } else {
-        const waited = await waitForInflight();
-        if (!waited) {
-          audit({ at: Date.now(), sessionId, command, verdict: 'busy-timeout', mode: cfg.mode });
-          res.writeHead(429, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: `another command is still running (${String(inflight?.command ?? '').slice(0, 60)}), waited ${BUSY_WAIT_MS}ms`, code: 'EXEC_BUSY' }));
-        }
+        await runNow();
+        return;
       }
+      const queued = enqueue(command, () => { void runNow(); });
+      if (!queued) {
+        audit({ at: Date.now(), sessionId, command, verdict: 'busy-queue-full', mode: cfg.mode });
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `command queue is full (${QUEUE_MAX_DEPTH}) — another command is still running (${String(inflight?.command ?? '').slice(0, 60)})`, code: 'EXEC_BUSY' }));
+      }
+      return; // 已入队，runNow 会在轮到时写响应
     }
-
-    const abort = new AbortController();
-    res.on('close', () => abort.abort()); // 编排方中断（fetch abort）→ 杀树
-
-    const execId = randomUUID().slice(0, 8);
-    inflight = { id: execId, kill: () => abort.abort(), sessionId, command, startedAt: Date.now() };
-    const result = await runCommand(command, cwdReq, timeoutMs, sessionId, abort.signal);
-    audit({
-      at: Date.now(), sessionId, execId, command,
-      verdict: result.exitCode === 0 ? 'ok' : `exit-${result.exitCode}`,
-      durationMs: result.durationMs, truncated: result.truncated,
-      timedOut: result.timedOut, mode: cfg.mode,
-    });
-
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(result));
+    await runNow();
   };
 }

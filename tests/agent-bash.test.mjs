@@ -23,10 +23,13 @@ function tempEnv(t, { config } = {}) {
   const mw = createServerPart({ getSession: () => ({ user: { name: 'tester' } }), dataDir });
   const call = async (path, body, headers = {}) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
+    // 队列化后响应可能晚于中间件返回才写入（FIFO 排队）——用 done Promise 等到 end() 真正调用
+    let doneResolve;
+    const done = new Promise((r) => { doneResolve = r; });
     const res = {
       code: 0, body: '',
       writeHead(c) { this.code = c; return this; },
-      end(b) { this.body = b ?? ''; },
+      end(b) { this.body = b ?? ''; doneResolve(); },
       on() { return this; }, // exec 路径会挂 res.on('close')，测试桩无需实现
     };
     await mw(
@@ -38,6 +41,7 @@ function tempEnv(t, { config } = {}) {
       res,
       () => {},
     );
+    await done;
     let json = null;
     try { json = JSON.parse(res.body); } catch { /* 非 JSON */ }
     return { status: res.code, json };
@@ -221,19 +225,50 @@ test('exec: 超时杀进程返回 timedOut', async (t) => {
   assert.notEqual(r.json.exitCode, 0);
 }, { timeout: 15000 });
 
-test('exec: 并发 1 → 第二个请求排队等待（不再直接 BUSY）', async (t) => {
+test('exec: 并发 1 → 第二个请求 FIFO 排队，前一条结束后自动接续', async (t) => {
   const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
   const slow = env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 3"', sessionId: 's1', timeoutMs: 10000 });
   // 等第一个真正进入 inflight
   await new Promise((r) => setTimeout(r, 500));
-  const second = await env.call('/api/tool/exec', { command: 'echo second', sessionId: 's1', timeoutMs: 15000 });
-  // 2026-11-23 修复：BUSY 直接拒绝会让模型连环重试全废（转录实测一条卡住命令拖死 5 个工具）；
-  // 现在排队等前一条结束再执行
-  assert.equal(second.status, 200, `排队后应执行成功: ${JSON.stringify(second.json).slice(0, 200)}`);
-  assert.equal(second.json.exitCode, 0);
-  assert.match(second.json.stdout, /second/);
-  await slow;
+  // 2026-11-24 队列化：入队即返回（响应挂起），轮到时才写回——等 slow 完成后 second 必然已写回
+  const second = env.call('/api/tool/exec', { command: 'echo second', sessionId: 's1', timeoutMs: 15000 });
+  const [slowRes, secondRes] = await Promise.all([slow, second]);
+  assert.equal(secondRes.status, 200, `排队后应执行成功: ${JSON.stringify(secondRes.json).slice(0, 200)}`);
+  assert.equal(secondRes.json.exitCode, 0);
+  assert.match(secondRes.json.stdout, /second/);
+  assert.equal(slowRes.status, 200);
 }, { timeout: 30000 });
+
+test('exec: FIFO 顺序——先入队先执行（3 个并发按到达序返回）', async (t) => {
+  const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
+  const slow = env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 2"', sessionId: 's1', timeoutMs: 10000 });
+  await new Promise((r) => setTimeout(r, 500));
+  const order = [];
+  const mk = (tag) => env.call('/api/tool/exec', { command: `echo ${tag}`, sessionId: 's1', timeoutMs: 15000 }).then((r) => {
+    order.push(tag);
+    return r;
+  });
+  const [a, b, c] = await Promise.all([mk('aaa'), mk('bbb'), mk('ccc')]);
+  await slow;
+  assert.deepEqual(order, ['aaa', 'bbb', 'ccc'], `FIFO 顺序: ${order.join(',')}`);
+  for (const r of [a, b, c]) { assert.equal(r.status, 200); assert.equal(r.json.exitCode, 0); }
+}, { timeout: 30000 });
+
+test('exec: 队列满（>32）才回 429 EXEC_BUSY', async (t) => {
+  const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
+  const slow = env.call('/api/tool/exec', { command: 'powershell -NoProfile -Command "Start-Sleep -Seconds 8"', sessionId: 's1', timeoutMs: 15000 });
+  await new Promise((r) => setTimeout(r, 500));
+  // 占满队列（32）+ 1 个溢出
+  const fillers = [];
+  for (let i = 0; i < 32; i++) fillers.push(env.call('/api/tool/exec', { command: `echo q${i}`, sessionId: 's1', timeoutMs: 20000 }));
+  await new Promise((r) => setTimeout(r, 300));
+  const overflow = await env.call('/api/tool/exec', { command: 'echo overflow', sessionId: 's1', timeoutMs: 20000 });
+  assert.equal(overflow.status, 429, `第 33 个排队请求应 429: ${JSON.stringify(overflow.json).slice(0, 160)}`);
+  assert.equal(overflow.json?.code, 'EXEC_BUSY');
+  // 清理：杀掉慢命令让队列排空（同命令重试自杀不可用——命令不同；直接等 + 杀）
+  await slow.catch(() => null);
+  await Promise.allSettled(fillers);
+}, { timeout: 60000 });
 
 test('exec: 同命令重试 = 卡死自杀（杀前一条，本条直接执行）', async (t) => {
   const env = tempEnv(t, { config: { enabled: true, mode: 'yolo', allowPrefixes: [] } });
