@@ -22,7 +22,7 @@ c.jsx = j;
 c.jsxs = j;
 b.exports = c;
 var e = b.exports;
-const f = "0.1.0", u = [
+const f = "0.1.3", u = [
   {
     id: "overview-what",
     section: "overview",
@@ -345,7 +345,7 @@ function E() {
     }
     y(!1);
   };
-  return /* @__PURE__ */ e.jsxs("div", { className: "pg-panel", children: [
+  return /* @__PURE__ */ e.jsxs("div", { className: "pg-panel plite-guide-panel", children: [
     /* @__PURE__ */ e.jsxs("div", { className: "pg-head", children: [
       /* @__PURE__ */ e.jsx("h3", { children: "polaris-lite 使用说明" }),
       /* @__PURE__ */ e.jsxs("p", { children: [

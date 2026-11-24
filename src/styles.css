@@ -144,6 +144,15 @@ button { -webkit-tap-highlight-color: transparent; }
 .ws-slot-body > .slot, .ws-slot-body > .slot-tabs { flex: 1 1 auto; min-height: 0; }
 /* 窗格内容自己撑满：锚点依赖这条才能像原来的 grid 项一样拉伸 */
 .ws-pane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+/* 面板抽屉内的槽位条目：`.slot` 基类只有 min-height:0（无 flex/高度），
+ * 而宿主别处都有「谁包 .slot 谁撑满」的规则（shell-stream/input/sidebar 各有专属条）。
+ * 面板 tab 化后 `.slot` 的父级是 `.slot-tabpanel`（flex:1 的确定高度层）——
+ * 缺这条时 .slot 高度按内容解析，内部 absolute 面板（plite-guide）塌成 0 高，
+ * 移动端面板列表一条都看不到（2026-11-25 实测，guide-panel-check 探针）。
+ * 用 [data-slot="panel"] 命中而非 `.shell-panel > .slot`：桌面端 tab 化后 .slot
+ * 挂在 tabpanel 下，与 shell-panel 隔了一层。 */
+.slot-tabpanel > .slot[data-slot='panel'] { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.slot-tabpanel > .slot[data-slot='panel'] > * { flex: 1 1 auto; min-height: 0; }
 
 /* 拖动中：全局禁选 + 光标跟随方向（拖动会掠过 iframe / textarea，必须整体收口） */
 body[data-ws-resize] { user-select: none; }
@@ -479,6 +488,14 @@ body.ws-dragging-tab { cursor: grabbing; }
   .ws-pane > [data-anchor='input'] { flex: 0 0 auto; }
   /* tabs 组是二级切分容器，它自己的窗格同样是 contents，需要继续分配剩余高度 */
   .ws-pane > .ws-tabs { flex: 1 1 auto; min-height: 0; }
+  /* 抽屉锚点（侧栏/面板）：contents 溶解后子元素成为祖父 split 的 flex item，
+     但抽屉本体是 position:fixed——fixed 元素的 flex-basis 对父级布局无意义，父级
+     （contents 窗格）高度仍按内容解析。必须给锚点一个确定性高度，否则内部
+     `position:absolute; inset:0` 的插件面板（如 plite-guide）解析出 0 高，
+     列表一条都看不到（2026-11-25 实测）。抽屉本体已有 top:0/bottom:0，
+     这里补 height:100dvh 让它有可解析的高度基准（fixed 定位不依赖父级链）。 */
+  .ws-pane > [data-anchor='sidebar'],
+  .ws-pane > [data-anchor='panel'] { flex: 0 0 auto; height: 100dvh; }
   /* 单列超过视口时整列滚动，而不是把某一侧压没 */
   .ws-root { overflow-y: auto; }
 

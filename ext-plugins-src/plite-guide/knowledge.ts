@@ -6,7 +6,7 @@
  * 提炼，供面板分页展示与 MCP 工具检索。新增条目按 schema 补 id/section/title。
  */
 
-export const GUIDE_VERSION = '0.1.0';
+export const GUIDE_VERSION = '0.1.3';
 
 export interface GuideDoc {
   id: string;

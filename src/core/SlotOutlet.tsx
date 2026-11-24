@@ -128,6 +128,21 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
     };
   }, [slot]);
 
+  // 面板直达深链（@sdk CHANNEL_PANEL_INTENT）：插件派发 { slot, title } 意图，
+  // 本组件按 title 匹配 tab 并切换激活（匹配不到静默忽略，不抢默认面板）。
+  // 通道名就地字面量对齐（arch 门禁：核心不 import 插件 SDK）。
+  useEffect(() => {
+    if (slot !== 'panel') return; // 深链目前只服务 panel 槽（通知中心等管理面板）
+    const onIntent = (e: Event): void => {
+      const detail = (e as CustomEvent<{ slot?: string; title?: string }>).detail;
+      if (!detail || detail.slot !== slot || typeof detail.title !== 'string') return;
+      const hit = ordered.find((en) => nameOf(en) === detail.title);
+      if (hit) select(entryKey(hit.pluginId, hit.component));
+    };
+    window.addEventListener('plite-panel-intent', onIntent);
+    return () => window.removeEventListener('plite-panel-intent', onIntent);
+  });
+
   // 多面板槽：Tab 切换（tab 名 = SlotDescriptor.title ?? 插件 manifest.name）。
   // chrome（tab 条形态）由容器贡献决定：插件注册了 slot-tabs 容器 → 用插件组件；
   // 否则回退内置简版（裸 tab 按钮）。状态权威恒在宿主（本组件）。

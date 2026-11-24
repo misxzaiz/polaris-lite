@@ -122,6 +122,8 @@ const plugins = [
   { id: 'starter-suggestions', config: 'starter-suggestions/vite.config.ts', dist: 'starter-suggestions/dist', order: 34 },
   // translate = 翻译（自 Polaris 翻译功能移植）：百度翻译 server 代理 + cap.tool.translate 供 AI 调用 + panel 面板
   { id: 'translate', config: 'translate/vite.config.ts', dist: 'translate/dist', order: 35 },
+  // notification-center = 全局通知中心：cap.ui.notify 能力总线 + overlay-root 堆叠 toast + panel「通知」Tab
+  { id: 'notification-center', config: 'notification-center/vite.config.ts', dist: 'notification-center/dist', order: 36 },
 ].sort((a, b) => a.order - b.order);
 
 class BuildError extends Error {}
@@ -556,6 +558,8 @@ function preflight() {
     '__PLITE_REAL_ENGINE_DIRECT__',
     '__PLITE_LAYOUT_WIRE__',
     '__PLITE_DRAWER_STATE__',
+    'plite-drawer-changed',
+    'plite-panel-intent',
     'mock-auth.session.v1',
   ];
   const darkHits = [];

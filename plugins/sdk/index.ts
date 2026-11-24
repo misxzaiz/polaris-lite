@@ -79,6 +79,11 @@ export const CHANNEL_DRAWER_STATE = '__PLITE_DRAWER_STATE__';
  *  防环纪律:监听方同步自身状态时**不得**再派发(派发只发生在 setDrawer 入口)。 */
 export const CHANNEL_DRAWER_EVENT = 'plite-drawer-changed';
 
+/** 面板直达意图事件（CustomEvent 名）：插件请求把某槽位的激活面板切到指定 title。
+ *  detail: { slot: SlotId, title: string }。消费方是宿主 SlotOutlet（按 title 匹配
+ *  tab 并切换激活），派发方通常同时经 CHANNEL_DRAWER_STATE/EVENT 打开对应抽屉。 */
+export const CHANNEL_PANEL_INTENT = 'plite-panel-intent';
+
 /** real-engine 独立档直连配置操作桥：standalone-mode 面板调用（读/存/清除直连配置） */
 export const CHANNEL_REAL_ENGINE_DIRECT = '__PLITE_REAL_ENGINE_DIRECT__';
 

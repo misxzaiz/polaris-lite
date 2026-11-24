@@ -85,7 +85,7 @@ function GuidePanel() {
   };
 
   return (
-    <div className="pg-panel">
+    <div className="pg-panel plite-guide-panel">
       <div className="pg-head">
         <h3>polaris-lite 使用说明</h3>
         <p>规范知识库 v{GUIDE_VERSION} · {GUIDE_DOCS.length} 篇 · 面板/AI 双通道</p>

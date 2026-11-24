@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE } from '@sdk';
+import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE } from '@sdk';
 import { type PendingSend } from './store';
 import { ShareDrawerRows } from './ShareDrawer';
 import { ChevronRightIcon } from './icons';
@@ -46,6 +46,16 @@ function toggleDrawer(target: 'sidebar' | 'panel'): void {
   const w = window as unknown as Record<string, unknown>;
   w[CHANNEL_DRAWER_STATE] = next;
   window.dispatchEvent(new CustomEvent(CHANNEL_DRAWER_EVENT, { detail: next }));
+}
+
+/** 面板直达：展开右栏抽屉并派发面板意图（宿主 SlotOutlet 按 title 切激活）。
+ *  通道名经 @sdk 契约常量（CHANNEL_PANEL_INTENT），与 notification-center 的
+ *  requestPanel 同一链路；title 必须与目标面板 contributes.slots[].title 一致。 */
+function openPanelDirect(title: string): void {
+  const w = window as unknown as Record<string, unknown>;
+  w[CHANNEL_DRAWER_STATE] = 'panel';
+  window.dispatchEvent(new CustomEvent(CHANNEL_DRAWER_EVENT, { detail: 'panel' }));
+  window.dispatchEvent(new CustomEvent(CHANNEL_PANEL_INTENT, { detail: { slot: 'panel', title } }));
 }
 
 /** /api/providers/list 的 masked 供应商行（面板只取需要的字段） */
@@ -238,12 +248,11 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
         aria-label="会话设置"
         style={{ left: panelPos.left, bottom: panelPos.bottom, width: panelPos.width, maxHeight: panelPos.maxHeight }}
       >
-        <div className="chat-picker-head">
-          <button type="button" className="chat-picker-back" aria-label="返回" onClick={onDone}>‹ 返回</button>
+        <div className="chat-picker-head chat-settings-head">
           <span className="chat-picker-title">会话设置</span>
           {/* 会话标题展示：未设置（「新会话」）时回退用户第一句（SessionSidebar displayTitle 同款口径） */}
           <span className="chat-pop-title" title={sessionTitle}>{sessionTitle}</span>
-          {/* 左右侧栏展开按钮（小屏顶栏被系统 UI 遮挡时的底部可达入口）：
+          {/* 左右侧栏展开按钮：段控形态（图标+文字），热区更大、含义自解释。
               经 window 抽屉通道与宿主顶栏按钮/布局树共享同一状态；点已展开侧再点即收起 */}
           <button
             type="button"
@@ -258,6 +267,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               <line x1="13" y1="12" x2="21" y2="12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
               <path d="M18.2 8.6 L21.6 12 L18.2 15.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
             </svg>
+            <span>左栏</span>
           </button>
           <button
             type="button"
@@ -272,6 +282,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               <line x1="11" y1="12" x2="3" y2="12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
               <path d="M5.8 8.6 L2.4 12 L5.8 15.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
             </svg>
+            <span>右栏</span>
           </button>
           <button className="chat-picker-done" onClick={onDone}>完成</button>
         </div>
@@ -362,6 +373,18 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               ))}
             </div>
           )}
+
+          {/* ===== 消息通知：通知中心入口行（面板直达：点开右栏并停到「通知」Tab）===== */}
+          <div className="chat-assistant-sec">通知</div>
+          <button
+            className="chat-assistant-row chat-row-btn chat-notify-row"
+            onClick={() => openPanelDirect('通知')}
+            title="打开通知中心：历史、未读与全部已读"
+          >
+            <span className="chat-assistant-key">消息通知</span>
+            <span className="chat-ws-chip">通知中心</span>
+            <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
+          </button>
 
           {/* ===== 分享（needs #069 v3）：网页链接（token+有效期）+ 本地导出（个人版 md / AI 分析版）。
               同源 HTTP 直连 transcript-share server 半边，无跨插件 cap 授权面。 ===== */}

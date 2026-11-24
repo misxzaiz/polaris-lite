@@ -527,22 +527,19 @@
 }
 .chat-picker-title { font-size: 11px; color: var(--text-dim); letter-spacing: 0.06em; }
 
-/* 面板顶部返回钮：手机单手可达的关闭入口（右侧「完成」保留） */
-.chat-picker-back {
+/* 会话设置面板头部：原 34px 行高塞 6 元素，「会话设置」被 flex 压缩变形。
+   升级：行高 34→40、标题字号 11→13/字重 600，会话标题降为次级信息。 */
+.chat-settings-head { height: 40px; padding: 0 10px; }
+.chat-settings-head .chat-picker-title {
   flex: 0 0 auto;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  letter-spacing: 0.02em;
 }
-.chat-picker-back:hover { background: var(--bg-hover); }
 
-/* ===== 会话设置面板头部：标题展示 + 左右侧栏展开小按钮 ===== */
-/* 标题：「会话设置」右侧同行展示，弱化灰、超长省略——不新增行高 */
+/* ===== 会话设置面板头部：标题展示 + 左右侧栏展开段控按钮 ===== */
+/* 会话标题：次级信息（灰、超长省略），与主标题同排不抢宽度 */
 .chat-pop-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -555,19 +552,20 @@
   padding-left: 8px;
   margin-left: 2px;
 }
-/* 左右展开按钮：24px 小尺寸（与头部 34px 行高协调，不挤占面板空间） */
+/* 左右展开按钮：图标+文字段控（原 24px 纯图标语义不明、热区小） */
 .side-toggle {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--text-dim);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
   cursor: pointer;
 }
 .side-toggle:hover { border-color: var(--accent); color: var(--accent-bright); }

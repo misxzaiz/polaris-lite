@@ -13,13 +13,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const hostPublic = resolve(root, 'public/plugins');
 const registryFile = resolve(hostPublic, 'registry.json');
 const built = existsSync(registryFile);
+
+/** registry 里的 URL → 磁盘真实路径。内置插件挂 /plugins/<id>/，商城安装的
+ *  外部插件挂 /ext-plugins/<id>/（服务端从数据目录 <dataDir>/plugins/ 自服务），
+ *  校验时按前缀分别落位，外部插件不再被误判成「产物缺失」。 */
+function registryUrlToFile(entry, field) {
+  const url = entry[field].split('?')[0]; // 剥缓存破坏版本号 ?v=hash
+  if (url.startsWith('/ext-plugins/')) {
+    return resolve(root, '.polaris-lite-dev/plugins', url.replace(/^\/ext-plugins\//, ''));
+  }
+  return resolve(hostPublic, url.replace(/^\/plugins\//, ''));
+}
 
 test('插件静态一致性校验通过（manifest ∩ grants ∩ requires）', () => {
   // --check 只读源码与 grants.json，不构建；失败时抛出并带上子进程 stderr
@@ -39,9 +50,12 @@ test('registry 条目自洽：id 唯一、module/style 指向真实文件', { sk
     for (const field of ['module', 'style']) {
       const url = entry[field];
       if (!url) continue;
-      assert.ok(url.startsWith(`/plugins/${entry.id}/`), `${entry.id}.${field} 未指向自身目录：${url}`);
-      // module/style URL 带缓存破坏版本号（?v=内容hash），校验文件存在性时剥离 query
-      const file = resolve(hostPublic, url.replace(/^\/plugins\//, '').split('?')[0]);
+      const isExt = url.startsWith('/ext-plugins/');
+      assert.ok(
+        isExt || url.startsWith(`/plugins/${entry.id}/`),
+        `${entry.id}.${field} 未指向自身目录：${url}`,
+      );
+      const file = registryUrlToFile(entry, field);
       assert.ok(existsSync(file), `${entry.id}.${field} 指向的文件不存在：${url}`);
       assert.ok(statSync(file).size > 0, `${entry.id}.${field} 是空文件：${url}`);
     }
@@ -59,7 +73,13 @@ test('只有真正产出样式时才登记 style 字段', { skip: !built && '尚
   const registry = JSON.parse(readFileSync(registryFile, 'utf8'));
   for (const entry of registry.plugins) {
     const css = resolve(hostPublic, entry.id, 'style.css');
-    if (entry.style) assert.ok(existsSync(css), `${entry.id} 登记了 style 但 style.css 不存在`);
-    else assert.ok(!existsSync(css), `${entry.id} 有 style.css 却未登记，宿主不会注入样式`);
+    if (entry.style) {
+      // 外部插件（/ext-plugins/）的 style 落在数据目录，由「registry 条目自洽」用例校验存在性
+      if (entry.style.startsWith('/plugins/')) {
+        assert.ok(existsSync(css), `${entry.id} 登记了 style 但 style.css 不存在`);
+      }
+    } else {
+      assert.ok(!existsSync(css), `${entry.id} 有 style.css 却未登记，宿主不会注入样式`);
+    }
   }
 });

@@ -1,5 +1,5 @@
 {
-  "version": "26",
+  "version": "27",
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -417,6 +417,18 @@
       "events": [
         "tool-registered",
         "translate-history-changed"
+      ]
+    },
+    "notification-center": {
+      "capabilities": [
+        "cap.kv"
+      ],
+      "provides": [
+        "cap.ui.notify"
+      ],
+      "events": [
+        "cap.ai.chat:event",
+        "notifications-changed"
       ]
     }
   }
