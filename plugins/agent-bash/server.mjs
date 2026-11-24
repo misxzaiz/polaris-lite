@@ -64,11 +64,15 @@ const DENYLIST = [
 
 /** 命令替换检测（借鉴 Gemini CLI shell-utils 的 detectCommandSubstitution）：
  *  $()、反引号、<()、>()、PowerShell @() 会把不可信内容拼进命令再执行，
- *  属于注入面；单引号内不检测（内容是字面量）。双引号内仍检测 $()（bash 会展开）。 */
+ *  属于注入面；单引号内不检测（内容是字面量）。双引号内仍检测 $()（bash 会展开）。
+ *  quoted heredoc（<<'EOF' / <<"EOF"）正文是字面量——其中的反引号/$() 不检测
+ *  （真实事故：AI 用 heredoc 写含模板字符串的代码被误拦，绕道 python 才写成功）。 */
 export function detectCommandSubstitution(command) {
+  const skip = heredocLiteralRanges(command);
   let inSingle = false;
   let inDouble = false;
   for (let i = 0; i < command.length; i++) {
+    if (skip.some(([a, b]) => i >= a && i < b)) { inSingle = false; inDouble = false; continue; }
     const ch = command[i];
     if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
     if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
@@ -79,6 +83,22 @@ export function detectCommandSubstitution(command) {
     if (ch === '@' && command[i + 1] === '(') return true;                     // PowerShell @()
   }
   return false;
+}
+
+/** quoted heredoc 的字面量正文区间（[start,end)）。只认 <<'TAG' / <<"TAG"；
+ *  未加引号的 <<TAG 正文 bash 会展开，仍纳入检测。 */
+function heredocLiteralRanges(command) {
+  const ranges = [];
+  const re = /<<[ \t]*(['"])([A-Za-z_][A-Za-z0-9_-]*)\1/g;
+  let m;
+  while ((m = re.exec(command))) {
+    const bodyStart = command.indexOf('\n', m.index);
+    if (bodyStart < 0) break;
+    const closeIdx = command.indexOf('\n' + m[2], bodyStart + 1);
+    if (closeIdx < 0) ranges.push([bodyStart + 1, command.length]);
+    else ranges.push([bodyStart + 1, closeIdx]);
+  }
+  return ranges;
 }
 
 /** win32 下解析可用的 bash（Git Bash），找不到返回 ''（回退 cmd）。
