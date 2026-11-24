@@ -142,12 +142,15 @@ export function createServerPart(options = {}) {
     return { ok: true, id, version: entry.version ?? manifest.version, note: '刷新页面生效' };
   }
 
-  function listAll() {
+  async function listAll(auth = {}) {
+    const { session, bearerOk, bearer, req } = auth;
     const sources = loadSources();
     const reg = readRegistry(publicRegistry) ?? readRegistry(distRegistry);
     const items = [];
     const warns = [];
     for (const source of sources) {
+      // cc-marketplace 源不是 dir 清单：数据走 ccMarkets 字段（见下），跳过 dir 处理链
+      if (source.type === 'cc-marketplace') continue;
       if (source.type !== 'dir') { warns.push(`源 ${source.name} 类型 ${source.type} 暂不支持（P3 接 http/zip）`); continue; }
       if (!existsSync(source.ref)) { warns.push(`源 ${source.name} 目录不存在：${source.ref}`); continue; }
       const idx = readSourceIndex(source);
@@ -174,7 +177,15 @@ export function createServerPart(options = {}) {
     // 安装走 /api/compat/cc-market/install（zcode-compat 转译），不经 /ext-plugins。
     // 扫描 ~/.claude 本机的 + 用户以 cc-marketplace 类型添加的源（clone 到 <dataDir>/marketplaces/）。
     const ccMarkets = readCcMarkets(sources.filter((s) => s.type === 'cc-marketplace'));
-    return { sources, items, ccMarkets, warns, extCount: (reg?.plugins ?? []).filter((p) => p && String(p.module ?? '').startsWith('/ext-plugins/')).length };
+    // 已导入的 CC 声明型资源（「已装」tab 展示；经 zcode-compat 聚合）
+    let ccInstalled = [];
+    try {
+      const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? '5000'}/api/compat/cc-installed`, {
+        headers: { ...(bearerOk ? { Authorization: `Bearer ${bearer.slice(7)}` } : {}), ...(session ? { Cookie: req.headers.cookie ?? '' } : {}) },
+      });
+      if (r.ok) ccInstalled = (await r.json().catch(() => null))?.installed ?? [];
+    } catch { /* 回环失败不阻塞 list */ }
+    return { sources, items, ccMarkets, ccInstalled, warns, extCount: (reg?.plugins ?? []).filter((p) => p && String(p.module ?? '').startsWith('/ext-plugins/')).length };
   }
 
   /** 读 CC 商城清单（同进程内直接调 zcode-compat 的发现逻辑不可行——跨插件；
@@ -223,7 +234,7 @@ export function createServerPart(options = {}) {
           plugins.push({ id: name, description: '', installable: true });
         }
       }
-      out.push({ name: alias, owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
+      out.push({ name: alias, realName: String(mf.name ?? alias), owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
     }
     return out;
   }
@@ -346,19 +357,24 @@ export function createServerPart(options = {}) {
         return sendJson(200, { ok: true });
       }
       if (pathname === '/api/market/list' && req.method === 'GET') {
-        return sendJson(200, listAll());
+        return sendJson(200, await listAll({ session, bearerOk, bearer, req }));
       }
       if (pathname === '/api/market/install' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
         const sourceName = String(body.source ?? '');
         // CC 商城源（source = marketplace 名）：走声明型资源转译导入（不运行外部 JS）。
         // target: 'global'（默认，落 <dataDir>）/ 'project'（落当前激活 workspace）。
-        const ccMarkets = readCcMarkets();
-        if (ccMarkets.some((m) => m.name === sourceName)) {
+        const sourcesAll = loadSources();
+        const ccMarkets = readCcMarkets(sourcesAll.filter((s) => s.type === 'cc-marketplace'));
+        const ccHit = ccMarkets.find((m) => m.name === sourceName);
+        if (ccHit) {
+          // zcode-compat 端按 marketplace 目录名/清单名匹配——把真实 marketplace 名传过去
+          // （源别名 cc-official 只是用户起的源名；localRoot 指向的目录名才是 marketplace 名）。
+          const realName = ccHit.realName || ccHit.name;
           const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? '5000'}/api/compat/cc-market/install`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(bearerOk ? { Authorization: `Bearer ${bearer.slice(7)}` } : {}), ...(session ? { Cookie: req.headers.cookie ?? '' } : {}) },
-            body: JSON.stringify({ market: sourceName, id: body.id, target: body.target ?? 'global' }),
+            body: JSON.stringify({ market: realName, id: body.id, target: body.target ?? 'global' }),
           });
           const j = await r.json().catch(() => null);
           return sendJson(r.status, j ?? { ok: false, error: `HTTP ${r.status}` });

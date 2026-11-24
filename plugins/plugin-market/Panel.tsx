@@ -40,6 +40,13 @@ interface CcMarket {
   installableCount: number;
   plugins: CcPlugin[];
 }
+interface CcInstalled {
+  id: string;
+  skills: string[];
+  hooksEvents: string[];
+  mcpServers: string[];
+  scopes: string[];
+}
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const resp = await fetch(path, {
@@ -58,6 +65,7 @@ export function MarketPanel() {
   const [items, setItems] = useState<MarketItem[]>([]);
   const [sources, setSources] = useState<MarketSource[]>([]);
   const [ccMarkets, setCcMarkets] = useState<CcMarket[]>([]);
+  const [ccInstalled, setCcInstalled] = useState<CcInstalled[]>([]);
   const [ccQuery, setCcQuery] = useState('');
   const [warns, setWarns] = useState<string[]>([]);
   const [error, setError] = useState('');
@@ -70,10 +78,11 @@ export function MarketPanel() {
 
   const refresh = useCallback(async () => {
     try {
-      const d = await api<{ items?: MarketItem[]; sources?: MarketSource[]; ccMarkets?: CcMarket[]; warns?: string[] }>('/api/market/list');
+      const d = await api<{ items?: MarketItem[]; sources?: MarketSource[]; ccMarkets?: CcMarket[]; ccInstalled?: CcInstalled[]; warns?: string[] }>('/api/market/list');
       setItems(d.items ?? []);
       setSources(d.sources ?? []);
       setCcMarkets(d.ccMarkets ?? []);
+      setCcInstalled(d.ccInstalled ?? []);
       setWarns(d.warns ?? []);
       setError('');
     } catch (e) {
@@ -155,6 +164,7 @@ export function MarketPanel() {
 
   const installedItems = items.filter((i) => i.installed);
   const ccAll = ccMarkets.flatMap((m) => m.plugins.map((p) => ({ ...p, market: m.name })));
+  const ccInstalledIds = new Set(ccInstalled.map((c) => c.id));
   const ccFiltered = ccQuery.trim()
     ? ccAll.filter((p) => `${p.id} ${p.description}`.toLowerCase().includes(ccQuery.trim().toLowerCase()))
     : ccAll;
@@ -240,19 +250,26 @@ export function MarketPanel() {
           {ccAll.length > 0 && (
             <input className="mk-input" type="search" placeholder="搜索 CC 插件（id/描述）…" value={ccQuery} onChange={(e) => setCcQuery(e.target.value)} />
           )}
-          {ccFiltered.filter((p) => p.installable).slice(0, 60).map((p) => (
-            <div key={`${p.market}/${p.id}`} className="mk-item">
-              <div className="mk-item-head">
-                <span className="mk-name">{p.id}</span>
-                <span className="mk-badge">{p.market}</span>
+          {ccFiltered.filter((p) => p.installable).slice(0, 60).map((p) => {
+            const installed = ccInstalledIds.has(p.id);
+            return (
+              <div key={`${p.market}/${p.id}`} className="mk-item">
+                <div className="mk-item-head">
+                  <span className="mk-name">{p.id}</span>
+                  <span className="mk-badge">{p.market}</span>
+                  {installed && <span className="mk-badge ok">已导入</span>}
+                </div>
+                {p.description && <div className="mk-desc">{p.description}</div>}
+                <div className="mk-actions">
+                  <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>{installed ? '重新导入（全局）' : '导入（全局）'}</button>
+                  <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
+                </div>
               </div>
-              {p.description && <div className="mk-desc">{p.description}</div>}
-              <div className="mk-actions">
-                <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>导入（全局）</button>
-                <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
+          {ccFiltered.filter((p) => p.installable).length === 0 && (
+            <div className="mk-empty">没有匹配的可装插件{ccQuery.trim() ? `（搜索词：${ccQuery.trim()}）` : ''}。远程条目可折叠查看，但需先在 Claude Code 侧 clone 到本机才能导入。</div>
+          )}
           {(() => {
             const remote = ccFiltered.filter((p) => !p.installable);
             if (remote.length === 0) return null;
@@ -279,8 +296,25 @@ export function MarketPanel() {
 
       {tab === 'installed' && (
         <div>
-          {installedItems.length === 0 && <div className="mk-empty">尚未安装任何外部插件。</div>}
-          {installedItems.map((i) => (
+          {ccInstalled.length > 0 && (
+            <>
+              <div className="mk-hint">CC 商城导入的声明型资源（技能/钩子/MCP）：</div>
+              {ccInstalled.map((c) => (
+                <div key={c.id} className="mk-item">
+                  <div className="mk-item-head">
+                    <span className="mk-name">{c.id}</span>
+                    {(c.scopes ?? []).map((s) => <span key={s} className="mk-badge ok">{s === 'project' ? '项目级' : '全局'}</span>)}
+                  </div>
+                  <div className="mk-desc">
+                    {(c.skills ?? []).length > 0 && <div>技能：{c.skills.join('、')}</div>}
+                    {(c.mcpServers ?? []).length > 0 && <div>MCP：{c.mcpServers.join('、')}</div>}
+                    {(c.hooksEvents ?? []).length > 0 && <div>钩子事件已并入（见「钩子」面板）</div>}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+          {installedItems.length > 0 && installedItems.map((i) => (
             <div key={i.id} className="mk-item">
               <div className="mk-item-head">
                 <span className="mk-name">{i.name}</span>
@@ -299,7 +333,8 @@ export function MarketPanel() {
               </div>
             </div>
           ))}
-          {installedItems.length > 0 && <div className="mk-hint">启停请到「插件」管理面板；安装/卸载后点上方「⟳ 重载应用」生效。</div>}
+          {ccInstalled.length === 0 && installedItems.length === 0 && <div className="mk-empty">尚未安装任何外部插件或导入任何 CC 资源。</div>}
+          {installedItems.length > 0 && <div className="mk-hint">JS 插件启停请到「插件」管理面板；安装/卸载后点上方「⟳ 重载应用」生效。CC 导入的技能可在「技能」面板查看，钩子/MCP 分别在「钩子」「MCP」面板。</div>}
         </div>
       )}
 

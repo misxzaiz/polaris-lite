@@ -433,6 +433,8 @@ export function createServerPart(options = {}) {
         try {
           mkdirSync(dest, { recursive: true });
           copyFileSync(join(srcDir, 'SKILL.md'), join(dest, 'SKILL.md'));
+          // 记录归属（id/目录名都可能含连字符，事后从目录名反解不可靠）→ 写 manifest.json
+          writeFileSync(join(dest, 'cc-origin.json'), JSON.stringify({ plugin: pluginId, skill: sk, scope, market: marketName, at: Date.now() }));
           parts += 1;
         } catch (e) { warns.push(`skill ${sk} 复制失败: ${e?.message ?? e}`); }
       }
@@ -514,6 +516,7 @@ export function createServerPart(options = {}) {
             enabled: true,
             timeoutMs: 30000,
             source: 'native',
+            ccOrigin: { plugin: pluginId, server: name, market: marketName },
           };
           parts += 1;
         }
@@ -530,6 +533,41 @@ export function createServerPart(options = {}) {
       ...(scope === 'project' ? { project: ws } : {}),
       note: scope === 'project' ? `已导入到项目 ${ws}：skills/hooks 即刻生效；mcpServers 下轮会话生效` : '已导入（全局）：skills 即刻生效；hooks/mcpServers 下轮会话生效',
     };
+  }
+
+  /** 列出经 CC 商城导入的声明型资源（「已装」展示用）。
+   *  以 skills 目录里的 cc-origin.json 归属清单为准（id/目录名都可能含连字符，反解不可靠），
+   *  mcpServers 按 cc-<id>-<name> 前缀聚合（server 名同样可能含连字符，安装时另记入 origin）。 */
+  function listInstalledCc() {
+    const ws = workspaceDir();
+    const items = new Map();
+    const ensure = (id) => {
+      if (!items.has(id)) items.set(id, { id, skills: [], mcpServers: [], scopes: [] });
+      return items.get(id);
+    };
+    const scanSkillsDir = (dir, scope) => {
+      if (!existsSync(dir)) return;
+      let names;
+      try { names = readdirSync(dir); } catch { return; }
+      for (const n of names) {
+        const origin = readJsonSafe(join(dir, n, 'cc-origin.json'));
+        if (!origin?.plugin) continue;
+        const it = ensure(String(origin.plugin));
+        it.skills.push(String(origin.skill ?? n));
+        if (!it.scopes.includes(scope)) it.scopes.push(scope);
+      }
+    };
+    scanSkillsDir(join(dataDir, 'skills'), 'global');
+    if (ws && ws !== join(dataDir, 'workspace')) scanSkillsDir(join(ws, '.claude', 'skills'), 'project');
+    const mcpCfg = readJsonSafe(join(dataDir, 'mcp-servers.json'));
+    for (const [key, s] of Object.entries(mcpCfg?.servers ?? {})) {
+      const origin = s?.ccOrigin;
+      if (!origin) continue;
+      const it = ensure(String(origin.plugin));
+      it.mcpServers.push(String(origin.server ?? key));
+      if (!it.scopes.includes('global')) it.scopes.push('global');
+    }
+    return [...items.values()];
   }
 
   return async function compatApi(req, res, next) {
@@ -560,6 +598,9 @@ export function createServerPart(options = {}) {
       if (pathname === '/api/compat/cc-market' && req.method === 'GET') {
         const { markets, warns } = discoverCcMarket();
         return sendJson(200, { markets, warns });
+      }
+      if (pathname === '/api/compat/cc-installed' && req.method === 'GET') {
+        return sendJson(200, { installed: listInstalledCc() });
       }
       if (pathname === '/api/compat/cc-market/install' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
