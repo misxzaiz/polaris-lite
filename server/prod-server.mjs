@@ -115,6 +115,14 @@ const isMain = (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLT
   || !!process.env.PM2_HOME;
 if (isMain) {
   const port = Number(process.env.PORT ?? 9825);
+  // 进程级异常留痕（默认行为也是崩，这里只是把死因写进 stdout 日志便于排查——
+  // 万次压测中出现过无日志蒸发，Windows 下只能靠事件日志追）。
+  process.on('uncaughtException', (err) => {
+    console.error('[polaris-lite] uncaughtException:', err?.stack ?? err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[polaris-lite] unhandledRejection:', reason instanceof Error ? reason.stack : reason);
+  });
   createProdServer({
     secureCookies: process.env.PLITE_COOKIE_SECURE === '1',
     // 上游策略默认不限制（http/私网均可）；PLITE_UPSTREAM_STRICT=1 恢复旧白名单模式。
