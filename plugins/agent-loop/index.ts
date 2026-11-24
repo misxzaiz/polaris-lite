@@ -23,9 +23,21 @@ import {
 } from './context-compact';
 import { summarizeToolCall } from './tool-summary';
 
-// 轮次/工具调用数量上限：应用户要求移除（曾为 8 轮 / 16 次）——任务时长靠用户
-// 「停止」即时收敛与单条命令超时兜底。
+// 轮次/工具调用数量上限（2026-11-25 恢复护栏）：无限循环实测会烧穿上下文与预算
+// （echo pingN ×1548 事故）。达上限收敛为正文说明，用户仍可「继续」接跑。
+const MAX_LOOP_TURNS = 40;
+const MAX_TOOL_CALLS = 80;
+/** 单工具连续失败上限：超限注入结构化提示促其换路径，不再盲试 */
+const MAX_SAME_TOOL_FAILS = 4;
 const APPROVAL_TIMEOUT_MS = 120_000;
+/** 轻量直通的任务信号词：命中任意一个即视为「要用工具的任务」，不进轻量直通。
+ *  覆盖：工具名、命令动词、文件/脚本/网页操作语境。中英都收。 */
+const TOOL_HINT_RE = new RegExp([
+  'bash', 'files', 'files_write', 'render', 'browser', 'interactive', 'read_skill',
+  'mcp_', 'cap\\.', '工具', '脚本', '命令', '终端', '执行', '跑一下', '写文件', '读文件',
+  '目录', 'ls ', 'cd ', 'npm ', 'node ', 'python', 'git ', '搜索网页', '打开网页', '截图',
+  '生成面板', 'html', '页面原型', '记账', '台账', '列表文件', '文件夹', '运行', '部署', '安装',
+].join('|'), 'i');
 /** 喂回模型的工具结果截断（上下文防爆） */
 const FEEDBACK_CAP = 8 * 1024;
 
@@ -501,6 +513,14 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
   const assistantId = payload.messageId ?? 'unknown';
   const prompt = payload.prompt ?? '';
+  // 轻量直通判定（2026-11-25 引擎优化 P0-1）：可见历史 + 本条消息都无工具执行痕迹、
+  // 消息也极短（≤200 字符）时，几乎不可能是需要编排的任务——走纯文本直通，不带全量
+  // 工具表与超载 system prompt。模型直接回答，质量与「同模型直接对话」对齐。
+  // 显式让 AI 用工具的问法（提及工具名/命令词）不命中，仍走编排。
+  const histText = (payload.history ?? []).map((m) => m.content ?? '').join('\n');
+  const convo = `${histText}\n${prompt}`;
+  const looksLikeTask = TOOL_HINT_RE.test(convo);
+  const lightPass = !looksLikeTask && prompt.length <= 200 && convo.length <= 1200;
   let abortedFlag = false;
   const aborted = () => abortedFlag;
   running.set(sessionId, () => {
@@ -522,6 +542,37 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
     const toolDefs = buildToolDefs();
     // 有编排（工具 loop）才登记运行态与镜像——直通模式无 loop 语义，保持原样
     if (toolDefs.length > 0) beginLoopRuntime(sessionId);
+
+    // 轻量直通（有工具注册但本条消息明显是闲聊/短问答）：与「无工具直通」同路径，
+    // 但保留工具可用性——若模型判断需要工具，下一轮 start 会重新进编排。
+    // 好处：闲聊不背全量工具表与超载 system prompt，回答质量与裸模型对齐。
+    if (lightPass) {
+      if (action === 'resume') return; // 直通无 shadow 续写语义
+      const api = hostApi!;
+      running.set(sessionId, () => {
+        void api.dispatch({
+          target: 'cap.ai.chat.interrupt',
+          action: 'interrupt',
+          payload: { sessionId },
+        }).catch(() => undefined);
+      });
+      try {
+        await api.dispatch({
+          target: 'cap.ai.chat',
+          action: 'start',
+          payload: {
+            sessionId,
+            messageId: assistantId,
+            prompt,
+            history: payload.history ?? [],
+            ...(modelOverride ?? {}),
+          },
+        });
+      } finally {
+        running.delete(sessionId);
+      }
+      return;
+    }
 
     // 无工具：直通模式（start 原样透传 cap.ai.chat；引擎事件直达 chat-lite）。
     // interrupt 语义：注册取消柄，中断时向引擎转发 interrupt——否则直通流无法被「停止」打断。
@@ -628,7 +679,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           content:
             '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具与 files 工具（浏览/读取文件，只读）。' +
             `当前宿主平台：${navigator.platform || 'unknown'}；` +
-            `当前日期时间：${new Date().toLocaleString('zh-CN', { hour12: false })}（宿主本地时区；会话进行中日期跨零点后以 bash date 为准）。` +
+            `当前日期时间：${new Date().toLocaleString('zh-CN', { hour12: false })}（宿主本地时区）。` +
             `bash 的 cwd 固定为：${cwdHint}。` +
             '需要读写文件、跑脚本、查状态时优先用工具，不要凭空编造输出；' +
             '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。' +
@@ -650,6 +701,15 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         const app = await hostApi!.dispatch<{ text?: string }>({ target: 'cap.skill.appendix', action: 'get', payload: { sessionId, cwd: execCwd } });
         if (app.data?.text) shadow[0].content += '\n\n' + app.data.text;
       } catch { /* 附录不可用：无附录继续 */ }
+    }
+    // P0-4 动态时效信息（2026-11-25）：system prompt 在会话首条消息时冻结日期时间，
+    // 跨零点/长会话后模型拿到的是过期时间。这里每轮把「系统时间提示」拼在用户消息前面
+    // 一起入栈；模型可见最新时刻，且用户消息仍在 shadow 尾部（符合对话语义）。
+    if (prompt) {
+      shadow.push({
+        role: 'user',
+        content: `（系统提示：当前日期时间 ${new Date().toLocaleString('zh-CN', { hour12: false })}，宿主本地时区。）`,
+      });
     }
     // resume 动作不带 prompt（shadow 尾已是 assistant 半截 prefill，直接续写）
     if (prompt) shadow.push({ role: 'user', content: prompt });
@@ -742,12 +802,34 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
 
     let turn = 0;
     let totalToolCalls = 0;
+    /** 单工具连续失败计数（会话内；成功即清零） */
+    const toolFailStreak = new Map<string, number>();
     /** 连续「纯工具无文本」轮数：模型偶发保活 ping 死循环（echo pingN ×1548 实测），
      *  达阈值注入系统提示促其收敛——只 nudge 不断流，保留用户「停止」兜底语义。 */
     let toolOnlyStreak = 0;
     // length 截断自动续写预算（per assistant 消息；耗尽后落截断块走「继续」按钮兜底）
     let autoContinueLeft = MAX_AUTO_CONTINUE;
     for (; !abortedFlag; turn += 1) {
+      // 循环护栏（2026-11-25 恢复）：轮次/工具调用超限即收敛，注入说明让模型总结已有进展。
+      // 不再无限跑——此前 echo pingN ×1548 的死循环就是没有这道闸。
+      if (turn >= MAX_LOOP_TURNS || totalToolCalls >= MAX_TOOL_CALLS) {
+        shadow.push({
+          role: 'user',
+          content: `（系统：本轮任务已连续运行 ${turn} 轮、${totalToolCalls} 次工具调用，达到安全上限。` +
+            '请立即停止继续调用工具，基于已获得的信息给出当前结论与后续建议；若任务确实未完成，请明确说明剩余步骤，由用户决定是否继续。）',
+        });
+        const t = engineTurn(sessionId, `${assistantId}::guard`, shadow, [], undefined, undefined, undefined, modelOverride);
+        running.set(`${sessionId}::turn`, t.cancel);
+        try {
+          const r = await t.promise;
+          shadow.push({ role: 'assistant', content: r.text });
+          emitTo(emit, 'message.delta', { sessionId, messageId: assistantId, delta: r.text });
+        } catch { /* 中断/引擎错误：按既有收敛路径处理 */ }
+        running.delete(`${sessionId}::turn`);
+        emitTo(emit, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
+        emitTo(emit, 'loop.done', { sessionId, messageId: assistantId, turns: turn, guardLimit: true });
+        return;
+      }
       const turnMessageId = `${assistantId}::t${turn}`;
       // onDelta：引擎可见增量实时转发（messageId=assistantId，chat-lite 流式渲染）
       const t = engineTurn(sessionId, turnMessageId, shadow, toolDefs, (delta) => {
@@ -1193,10 +1275,22 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           exitCode: exec.exitCode, durationMs: exec.durationMs, truncated: exec.truncated,
         });
         firePostToolUse(sessionId, call.name, hookArgsOf(call.arguments), exec.ok && exec.exitCode === 0);
+        // 单工具连续失败计数（P0 护栏）：同一工具连续 MAX_SAME_TOOL_FAILS 次失败后，
+        // 在下一次调用前注入结构化提示，让模型换路径而不是继续盲试同一命令。
+        const okExec = exec.ok && exec.exitCode === 0;
+        if (okExec) toolFailStreak.delete(call.name);
+        else toolFailStreak.set(call.name, (toolFailStreak.get(call.name) ?? 0) + 1);
+        const failN = toolFailStreak.get(call.name) ?? 0;
         const feedback = exec.ok
           ? `[bash 执行完成 exit=${exec.exitCode ?? '?'} ${exec.durationMs ?? '?'}ms]\nSTDOUT:\n${capText(String(exec.stdout ?? '') || '(空)')}\nSTDERR:\n${capText(String(exec.stderr ?? '') || '(空)')}`
           : `[工具执行失败] ${exec.error ?? `exit=${exec.exitCode}`}\nSTDERR:\n${capText(String(exec.stderr ?? ''))}`;
         shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
+        if (!okExec && failN >= MAX_SAME_TOOL_FAILS && failN % MAX_SAME_TOOL_FAILS === 0) {
+          shadow.push({
+            role: 'user',
+            content: `（系统：工具 ${call.name} 已连续失败 ${failN} 次。请停止重复同一调用，先分析失败原因（参数？权限？环境？），换一种实现路径，或直接向用户说明障碍与已验证的结论。）`,
+          });
+        }
       }
       // 工具连发节流：连续多轮纯工具无正文 → 注入系统提示促收敛（echo pingN ×1548 实测的
       // 保活死循环）。只提示不断流；模型给出正文后计数归零（见上方 text 分支）。
