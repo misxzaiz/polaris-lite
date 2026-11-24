@@ -34,6 +34,25 @@ import './context.css';
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 const TOOL_PHASE_TIMEOUT_MS = 600_000;
 
+/**
+ * 首条用户消息 → 会话标题（自动命名）：
+ * title 仍是默认「新会话」时，用首条用户消息前 40 字做持久标题，随同一轮
+ * dirty+防抖 PUT 落盘，多端索引/分享面板/导出文件名全线一致。
+ * 口径对齐 transcript-share 的 deriveTitle（去空白、合并换行、截 40 字）。
+ * 只在 title === '新会话' 时生效：用户手动改过名（或已是自动名）绝不覆盖。
+ */
+function autoTitleFrom(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+function ensureAutoTitle(sessionId: string, text: string): void {
+  const store = useSessionStore.getState();
+  const s = store.sessions.find((x) => x.id === sessionId);
+  if (!s || s.title !== '新会话') return;
+  const t = autoTitleFrom(text);
+  if (t) store.renameSession(sessionId, t);
+}
+
 /** 空态快捷建议 → 输入框的填写通道（避免为一句「填入草稿」在组件间拉一条状态） */
 type ComposeListener = (text: string) => void;
 const composeListeners = new Set<ComposeListener>();
@@ -462,6 +481,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     content: text,
     createdAt: Date.now(),
   } satisfies ChatMessage);
+
+  // 首条用户消息自动命名会话（title 仍是「新会话」才生效），随同一轮防抖 PUT 落盘
+  ensureAutoTitle(sid, text);
 
   const assistantId = nextMsgId();
 

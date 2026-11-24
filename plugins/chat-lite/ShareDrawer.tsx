@@ -46,9 +46,15 @@ function safeName(s: string): string {
   return (s || '对话').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 24) || '对话';
 }
 
+/** 导出文件名基准：title 仍是默认「新会话」时回退首条用户消息（与侧栏 displayTitle 同口径） */
+function exportBaseName(title: string | undefined, firstMessage: string | undefined): string {
+  if (title && title !== '新会话') return safeName(title);
+  return safeName(firstMessage ?? '') || safeName(title ?? '对话');
+}
+
 export function ShareDrawerRows() {
   const activeId = useSessionStore((s) => s.activeId);
-  const title = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.title);
+  const session = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId));
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [ttl, setTtl] = useState(24 * 60 * 60 * 1000);
@@ -123,7 +129,7 @@ export function ShareDrawerRows() {
     setNote('');
     try {
       const res = await fetch(`/api/share/export?sessionId=${encodeURIComponent(activeId)}&format=${format}`, { credentials: 'include' });
-      const base = safeName(title ?? activeId);
+      const base = exportBaseName(session?.title, session?.messages?.[0]?.content);
       if (format === 'ai') {
         const j = await res.json().catch(() => null);
         if (!res.ok || !j) {
@@ -145,7 +151,7 @@ export function ShareDrawerRows() {
     } finally {
       setBusy(false);
     }
-  }, [activeId, title]);
+  }, [activeId, session]);
 
   return (
     <>

@@ -14,6 +14,12 @@ interface SessionItem {
   updatedAt: number;
 }
 
+/** 展示标题：title 仍是默认「新会话」时回退首条消息预览（与侧栏 displayTitle 同口径） */
+function displayTitle(s: SessionItem): string {
+  if (s.title && s.title !== '新会话') return s.title;
+  return s.lastMsgPreview || s.title || '未命名会话';
+}
+
 interface ShareItem {
   tokenDigest: string;
   token?: string; // create 响应里有完整 token；list 只有摘要
@@ -141,7 +147,7 @@ export function SharePanel() {
           {sessions.length === 0 && <option value="">（无会话）</option>}
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.title} · {s.msgCount ?? 0} 条
+              {displayTitle(s)} · {s.msgCount ?? 0} 条
             </option>
           ))}
         </select>
