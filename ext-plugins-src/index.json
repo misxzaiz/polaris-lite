@@ -7,6 +7,13 @@
       "version": "0.1.0",
       "description": "外部四合一验证插件：面板 + Skill + MCP + Hook",
       "sha256": "2c2f6c7a42ba14ae3c18a7f3f54e5fbbf8272057bca9849132bae534cbf4612f"
+    },
+    {
+      "id": "plite-guide",
+      "name": "使用说明",
+      "version": "0.1.0",
+      "description": "polaris-lite 规范与使用说明：面板分节浏览 + AI 技能 + MCP 检索工具",
+      "sha256": "aa1b148be01fac0f2b500a94447283f12927648720aab9e4331e953f2c3531f1"
     }
   ]
 }
