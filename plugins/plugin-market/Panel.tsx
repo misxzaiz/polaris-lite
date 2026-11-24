@@ -441,15 +441,19 @@ export function MarketPanel() {
               <select className="mk-input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 <option value="cc-marketplace">CC 商城（GitHub 仓库，推荐）</option>
                 <option value="dir">本地目录（自制 JS 插件清单）</option>
+                <option value="http">HTTP 清单（远程 index.json URL）</option>
               </select>
             </div>
             <input className="mk-input" placeholder="源名（如 my-plugins）" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <input
               className="mk-input"
-              placeholder={form.type === 'cc-marketplace' ? 'GitHub 仓库 owner/repo（如 anthropics/claude-plugins-official）' : '本地目录绝对路径（含 index.json）'}
+              placeholder={form.type === 'cc-marketplace' ? 'GitHub 仓库 owner/repo（如 anthropics/claude-plugins-official）' : form.type === 'http' ? '清单 index.json 的 http(s) URL（插件包按 <id>/ 相对同目录）' : '本地目录绝对路径（含 index.json）'}
               value={form.ref}
               onChange={(e) => setForm({ ...form, ref: e.target.value })}
             />
+            {form.type === 'http' && (
+              <div className="mk-hint">http 源：清单为 JSON（plugins 数组，每项含 id/sha256），plugin.js/plugin.json 按 &lt;id&gt;/ 子路径寻址；安装时强校验 sha256。外部 JS 与宿主同进程，只装可信来源。</div>
+            )}
             {form.type === 'cc-marketplace' && (
               <div className="mk-hint">添加后自动 clone 商城仓库（本机 ~/.claude 已有则直接复用）；其技能/钩子/MCP 型插件即可在「CC」页签导入。</div>
             )}

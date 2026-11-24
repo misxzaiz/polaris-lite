@@ -35,6 +35,7 @@ const MIME = {
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
+  const policy = options.policy; // 上游策略（http 源地址过闸；默认不限制，PLITE_UPSTREAM_STRICT=1 恢复白名单）
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_MARKET === '0';
   const extPluginsDir = join(dataDir, 'plugins');
@@ -82,10 +83,100 @@ export function createServerPart(options = {}) {
 
   /** 目录源：源 ref 即一个目录，内含 index.json 清单 + 各插件包目录（<id>/plugin.json|plugin.js|style.css） */
   function readSourceIndex(source) {
+    // http 源：清单本身是 URL（网络读取走 readSourceIndexAsync）
+    if (source.type === 'http') return null;
     const idxPath = join(source.ref, 'index.json');
     const j = (() => { try { return JSON.parse(readFileSync(idxPath, 'utf8')); } catch { return null; } })();
     if (!j || !Array.isArray(j.plugins)) return null;
     return j;
+  }
+
+  /** http 源：fetch 清单 JSON（{plugins:[{id,name,version,description,sha256,...}]}） */
+  async function readSourceIndexAsync(source) {
+    if (source.type !== 'http') return readSourceIndex(source);
+    const res = await fetch(source.ref, { signal: AbortSignal.timeout(15_000), redirect: 'follow' });
+    if (!res.ok) return null;
+    const j = await res.json().catch(() => null);
+    if (!j || !Array.isArray(j.plugins)) return null;
+    return j;
+  }
+
+  /** http 源：按清单 URL 同目录拼相对路径（清单内也可写绝对 downloadUrl） */
+  function httpAssetUrl(baseRef, rel) {
+    const base = baseRef.endsWith('/') ? baseRef : baseRef + '/';
+    return new URL(rel, base).href;
+  }
+
+  async function fetchAsset(url) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000), redirect: 'follow' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${url}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  function sha256Buf(buf) {
+    return createHash('sha256').update(buf).digest('hex');
+  }
+
+  /**
+   * 安装：http 源 —— fetch 清单 → 下载 plugin.json / plugin.js / style.css →
+   * sha256 强校验（清单 sha256 必填，供应链防线）→ manifest 校验 → 落盘 + registry 双写。
+   */
+  async function installFromHttp(source, id) {
+    const idx = await readSourceIndexAsync(source);
+    if (!idx) return { error: `源 ${source.name} 的清单不可读（${source.ref}）` };
+    const entry = idx.plugins.find((p) => p && p.id === id);
+    if (!entry) return { error: `清单中不存在插件：${id}` };
+    if (!entry.sha256 || !/^[0-9a-f]{64}$/i.test(String(entry.sha256))) {
+      return { error: 'http 源安装要求清单登记 64 位 sha256，该条目缺失或不合法' };
+    }
+    // 清单 URL 若以 index.json 结尾，包根取其父目录；否则按清单 URL 本身同目录拼接
+    const idxBase = /index\.json$/.test(source.ref) ? source.ref.replace(/index\.json$/, '') : source.ref;
+    const pkgBase = httpAssetUrl(idxBase, `${id}/`);
+    let bundle, manifestRaw, style = null;
+    try {
+      bundle = await fetchAsset(httpAssetUrl(pkgBase, 'plugin.js'));
+      manifestRaw = await fetchAsset(httpAssetUrl(pkgBase, 'plugin.json'));
+      try { style = await fetchAsset(httpAssetUrl(pkgBase, 'style.css')); } catch { /* 可选文件 */ }
+    } catch (e) {
+      return { error: `插件包下载失败：${e?.message ?? e}` };
+    }
+    const actual = sha256Buf(bundle);
+    if (actual !== String(entry.sha256).toLowerCase()) {
+      return { error: `sha256 不符（清单 ${String(entry.sha256).slice(0, 12)}… 实际 ${actual.slice(0, 12)}…），拒绝安装` };
+    }
+    let manifest;
+    try { manifest = JSON.parse(manifestRaw.toString('utf8')); } catch { return { error: 'plugin.json 解析失败' }; }
+    if (!manifest || typeof manifest.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(manifest.id)) {
+      return { error: 'plugin.json 的 id 不合法' };
+    }
+    if (manifest.id !== id) return { error: `plugin.json id(${manifest.id}) 与安装请求(${id}) 不符` };
+    return finalizeInstall({ id, entry, manifest, bundle, style });
+  }
+
+  /** 落盘 + registry 双写（dir/http 两类源共用尾段） */
+  function finalizeInstall({ id, entry, manifest, bundle, style }) {
+    const reg = readRegistry(publicRegistry) ?? readRegistry(distRegistry);
+    if (reg?.plugins?.some((p) => p && p.id === id)) {
+      return { error: `插件 id 与已注册插件冲突：${id}` };
+    }
+    const dest = join(extPluginsDir, id);
+    try { rmSync(dest, { recursive: true, force: true }); } catch { /* 无旧版 */ }
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, 'plugin.js'), bundle);
+    writeFileSync(join(dest, 'plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
+    let hasStyle = false;
+    if (style && style.length > 0) { writeFileSync(join(dest, 'style.css'), style); hasStyle = true; }
+    const v = sha256Buf(bundle).slice(0, 8);
+    const registry = reg ?? { plugins: [] };
+    registry.plugins = registry.plugins.filter((p) => p && p.id !== id);
+    registry.plugins.push({
+      id,
+      module: `/ext-plugins/${id}/plugin.js?v=${v}`,
+      enabled: true,
+      ...(hasStyle ? { style: `/ext-plugins/${id}/style.css?v=${v}` } : {}),
+    });
+    writeRegistry(registry);
+    return { ok: true, id, version: entry.version ?? manifest.version, note: '刷新页面生效' };
   }
 
   function sha256File(path) {
@@ -151,10 +242,16 @@ export function createServerPart(options = {}) {
     for (const source of sources) {
       // cc-marketplace 源不是 dir 清单：数据走 ccMarkets 字段（见下），跳过 dir 处理链
       if (source.type === 'cc-marketplace') continue;
-      if (source.type !== 'dir') { warns.push(`源 ${source.name} 类型 ${source.type} 暂不支持（P3 接 http/zip）`); continue; }
-      if (!existsSync(source.ref)) { warns.push(`源 ${source.name} 目录不存在：${source.ref}`); continue; }
-      const idx = readSourceIndex(source);
-      if (!idx) { warns.push(`源 ${source.name} 的 index.json 不可读`); continue; }
+      if (source.type !== 'dir' && source.type !== 'http') { warns.push(`源 ${source.name} 类型 ${source.type} 暂不支持`); continue; }
+      let idx = null;
+      if (source.type === 'http') {
+        idx = await readSourceIndexAsync(source);
+        if (!idx) { warns.push(`源 ${source.name} 的清单不可读（${source.ref}）`); continue; }
+      } else {
+        if (!existsSync(source.ref)) { warns.push(`源 ${source.name} 目录不存在：${source.ref}`); continue; }
+        idx = readSourceIndex(source);
+        if (!idx) { warns.push(`源 ${source.name} 的 index.json 不可读`); continue; }
+      }
       for (const p of idx.plugins ?? []) {
         if (!p || typeof p.id !== 'string') continue;
         const installedDir = join(extPluginsDir, p.id);
@@ -350,7 +447,17 @@ export function createServerPart(options = {}) {
           saveSources(list);
           return sendJson(200, { ok: true, localRoot, reused: localRoot === ccRoot });
         }
-        if (type !== 'dir') return sendJson(400, { error: '源类型仅支持 dir（本地目录清单）或 cc-marketplace（Claude Code 商城）' });
+        if (type === 'http') {
+          // http 源：ref = 清单 index.json 的 URL（清单与插件包同目录树，按 <id>/ 相对寻址）
+          let u;
+          try { u = new URL(ref); } catch { return sendJson(400, { error: `http 源 ref 必须是合法 URL：${ref}` }); }
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') return sendJson(400, { error: 'http 源 ref 仅支持 http/https URL' });
+          try { policy?.assertAllowedUrl?.(ref); } catch (e) { return sendJson(400, { error: `源地址被策略拒绝：${e?.message ?? e}` }); }
+          list.push({ name, type: 'http', ref });
+          saveSources(list);
+          return sendJson(200, { ok: true });
+        }
+        if (type !== 'dir') return sendJson(400, { error: '源类型仅支持 dir、http 或 cc-marketplace' });
         if (!existsSync(ref)) return sendJson(400, { error: `源目录不存在：${ref}` });
         list.push({ name, type: 'dir', ref: resolve(ref) });
         saveSources(list);
@@ -387,7 +494,9 @@ export function createServerPart(options = {}) {
         }
         const source = loadSources().find((s) => s.name === sourceName);
         if (!source) return sendJson(400, { error: `源不存在：${sourceName}（CC 商城请用商城名，如 claude-plugins-official）` });
-        const r = installFromDir(source, String(body.id ?? ''));
+        const r = source.type === 'http'
+          ? await installFromHttp(source, String(body.id ?? ''))
+          : installFromDir(source, String(body.id ?? ''));
         if (r.error) return sendJson(400, r);
         return sendJson(200, r);
       }

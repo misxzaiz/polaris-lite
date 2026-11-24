@@ -135,6 +135,71 @@ test('market: sha256 不符拒绝 / 缺 manifest 拒绝 / /ext-plugins 穿越拒
   assert.equal(await callRaw('/ext-plugins/ghost/plugin.js'), 404, '不存在应 404');
 });
 
+
+test('market: http 源 —— 清单/包下载 + sha256 强校验 + 落盘（本地 http 服务模拟远程）', async (t) => {
+  const { createServer } = await import('node:http');
+  const { dataDir, marketDir, repoRoot, call } = tempEnv(t);
+  const entry = writePackage(marketDir, 'http-tool', {
+    manifest: { id: 'http-tool', name: 'HTTP 工具', version: '0.2.0', capabilities: [], provides: [], events: [], contributes: { slots: [] } },
+    js: 'export default { manifest: { id: "http-tool" } };',
+    css: '.http-tool{}',
+  });
+  writeFileSync(join(marketDir, 'index.json'), JSON.stringify({ name: '远程源', plugins: [entry] }));
+  const srv = createServer((req, res) => {
+    const path = req.url.replace(/^\/+/, '');
+    const file = join(marketDir, path);
+    try {
+      const data = readFileSync(file);
+      res.writeHead(200);
+      res.end(data);
+    } catch {
+      res.writeHead(404);
+      res.end('nf');
+    }
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  t.after(() => srv.close());
+
+  const badAdd = await call('/api/market/sources', { name: 'h-bad', type: 'http', ref: 'not-a-url' });
+  assert.equal(badAdd.status, 400, '非法 URL 应拒绝');
+
+  // 清单 URL 指向 index.json；安装器应从其父目录按 <id>/ 寻址包文件
+  const add = await call('/api/market/sources', { name: 'h-src', type: 'http', ref: `http://127.0.0.1:${port}/index.json` });
+  assert.equal(add.json.ok, true, '添加 http 源应成功');
+
+  const list = await call('/api/market/list');
+  const item = list.json.items.find((x) => x.id === 'http-tool');
+  assert.ok(item, 'http 源条目应聚合进商城清单');
+  assert.equal(item.installed, false);
+
+  const inst = await call('/api/market/install', { source: 'h-src', id: 'http-tool' });
+  assert.equal(inst.json.ok, true, `http 安装应成功：${JSON.stringify(inst.json)}`);
+  assert.ok(existsSync(join(dataDir, 'plugins', 'http-tool', 'plugin.js')), 'bundle 应落盘');
+  assert.ok(existsSync(join(dataDir, 'plugins', 'http-tool', 'style.css')), '可选 style.css 应落盘');
+
+  // 缺 sha256 的 http 条目应拒绝（供应链防线）
+  const entryNoHash = { id: 'no-hash', name: 'n', version: '0.1.0' };
+  writePackage(marketDir, 'no-hash', { manifest: { id: 'no-hash' }, js: 'x' });
+  writeFileSync(join(marketDir, 'index2.json'), JSON.stringify({ name: 'n2', plugins: [entryNoHash] }));
+  await call('/api/market/sources', { name: 'h-src2', type: 'http', ref: `http://127.0.0.1:${port}/index2.json` });
+  const noHash = await call('/api/market/install', { source: 'h-src2', id: 'no-hash' });
+  assert.equal(noHash.status, 400, '缺 sha256 应拒绝');
+  assert.match(String(noHash.json.error), /sha256/);
+
+  // 清理真实仓库 registry 中可能写入的条目（防污染）
+  for (const p of ['public/plugins/registry.json', 'dist/plugins/registry.json']) {
+    try {
+      const rp = resolve('D:/space/base/polaris-lite', p);
+      const reg = JSON.parse(readFileSync(rp, 'utf8'));
+      if (reg.plugins.some((x) => x && x.id === 'http-tool')) {
+        reg.plugins = reg.plugins.filter((x) => !x || x.id !== 'http-tool');
+        writeFileSync(rp, JSON.stringify(reg, null, 2) + '\n');
+      }
+    } catch { /* 忽略 */ }
+  }
+});
+
 test('market: 卸载 + PLITE_MARKET=0 旁路', async (t) => {
   const { dataDir, marketDir, call } = tempEnv(t);
   const entry = writePackage(marketDir, 'tmp-tool', {
