@@ -1,0 +1,12 @@
+{
+  "name": "local-ext",
+  "plugins": [
+    {
+      "id": "extquad",
+      "name": "extquad 四合一",
+      "version": "0.1.0",
+      "description": "外部四合一验证插件：面板 + Skill + MCP + Hook",
+      "sha256": "2c2f6c7a42ba14ae3c18a7f3f54e5fbbf8272057bca9849132bae534cbf4612f"
+    }
+  ]
+}

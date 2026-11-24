@@ -1,0 +1,9 @@
+{
+  "id": "extquad",
+  "name": "extquad 四合一",
+  "version": "0.1.0",
+  "description": "外部四合一验证插件：面板 + Skill + MCP + Hook",
+  "contributes": {
+    "slots": [{ "slot": "panel", "component": "ExtQuadPanel", "order": 40, "title": "extquad 验证台" }]
+  }
+}
