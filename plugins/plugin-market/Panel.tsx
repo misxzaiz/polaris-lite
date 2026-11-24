@@ -32,6 +32,7 @@ interface CcPlugin {
   id: string;
   description: string;
   installable: boolean;
+  remote?: string | null;
 }
 interface CcMarket {
   name: string;
@@ -74,7 +75,8 @@ export function MarketPanel() {
   const [needsReload, setNeedsReload] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'cc-marketplace', ref: '' });
   const [armRemove, setArmRemove] = useState<string | null>(null);
-  const [showRemote, setShowRemote] = useState(false);
+  const [ccPage, setCcPage] = useState(0);
+  const CC_PAGE_SIZE = 30;
 
   const refresh = useCallback(async () => {
     try {
@@ -168,6 +170,10 @@ export function MarketPanel() {
   const ccFiltered = ccQuery.trim()
     ? ccAll.filter((p) => `${p.id} ${p.description}`.toLowerCase().includes(ccQuery.trim().toLowerCase()))
     : ccAll;
+  // 搜索词变化时回到第一页
+  const ccQueryKey = ccQuery.trim();
+  const [lastQueryKey, setLastQueryKey] = useState(ccQueryKey);
+  if (ccQueryKey !== lastQueryKey) { setLastQueryKey(ccQueryKey); setCcPage(0); }
 
   return (
     <div className="mk-panel">
@@ -250,45 +256,44 @@ export function MarketPanel() {
           {ccAll.length > 0 && (
             <input className="mk-input" type="search" placeholder="搜索 CC 插件（id/描述）…" value={ccQuery} onChange={(e) => setCcQuery(e.target.value)} />
           )}
-          {ccFiltered.filter((p) => p.installable).slice(0, 60).map((p) => {
-            const installed = ccInstalledIds.has(p.id);
-            return (
-              <div key={`${p.market}/${p.id}`} className="mk-item">
-                <div className="mk-item-head">
-                  <span className="mk-name">{p.id}</span>
-                  <span className="mk-badge">{p.market}</span>
-                  {installed && <span className="mk-badge ok">已导入</span>}
-                </div>
-                {p.description && <div className="mk-desc">{p.description}</div>}
-                <div className="mk-actions">
-                  <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} onClick={() => installCc(p.market, p.id, 'global')}>{installed ? '重新导入（全局）' : '导入（全局）'}</button>
-                  <button className="mk-btn" disabled={busy === `cc-${p.id}`} title="仅导入到当前激活的项目工作区" onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
-                </div>
-              </div>
-            );
-          })}
-          {ccFiltered.filter((p) => p.installable).length === 0 && (
-            <div className="mk-empty">没有匹配的可装插件{ccQuery.trim() ? `（搜索词：${ccQuery.trim()}）` : ''}。远程条目可折叠查看，但需先在 Claude Code 侧 clone 到本机才能导入。</div>
-          )}
           {(() => {
-            const remote = ccFiltered.filter((p) => !p.installable);
-            if (remote.length === 0) return null;
+            const installable = ccFiltered.filter((p) => p.installable || p.remote);
+            const shown = installable.slice(ccPage * CC_PAGE_SIZE, (ccPage + 1) * CC_PAGE_SIZE);
+            const pages = Math.max(1, Math.ceil(installable.length / CC_PAGE_SIZE));
             return (
-              <div>
-                <button className="mk-btn" style={{ width: '100%', marginTop: 8 }} onClick={() => setShowRemote(!showRemote)}>
-                  {showRemote ? '▾' : '▸'} 未在本机 checkout 的远程插件（{remote.length}）——需先在 Claude Code 侧安装
-                </button>
-                {showRemote && remote.slice(0, 80).map((p) => (
-                  <div key={`${p.market}/${p.id}`} className="mk-item" style={{ opacity: 0.6 }}>
-                    <div className="mk-item-head">
-                      <span className="mk-name">{p.id}</span>
-                      <span className="mk-badge warn">远程</span>
+              <>
+                {shown.map((p) => {
+                  const installed = ccInstalledIds.has(p.id);
+                  const isRemote = !p.installable && !!p.remote;
+                  return (
+                    <div key={`${p.market}/${p.id}`} className="mk-item">
+                      <div className="mk-item-head">
+                        <span className="mk-name">{p.id}</span>
+                        <span className="mk-badge">{p.market}</span>
+                        {installed && <span className="mk-badge ok">已导入</span>}
+                        {isRemote && <span className="mk-badge" title="安装时自动从 GitHub clone 到本机">远程自动拉取</span>}
+                      </div>
+                      {p.description && <div className="mk-desc">{p.description}</div>}
+                      <div className="mk-actions">
+                        <button className="mk-btn primary" disabled={busy === `cc-${p.id}`} title={isRemote ? '将自动 clone 该插件仓库后导入' : ''} onClick={() => installCc(p.market, p.id, 'global')}>{installed ? '重新导入（全局）' : '导入（全局）'}</button>
+                        <button className="mk-btn" disabled={busy === `cc-${p.id}`} title={isRemote ? '将自动 clone 该插件仓库后导入' : '仅导入到当前激活的项目工作区'} onClick={() => installCc(p.market, p.id, 'project')}>导入（项目）</button>
+                      </div>
                     </div>
-                    {p.description && <div className="mk-desc">{p.description}</div>}
+                  );
+                })}
+                {installable.length === 0 && (
+                  <div className="mk-empty">没有匹配的插件{ccQuery.trim() ? `（搜索词：${ccQuery.trim()}）` : ''}。</div>
+                )}
+                {pages > 1 && (
+                  <div className="mk-form-actions" style={{ justifyContent: 'center', paddingTop: 6 }}>
+                    <button className="mk-btn" disabled={ccPage === 0} onClick={() => setCcPage(0)}>« 首页</button>
+                    <button className="mk-btn" disabled={ccPage === 0} onClick={() => setCcPage(ccPage - 1)}>‹ 上一页</button>
+                    <span style={{ fontSize: 11, opacity: 0.7, alignSelf: 'center' }}>第 {ccPage + 1} / {pages} 页（共 {installable.length} 个）</span>
+                    <button className="mk-btn" disabled={ccPage >= pages - 1} onClick={() => setCcPage(ccPage + 1)}>下一页 ›</button>
+                    <button className="mk-btn" disabled={ccPage >= pages - 1} onClick={() => setCcPage(pages - 1)}>末页 »</button>
                   </div>
-                ))}
-                {showRemote && remote.length > 80 && <div className="mk-hint">共 {remote.length} 条远程条目，仅显示前 80。</div>}
-              </div>
+                )}
+              </>
             );
           })()}
         </div>

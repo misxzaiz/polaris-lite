@@ -221,7 +221,13 @@ export function createServerPart(options = {}) {
         const localDir = localRel ? join(mroot, localRel) : '';
         const installable = localRel && existsSync(join(localDir, '.claude-plugin', 'plugin.json'));
         seen.add(p.name);
-        plugins.push({ id: p.name, description: String(p.description ?? ''), installable });
+        plugins.push({
+          id: p.name,
+          description: String(p.description ?? ''),
+          installable,
+          // 远程条目也标可装（安装时服务端自动 clone）——仅当清单提供了 git url
+          remote: installable ? null : (src && typeof src === 'object' ? String(src.url ?? '') : ''),
+        });
       }
       const localPluginsDir = join(mroot, 'plugins');
       if (existsSync(localPluginsDir)) {
@@ -234,7 +240,7 @@ export function createServerPart(options = {}) {
           plugins.push({ id: name, description: '', installable: true });
         }
       }
-      out.push({ name: alias, realName: String(mf.name ?? alias), owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable).length, plugins });
+      out.push({ name: alias, realName: String(mf.name ?? alias), owner: String(mf.owner?.name ?? ''), pluginCount: plugins.length, installableCount: plugins.filter((p) => p.installable || p.remote).length, plugins });
     }
     return out;
   }

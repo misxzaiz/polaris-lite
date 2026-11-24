@@ -18,9 +18,10 @@
  * 同名整条让位（先到先得）+ warn。${VAR}/${VAR:-d} 展开（WORKSPACE/CLAUDE_PROJECT_DIR/ZCODE_PROJECT_DIR），
  * 展开后 path.resolve 归一。ZCode 遗留字段迁移（remote→http 等）；http/sse 跳过+warn（P3 再接）。
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync, renameSync } from 'node:fs';
 import { join, resolve, isAbsolute, basename, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
@@ -259,6 +260,13 @@ export function createServerPart(options = {}) {
           sourceKind: installable ? 'local' : (src && typeof src === 'object' ? String(src.source ?? 'remote') : 'remote'),
           installable,
           localDir: installable ? localDir : '',
+          // 远程条目带源信息：安装时可自动 clone 到本机再导入（免预装）
+          remote: installable ? null : (src && typeof src === 'object' ? {
+            kind: String(src.source ?? 'url'),
+            url: String(src.url ?? ''),
+            path: String(src.path ?? ''),
+            ref: String(src.ref ?? ''),
+          } : null),
         });
       }
       // 本地 checkout 补集：plugins/<name>/ 有 manifest 但清单未列（如 example-plugin）→ 同样可安装
@@ -404,8 +412,35 @@ export function createServerPart(options = {}) {
     if (!market) return { error: `CC 商城不存在：${marketName}` };
     const entry = market.plugins.find((p) => p.id === pluginId);
     if (!entry) return { error: `CC 商城 ${marketName} 中不存在插件：${pluginId}` };
-    if (!entry.installable) return { error: `插件 ${pluginId} 无本地副本（source=${entry.sourceKind}），无法安装——只有本地 checkout 的插件可装` };
-    const dir = entry.localDir;
+    let dir = entry.localDir;
+    // 远程插件免预装：按清单里的 source 自动 clone 到本机（<dataDir>/marketplaces/<market>/plugins/<id>），
+    // 落位后即成为本地 checkout 形态，走同一条导入链。
+    if (!entry.installable) {
+      const remote = entry.remote;
+      if (!remote?.url) return { error: `插件 ${pluginId} 无本地副本且清单未提供可 clone 的源（source=${entry.sourceKind}）` };
+      const dest = join(dataDir, 'marketplaces', marketName, 'plugins', pluginId);
+      const tmp = `${dest}.tmp-${Date.now().toString(36)}`;
+      const args = ['clone', '--depth', '1'];
+      if (remote.ref) args.push('--branch', remote.ref);
+      args.push(remote.url, tmp);
+      const clone = spawnSync('git', args, { stdio: 'ignore', timeout: 180_000, windowsHide: true });
+      // git-subdir：仓库根 clone 后取子目录；url 整仓即插件
+      const sub = remote.path ? join(tmp, remote.path) : tmp;
+      if (clone.status !== 0 || !existsSync(join(sub, '.claude-plugin', 'plugin.json'))) {
+        try { rmSync(tmp, { recursive: true, force: true }); } catch { /* 清理 */ }
+        return { error: `自动 clone 失败：${remote.url}${remote.ref ? `@${remote.ref}` : ''}（检查网络；也可先在 Claude Code 侧安装后重试）` };
+      }
+      try { rmSync(dest, { recursive: true, force: true }); } catch { /* 无旧目录 */ }
+      mkdirSync(dirname(dest), { recursive: true });
+      try {
+        renameSync(sub, dest);
+        try { rmSync(tmp, { recursive: true, force: true }); } catch { /* 清理仓库剩余部分 */ }
+      } catch (e) {
+        try { rmSync(tmp, { recursive: true, force: true }); } catch { /* 忽略 */ }
+        return { error: `clone 成功但落位失败：${e?.message ?? e}` };
+      }
+      dir = dest;
+    }
     const scope = target === 'project' ? 'project' : 'global';
     // 项目级落点：当前激活 workspace（builtin workspace 不算项目级——那是全局兜底目录）
     let ws = '';
