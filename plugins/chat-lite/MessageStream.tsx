@@ -17,7 +17,7 @@ import { copyText } from '../shared/copyText';
 interface EditState { msgId: string; draft: string; confirm: boolean }
 
 /** 动作定义：icon 行（短标签）与动作单（全文案）共用同一份 spec，防两处行为漂移 */
-interface MsgActionSpec { key: string; short: string; label: string; icon: React.ReactNode; done?: boolean; run: () => void }
+interface MsgActionSpec { key: string; short: string; label: string; icon: React.ReactNode; done?: boolean; danger?: boolean; run: () => void }
 
 /**
  * 单条消息渲染隔离罩：一条毒消息渲染抛错时只降级为错误气泡，其余消息照常显示——
@@ -119,7 +119,26 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
   const [sheetOpen, setSheetOpen] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  // 重新生成二次确认：首次点击只进入待确认态（红色警示），再次点击才执行截断重答；
+  // 点击行外或 4s 超时自动还原，防误触。重新生成会截断并替换本轮回复，属破坏性操作。
+  const [regenArmed, setRegenArmed] = useState(false);
+  const regenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disarmRegen = () => {
+    if (regenTimer.current) { clearTimeout(regenTimer.current); regenTimer.current = null; }
+    setRegenArmed(false);
+  };
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    if (regenTimer.current) clearTimeout(regenTimer.current);
+  }, []);
+  useEffect(() => {
+    if (!regenArmed) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!rowRef.current?.contains(e.target as Node)) disarmRegen();
+    };
+    document.addEventListener('click', onDoc, true);
+    return () => document.removeEventListener('click', onDoc, true);
+  }, [regenArmed]);
 
   const isUser = !isToolCard(m) && m.role === 'user';
   const isEditing = editing?.msgId === m.id;
@@ -181,10 +200,23 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
     if (isLast && !sessionStreaming) {
       specs.push({
         key: 'regen',
-        short: '重新生成',
-        label: '重新生成（同提示词重答，替换本轮回复）',
+        short: regenArmed ? '确认重答？' : '重新生成',
+        label: regenArmed
+          ? '再点一次确认：将截断并替换本轮回复，且从所有设备上移除'
+          : '重新生成（同提示词重答，替换本轮回复）——再次点击以确认',
         icon: <RegenIcon />,
-        run: () => void regenerateLast(sid),
+        danger: regenArmed,
+        run: () => {
+          if (!regenArmed) {
+            // 第一步：只进入待确认态，不执行
+            setRegenArmed(true);
+            if (regenTimer.current) clearTimeout(regenTimer.current);
+            regenTimer.current = setTimeout(disarmRegen, 4000);
+            return;
+          }
+          disarmRegen();
+          void regenerateLast(sid);
+        },
       });
     }
   }
@@ -212,7 +244,7 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
         {!isEditing && (
           <div className="msg-actions">
             {specs.map((sp) => (
-              <button key={sp.key} type="button" className={`msg-act${sp.done ? ' done' : ''}`}
+              <button key={sp.key} type="button" className={`msg-act${sp.done ? ' done' : ''}${sp.danger ? ' danger' : ''}`}
                 title={sp.label}
                 onClick={sp.run}>
                 {sp.icon}<span className="lbl">{sp.short}</span>
@@ -237,7 +269,7 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
                 <CloseIcon />
               </button>
               {specs.map((sp) => (
-                <button key={sp.key} type="button" className={`chat-sheet-item${sp.done ? ' done' : ''}`}
+                <button key={sp.key} type="button" className={`chat-sheet-item${sp.done ? ' done' : ''}${sp.danger ? ' danger' : ''}`}
                   role="menuitem" onClick={() => { setSheetOpen(false); sp.run(); }}>
                   {sp.icon}<span>{sp.label}</span>
                 </button>

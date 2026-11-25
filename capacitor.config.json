@@ -5,6 +5,11 @@
   "android": {
     "allowMixedContent": true
   },
+  "plugins": {
+    "SystemBars": {
+      "initialViewportFitValueHint": "cover"
+    }
+  },
   "server": {
     "androidScheme": "https",
     "allowNavigation": ["localhost", "127.0.0.1"]

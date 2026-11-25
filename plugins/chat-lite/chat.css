@@ -1300,6 +1300,16 @@
 }
 .edit-confirm button.go { background: var(--plite-danger); color: var(--bg); }
 
+/* 重新生成二次确认待执行态：红色警示，第二次点击才真正执行 */
+.msg-act.danger {
+  color: var(--plite-danger);
+  background: var(--plite-danger-soft);
+  border-color: color-mix(in srgb, var(--plite-danger) 45%, var(--border));
+}
+.msg-act.danger .lbl { font-weight: 600; }
+.chat-sheet-item.danger { color: var(--plite-danger); }
+.chat-sheet-item.danger span:last-child { font-weight: 600; }
+
 /* ===== 滚动导航（锚定 stream-area：贴消息流底部之上，不入输入框） ===== */
 .stream-area { position: relative; flex: 1; min-height: 0; display: flex; }
 .scroll-pill {
