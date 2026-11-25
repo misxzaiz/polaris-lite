@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import type { ChatMessage, ChatSession } from '@sdk';
 import type { Attachment } from './attachments';
 import { loadWorkspacePrefs } from './workspace-prefs';
+import { loadSessionDefaults } from './session-defaults';
 import { openLiveIfNeeded } from './liveOverlay';
 import {
   createSync, cacheGetAll, cachePutAll, cacheDelete, pullSession, pushSession, deleteSessionRemote,
@@ -306,9 +307,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     // 新会话默认绑定：用户显式设过「新对话默认使用」才继承，否则跟随全局（undefined）
     const defaultWs = loadWorkspacePrefs().defaultWorkspaceId;
+    // 新会话默认模型配置：会话设置面板「记住当前配置」写入；四项与工作区同一口径
+    // ——缺省即不注入字段（跟随全局），有值则随会话 JSON 上云、多端一致。
+    const defaults = loadSessionDefaults();
     const session = touch({
       id, title: title ?? '新会话', messages: [], createdAt: Date.now(),
       ...(defaultWs ? { workspaceId: defaultWs } : {}),
+      ...(defaults.engineId ? { engineId: defaults.engineId } : {}),
+      ...(defaults.providerId ? { providerId: defaults.providerId } : {}),
+      ...(defaults.modelId ? { modelId: defaults.modelId } : {}),
+      ...(defaults.codebuddyModel ? { codebuddyModel: defaults.codebuddyModel } : {}),
     });
     set((st) => ({ sessions: sortSessions([session, ...st.sessions]), activeId: id }));
     saveActiveHint(id);

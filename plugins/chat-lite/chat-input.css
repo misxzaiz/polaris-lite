@@ -496,6 +496,9 @@
 .chat-assistant-go { margin-left: auto; flex: 0 0 auto; color: var(--text-faint); font-size: 14px; line-height: 1; }
 .chat-row-aux { margin-left: 6px; flex: 0 0 auto; font-size: 10px; color: var(--accent-bright); }
 .chat-ws-chip.invalid { color: var(--plite-danger); border-color: color-mix(in srgb, var(--plite-danger) 45%, var(--border)); }
+/* 新会话默认行：记住当前引擎/供应商/模型配置，createSession 注入（本地偏好，非会话级） */
+.chat-default-row.on { background: var(--accent-soft); }
+.chat-default-row:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== 工作目录浮层（portal 到 body；absolute 定位贴住输入条上方） =====
    为什么不用内联抽屉：宿主 .shell-input 有 overflow:hidden 与 42dvh 上限，二级列表会被裁；

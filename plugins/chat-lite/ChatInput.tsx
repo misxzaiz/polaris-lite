@@ -24,6 +24,7 @@ import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, PlusIcon } from './icons'
 import { SessionSettingsPanel } from './SessionSettingsPanel';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
+import { loadSessionDefaults, saveSessionDefaults, clearSessionDefaults } from './session-defaults';
 import { ContextMeter } from './ContextMeter';
 import './chat-input.css';
 
@@ -142,6 +143,33 @@ export function ChatInput() {
   /** CodeBuddy 引擎的会话级模型（undefined=CLI 默认 hy4free） */
   const sessionCbModel = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.codebuddyModel);
   const setSessionCodebuddyModel = useSessionStore((s) => s.setSessionCodebuddyModel);
+  /** 新会话默认配置（会话设置面板「记住当前配置」写入；createSession 读取注入） */
+  const [sessionDefaults, setSessionDefaults] = useState(() => loadSessionDefaults());
+  const hasAnyDefault = !!(
+    sessionDefaults.engineId || sessionDefaults.providerId || sessionDefaults.modelId || sessionDefaults.codebuddyModel
+  );
+  const defaultsActive = !!activeId
+    && sessionDefaults.engineId === sessionEngineId
+    && sessionDefaults.providerId === sessionProviderId
+    && sessionDefaults.modelId === sessionModelId
+    && sessionDefaults.codebuddyModel === sessionCbModel;
+  /** 切换「记住当前配置」：已生效则取消（回跟随全局），否则把当前四项快照写入偏好 */
+  const toggleSessionDefaults = useCallback(() => {
+    const cur = loadSessionDefaults();
+    const same = cur.engineId === sessionEngineId
+      && cur.providerId === sessionProviderId
+      && cur.modelId === sessionModelId
+      && cur.codebuddyModel === sessionCbModel;
+    const next = same
+      ? clearSessionDefaults()
+      : saveSessionDefaults({
+        engineId: sessionEngineId,
+        providerId: sessionProviderId,
+        modelId: sessionModelId,
+        codebuddyModel: sessionCbModel,
+      });
+    setSessionDefaults(next);
+  }, [sessionEngineId, sessionProviderId, sessionModelId, sessionCbModel]);
   /** CodeBuddy 引擎可用性 + 模型清单（探测 /api/codebuddy/health：CLI 缺失/被禁用时锁定「默认」；
    *  models 从 CLI --help 动态解析，CLI 升级新增模型自动跟随，不写死） */
   const [codebuddyAvailable, setCodebuddyAvailable] = useState(false);
@@ -600,6 +628,10 @@ export function ChatInput() {
             providerId={sessionProviderId}
             modelId={sessionModelId}
             onSetSessionModel={(pid, mid) => setSessionModel(activeId ?? createSession(), pid, mid)}
+            defaultsActive={defaultsActive}
+            hasAnyDefault={hasAnyDefault}
+            hasSession={!!activeId}
+            onToggleDefaults={toggleSessionDefaults}
             workspaceId={sessionWorkspaceId}
             wsLabel={wsLabel}
             wsMissing={wsMissing}

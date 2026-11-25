@@ -88,6 +88,14 @@ interface SessionSettingsPanelProps {
   providerId: string | undefined;
   modelId: string | undefined;
   onSetSessionModel: (providerId: string | undefined, modelId: string | undefined) => void;
+  // ---- 新会话默认（模型分区底部：把引擎/供应商/模型/CodeBuddy 模型快照为新建会话默认）----
+  /** 当前会话配置 == 已记住的默认（无会话时为 false） */
+  defaultsActive: boolean;
+  /** 已记住任意一项默认（用于区分「跟随全局」与「另有默认」） */
+  hasAnyDefault: boolean;
+  /** 无会话时禁用：还没有可记忆的配置 */
+  hasSession: boolean;
+  onToggleDefaults: () => void;
   // ---- 工作区 ----
   workspaceId: string | null;
   wsLabel: string | null;
@@ -123,6 +131,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     sessionTitle,
     engineId, codebuddyAvailable, codebuddyModels, codebuddyModel, onSetSessionCodebuddyModel, onSetSessionEngine,
     providerId, modelId, onSetSessionModel,
+    defaultsActive, hasAnyDefault, hasSession, onToggleDefaults,
     workspaceId, wsLabel, wsMissing, linkedCount, onOpenWorkspacePicker,
     trustMode, trustTitle, trustLabel, onToggleTrust,
     queueLen, queueItems, onClearPending, onSendPendingNow, onEditPending, onRemovePendingItem,
@@ -398,6 +407,27 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             )}
           </div>
           )}
+
+          {/* 新会话默认：把上面四项（引擎/供应商/模型/CodeBuddy 模型）快照为新建会话默认。
+              全 undefined 时快照即「跟随全局」，仍可显式记住；再点一次取消回到跟随全局。
+              与工作区「设为新对话默认」同一形态：本地偏好，新会话继承后随会话 JSON 上云。 */}
+          <button
+            type="button"
+            className={`chat-assistant-row chat-row-btn chat-default-row ${defaultsActive ? 'on' : ''}`}
+            onClick={onToggleDefaults}
+            disabled={!hasSession}
+            title={defaultsActive
+              ? '点击取消记住：新会话恢复跟随全局默认'
+              : '记住上面的引擎/供应商/模型配置，作为新会话默认'}
+          >
+            <span className="chat-assistant-key">新会话默认</span>
+            <span className={`chat-ws-chip ${defaultsActive ? 'pinned' : ''}`}>
+              {defaultsActive ? '已记住当前配置' : hasAnyDefault ? '更新为当前配置' : '记住当前配置'}
+            </span>
+            <span className="chat-row-aux">
+              {defaultsActive ? '新会话沿用' : hasAnyDefault ? '另有默认' : '跟随全局'}
+            </span>
+          </button>
 
           {/* ===== 执行：工作目录（打开现有选择浮层，浮层不自动关）+ 执行模式 ===== */}
           <div className="chat-assistant-sec">执行</div>
