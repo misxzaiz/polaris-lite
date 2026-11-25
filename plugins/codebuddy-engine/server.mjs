@@ -189,8 +189,29 @@ export function createServerPart(options = {}) {
 
   mkdirSync(resolve(dataDir, 'workspace'), { recursive: true });
 
+  /** CLI 可用性探测（缓存一次；spawnSync where 每次都同步阻塞不划算）。
+   *  chat-lite 会话设置面板据此决定「AI 引擎」行是否可选——CLI 缺失的环境
+   *  给用户一个锁定的「默认」，比可选了发消息才报错友好。
+   *  Windows 注意：npm 全局装的 CLI 是 .cmd，Node 20+ 无 shell 直接 spawn 会 EINVAL；
+   *  探测参数是硬编码 ['--version']，无用户输入拼接，shell:true 无注入面。 */
+  let cliFoundCache = null;
+  function cliFound() {
+    if (cliFoundCache !== null) return cliFoundCache;
+    cliFoundCache = (process.platform === 'win32'
+      ? spawnSync('codebuddy', ['--version'], { windowsHide: true, timeout: 15000, shell: true })
+      : spawnSync('codebuddy', ['--version'], { windowsHide: true, timeout: 15000 })).status === 0;
+    return cliFoundCache;
+  }
+
   return async function codebuddyMiddleware(req, res, next) {
     const url = req.url || '';
+
+    // ---- GET /api/codebuddy/health：引擎可用性探测（会话设置「AI 引擎」行数据源）----
+    if (url === '/api/codebuddy/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: !hardOff, cliFound: !hardOff && cliFound() }));
+      return;
+    }
 
     // ---- POST /api/codebuddy/stream：SSE 流式对话 ----
     if (url === '/api/codebuddy/stream' && req.method === 'POST') {

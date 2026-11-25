@@ -306,6 +306,125 @@ async function detectLoop(): Promise<boolean> {
 // StreamEnvelope 已上移 plugins/chat-lite/runnerTypes.ts（runnerBridge 与本文件共用同一形状；
 // 服务端 agent-runner 的 SSE 事件同构，渲染层零改动）。
 
+// ---- CodeBuddy 引擎直连通道（会话设置 engineId='codebuddy' 时启用）----
+// 不经 cap 总线（cap.ai.chat 是单注册位，被 real-engine 占用）：chat-lite 自己
+// POST /api/codebuddy/stream（服务端中间件已在 server-registry 无条件挂载，与前端
+// codebuddy-engine 插件的 enabled 无关），SSE 帧与 real-engine 事件同构，经
+// handleEnvelope 处理后按 cap.ai.chat:event re-emit（通知中心/取证/翻译等旁听方零改动）。
+// 代价（明示给用户的语义）：关页面即中断（与旧引擎通道同语义）；不支持附件；
+// 工具审批链不适用（CLI 自持工具，bypassPermissions——codebuddy-engine 既有设计）。
+const CODEBUDDY_STREAM_URL = '/api/codebuddy/stream';
+const CODEBUDDY_INTERRUPT_URL = '/api/codebuddy/interrupt';
+
+/** 在途 codebuddy 流：streamKey → abort（关页面/中断时本地断流，服务端检测断开即树杀 CLI） */
+const codebuddyRunning = new Map<string, () => void>();
+
+/** SSE 解析（与 runnerBridge 同款逐块累积；codebuddy 服务端帧已是 { kind, payload } 形态） */
+function createCodebuddySseParser(onFrame: (ev: { kind?: string; payload?: unknown }) => void): (chunk: string) => void {
+  let buf = '';
+  return (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      try { onFrame(JSON.parse(data)); } catch { /* 跳过不完整行 */ }
+    }
+  };
+}
+
+/** 中断会话的在途 codebuddy 流：本地断流 + 通知服务端树杀（幂等）。返回是否有在途流 */
+export async function interruptCodebuddy(sessionId: string): Promise<boolean> {
+  let had = false;
+  for (const [key, abort] of [...codebuddyRunning.entries()]) {
+    if (key.startsWith(`${sessionId}::`)) { had = true; abort(); }
+  }
+  if (!had) return false;
+  try {
+    await fetch(CODEBUDDY_INTERRUPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch { /* 服务端不可达：本地 abort 已断流，树杀由服务端 close 检测兜底 */ }
+  return true;
+}
+
+/** codebuddy 直连一轮流：消费 SSE 帧转交 handleEnvelope，并镜像 re-emit 到总线供旁听方消费 */
+async function streamCodebuddyTurn(
+  api: SlotHostApi,
+  sid: string,
+  assistantId: string,
+  effectiveText: string,
+  history: { role: string; content: unknown }[],
+  handleEnvelope: (payload: unknown) => void,
+  onSettled: () => void,
+): Promise<void> {
+  const streamKey = `${sid}::${assistantId}`;
+  const abort = new AbortController();
+  codebuddyRunning.set(streamKey, () => abort.abort());
+  let settledMirror = false; // done 之后不再 re-emit（与引擎总线生命周期同口径）
+  const emitMirror = (ev: { kind?: string; payload?: unknown }): void => {
+    if (!ev.kind || settledMirror) return;
+    if (ev.kind === 'message.done') settledMirror = true;
+    try {
+      api.emit('cap.ai.chat:event', { source: 'codebuddy-engine', kind: ev.kind, payload: ev.payload ?? {} });
+    } catch { /* grants 缺失或无监听者：旁听是旁路职责，不阻断渲染 */ }
+  };
+  try {
+    const resp = await fetch(CODEBUDDY_STREAM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ sessionId: sid, messageId: assistantId, prompt: effectiveText, history }),
+      signal: abort.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      const text = await resp.text().catch(() => '');
+      let msg = `HTTP ${resp.status}`;
+      try { const j = JSON.parse(text); msg = j.error?.message ?? j.error ?? msg; } catch { /* 保留状态码描述 */ }
+      handleEnvelope({ source: 'codebuddy-engine', kind: 'stream.error', payload: { sessionId: sid, messageId: assistantId, message: String(msg) } });
+      onSettled();
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const feed = createCodebuddySseParser((ev) => {
+      if (!ev.kind) return;
+      emitMirror(ev);
+      handleEnvelope({ source: 'codebuddy-engine', kind: ev.kind, payload: ev.payload ?? {} });
+    });
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      feed(decoder.decode(value, { stream: true }));
+    }
+    // SSE 正常关闭但无 done 帧（CLI 异常退出兜底）：强制收敛，防 UI 永久 streaming
+    handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId } });
+    onSettled();
+  } catch (err) {
+    if (abort.signal.aborted) {
+      // 用户中断：本地已断流收不到服务端补发的 done{interrupted}，就地合成收敛
+      // 事件（real-engine interrupt 同语义），否则 UI 永久停在「停止」态
+      handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId, interrupted: true } });
+      onSettled();
+      return;
+    }
+    handleEnvelope({
+      source: 'codebuddy-engine',
+      kind: 'stream.error',
+      payload: { sessionId: sid, messageId: assistantId, message: err instanceof Error ? err.message : String(err) },
+    });
+    onSettled();
+  } finally {
+    codebuddyRunning.delete(streamKey);
+  }
+}
+
 /** 工具块事件处理（仅 loop 模式；块内嵌于 assistant 消息，按 callId 幂等建块/更新） */
 function handleToolEvent(
   kind: string,
@@ -747,6 +866,23 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   });
   armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
 
+  // ---- CodeBuddy 引擎分支（会话设置 engineId='codebuddy'）----
+  // 直连 SSE（不经 runner/cap 总线；CLI 自持工具与上下文）。done/error 经
+  // handleEnvelope 统一收敛（settle 幂等），通知中心等旁听方经 re-emit 拿到同构事件。
+  if (useSessionStore.getState().sessions.find((s) => s.id === sid)?.engineId === 'codebuddy') {
+    if (hasAttachments) {
+      // CLI 通道不支持附件：明示拒绝而不是静默丢文本（与 real-engine「失效即报错」同原则）
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'notice',
+        text: 'CodeBuddy 引擎暂不支持图片附件：请移除附件后重发，或在会话设置切回默认引擎。',
+      });
+      settle();
+      return;
+    }
+    void streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle);
+    return;
+  }
+
   // ---- 服务端编排优先（B1）：runner 可用即走 /api/agent/start（服务端持循环，
   // 刷新页面任务不死）；不可用/被拒回落既有 cap 通道（旧 loop / 纯引擎）。 ----
   const session = store.sessions.find((s) => s.id === sid);
@@ -882,6 +1018,8 @@ export function interruptChat(): void {
   const messageId = streamingMsg?.id;
 
   const doInterrupt = async (): Promise<{ ok: boolean; data?: { found?: boolean } }> => {
+    // CodeBuddy 直连通道优先：在途流必经本地 abort + 服务端树杀（runner/loop 对它不可见）
+    if (await interruptCodebuddy(sessionId)) return { ok: true, data: { found: true } };
     // 服务端编排通道：中断 run（服务端 abort 上游流 + 挂起审批 deny 收敛 + 树杀在途 exec）
     if (await interruptRunnerRun(sessionId)) return { ok: true, data: { found: true } };
     if (await detectLoop()) {

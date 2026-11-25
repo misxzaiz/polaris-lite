@@ -136,6 +136,24 @@ export function ChatInput() {
   const sessionProviderId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.providerId);
   const sessionModelId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelId);
   const setSessionModel = useSessionStore((s) => s.setSessionModel);
+  /** 会话级 AI 引擎（'codebuddy'=CodeBuddy CLI 直连；undefined=默认引擎） */
+  const sessionEngineId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.engineId);
+  const setSessionEngine = useSessionStore((s) => s.setSessionEngine);
+  /** CodeBuddy 引擎可用性（探测 /api/codebuddy/stream 的握手：CLI 缺失/被禁用时锁定「默认」） */
+  const [codebuddyAvailable, setCodebuddyAvailable] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await fetch('/api/codebuddy/health', { credentials: 'include', cache: 'no-store' });
+        const j = (await r.json().catch(() => null)) as { ok?: boolean; cliFound?: boolean } | null;
+        if (alive) setCodebuddyAvailable(!!j?.ok && !!j?.cliFound);
+      } catch {
+        if (alive) setCodebuddyAvailable(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
   /** 会话标题（会话设置面板头部展示）：未设置（「新会话」）时回退用户第一句，与侧栏 displayTitle 同口径 */
   const sessionTitle = useSessionStore((s) => {
     const cur = s.sessions.find((x) => x.id === s.activeId);
@@ -566,6 +584,9 @@ export function ChatInput() {
         {assistantOpen && (
           <SessionSettingsPanel
             sessionTitle={sessionTitle}
+            engineId={sessionEngineId}
+            codebuddyAvailable={codebuddyAvailable}
+            onSetSessionEngine={(eid) => setSessionEngine(activeId ?? createSession(), eid)}
             providerId={sessionProviderId}
             modelId={sessionModelId}
             onSetSessionModel={(pid, mid) => setSessionModel(activeId ?? createSession(), pid, mid)}

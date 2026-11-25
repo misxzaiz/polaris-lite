@@ -75,6 +75,10 @@ interface PopupPos { left: number; width: number; bottom: number; maxHeight: num
 interface SessionSettingsPanelProps {
   // ---- 会话标题（头部展示；未设置=「新会话」时回退用户第一句）----
   sessionTitle: string;
+  // ---- AI 引擎（会话级：默认 real-engine / CodeBuddy CLI；codebuddy 时供应商/模型行禁用）----
+  engineId: 'codebuddy' | undefined;
+  codebuddyAvailable: boolean;
+  onSetSessionEngine: (engineId: 'codebuddy' | undefined) => void;
   // ---- 模型（会话级覆盖；undefined=跟随全局默认）----
   providerId: string | undefined;
   modelId: string | undefined;
@@ -112,6 +116,7 @@ interface SessionSettingsPanelProps {
 export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const {
     sessionTitle,
+    engineId, codebuddyAvailable, onSetSessionEngine,
     providerId, modelId, onSetSessionModel,
     workspaceId, wsLabel, wsMissing, linkedCount, onOpenWorkspacePicker,
     trustMode, trustTitle, trustLabel, onToggleTrust,
@@ -313,11 +318,36 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
         <div className="chat-settings-body">
           {/* ===== 模型（会话级覆盖）===== */}
           <div className="chat-assistant-sec">模型</div>
+          {/* AI 引擎行：codebuddy 不可用时锁定「默认」并说明原因（服务端中间件挂了但
+              CLI 缺失/被禁用的环境下，选择没有意义——不给用户一个看起来可选的假选项） */}
+          <div className="chat-assistant-row">
+            <span className="chat-assistant-key">AI 引擎</span>
+            <button
+              className={`chat-ws-chip chat-model-chip ${engineId === 'codebuddy' ? 'pinned' : ''}`}
+              onClick={() => onSetSessionEngine(engineId === 'codebuddy' ? undefined : 'codebuddy')}
+              disabled={!codebuddyAvailable}
+              title={
+                !codebuddyAvailable
+                  ? 'CodeBuddy 引擎不可用（CLI 未安装或已被禁用）'
+                  : engineId === 'codebuddy'
+                    ? '当前：CodeBuddy（CLI 自持工具，本会话不支持供应商/模型选择与图片附件）。点击切回默认引擎'
+                    : '当前：默认引擎（real-engine / 服务端编排）。点击切换到 CodeBuddy（腾讯 CodeBuddy CLI，会话级）'
+              }
+            >
+              {engineId === 'codebuddy' ? 'CodeBuddy' : '默认'}
+            </button>
+            {engineId === 'codebuddy' && (
+              <span className="chat-row-aux" title="CodeBuddy 会话：供应商/模型选择不适用（CLI 自持模型配置）；关闭页面会中断在途任务">
+                CLI 直连
+              </span>
+            )}
+          </div>
           <div className="chat-assistant-row">
             <span className="chat-assistant-key">供应商</span>
             <button
               className={`chat-ws-chip chat-model-chip ${providerId ? 'pinned' : ''}`}
               onClick={() => openModelPop('provider')}
+              disabled={engineId === 'codebuddy'}
               title="选择本对话使用的模型供应商（会话级，不影响其他对话）"
             >
               {providerName ?? '默认'}
@@ -326,6 +356,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             <button
               className={`chat-ws-chip chat-model-chip ${modelId ? 'pinned' : ''}`}
               onClick={() => openModelPop('model')}
+              disabled={engineId === 'codebuddy'}
               title="选择本对话使用的模型（会话级；未指定时跟随所选供应商默认）"
             >
               {effectiveModel ?? '默认'}
@@ -334,6 +365,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               <button
                 className="chat-model-reset"
                 onClick={() => onSetSessionModel(undefined, undefined)}
+                disabled={engineId === 'codebuddy'}
                 title="清除会话级覆盖，回到跟随全局默认"
               >
                 恢复默认

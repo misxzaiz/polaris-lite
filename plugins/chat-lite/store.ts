@@ -88,6 +88,10 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
    *  只选供应商不选模型时 modelId 为空 → 用该供应商的 activeModel。随会话 JSON 一并上云。 */
   providerId?: string;
   modelId?: string;
+  /** 会话级 AI 引擎选择（会话设置面板写入）：缺省 = 默认引擎（real-engine/runner）；
+   *  'codebuddy' = CodeBuddy 引擎（chat-lite 直连 /api/codebuddy/stream SSE，CLI 自持工具）。
+   *  与 providerId/modelId 同口径：随会话 JSON 上云，多端一致。 */
+  engineId?: 'codebuddy';
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。
    *  缺省回退 createdAt（旧快照兼容）。随会话 JSON 一并上云，多端排序一致。 */
   lastActiveAt?: number;
@@ -137,6 +141,8 @@ interface SessionState {
   setSessionLinkedWorkspaces: (id: string, linked: string[]) => void;
   /** 设置/清除会话级模型覆盖（undefined=清除该字段，回到跟随全局默认） */
   setSessionModel: (id: string, providerId: string | undefined, modelId: string | undefined) => void;
+  /** 设置会话级 AI 引擎（undefined/'real'=默认引擎；'codebuddy'=CodeBuddy CLI 引擎） */
+  setSessionEngine: (id: string, engineId: 'codebuddy' | undefined) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -360,6 +366,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const next = { ...s };
         if (providerId === undefined) delete next.providerId; else next.providerId = providerId;
         if (modelId === undefined) delete next.modelId; else next.modelId = modelId;
+        return touch(next);
+      })),
+    }));
+    dirty.add(id);
+    scheduleSync();
+  },
+
+  setSessionEngine: (id, engineId) => {
+    set((st) => ({
+      sessions: sortSessions(st.sessions.map((s) => {
+        if (s.id !== id) return s;
+        // undefined=显式删除键：与 setSessionModel 同口径（JSON 落盘不留 undefined 值）
+        const next = { ...s };
+        if (engineId === undefined) delete next.engineId; else next.engineId = engineId;
         return touch(next);
       })),
     }));
