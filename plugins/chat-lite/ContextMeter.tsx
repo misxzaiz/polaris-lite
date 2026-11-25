@@ -107,19 +107,21 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
           <div className="ctx-detail-heading">最近轮次</div>
           <table className="ctx-usage-table">
             <thead>
-              <tr><th>输入</th><th>缓存</th><th>输出</th><th>速率</th></tr>
+              <tr><th>输入（含缓存）</th><th>缓存命中</th><th>输入（不含缓存）</th><th>输出</th><th>速率</th></tr>
             </thead>
             <tbody>
               {history.map((h, i) => (
                 <tr key={`${h.at}-${i}`}>
                   <td>{fmtTokens(h.inputTokens)}{h.estimated ? '*' : ''}</td>
                   <td>{h.cachedTokens ? fmtTokens(h.cachedTokens) : '—'}</td>
+                  <td>{h.cachedTokens ? fmtTokens(Math.max(0, h.inputTokens - h.cachedTokens)) : fmtTokens(h.inputTokens)}</td>
                   <td>{fmtTokens(h.outputTokens)}</td>
                   <td>{h.outputTokens > 0 ? `${h.tps.toFixed(1)} tok/s` : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <div className="ctx-detail-note">输入（含缓存）= 本轮 prompt tokens 总量；缓存命中是其子集（前缀命中部分），「输入（不含缓存）」= 输入 − 缓存命中（全价计费部分）。</div>
           {history.some((h) => h.estimated) && <div className="ctx-detail-note">* 为字符估算值</div>}
         </div>
       )}

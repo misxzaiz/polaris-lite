@@ -1,3 +1,4 @@
+import type { WireUsage, AiUsagePayload } from './usage-types';
 /**
  * usage：上游 usage 帧解析 + ai.usage 载荷构造（含无 usage 时的字符估算兜底）。
  *
@@ -25,11 +26,11 @@ export function buildUsagePayload(args: {
   sessionId: string;
   messageId: string;
   messages: { content: unknown; tool_calls?: unknown }[];
-  wireUsage: import('../engine-kit/types').WireUsage | null;
+  wireUsage: WireUsage | null;
   model?: string;
   maxInputTokens?: number;
   startedAt: number;
-}): import('../engine-kit/types').AiUsagePayload {
+}): AiUsagePayload {
   const { sessionId, messageId, messages, wireUsage, model, maxInputTokens, startedAt } = args;
   const durationMs = Date.now() - startedAt;
   const contextWindow = maxInputTokens && maxInputTokens > 0 ? maxInputTokens : undefined;
