@@ -103,7 +103,9 @@ function createFsHandler(): CapabilityHandler {
               '浏览与读取工作区文件（只读）。动作：roots=列出工作区根与当前工作区；' +
               'list=列目录（rootId+相对路径；rootId 缺省=内置 workspace）；' +
               'read=读文本文件（rootId+path，可带 head/tail 行数取片段；rootId 缺省=内置 workspace）。' +
-              '路径一律相对工作区根；写入请用 bash 工具。',
+              '重要：path 必须是「相对所选工作区根的相对路径」（如 README.md、src/index.ts），' +
+              '不要传绝对路径（D:/... 会得到 FS_NOT_FOUND）；磁盘上的项目目录对应 roots 里的同名根' +
+              '（先 roots 列出，再用该根 id + 相对路径读取）。写入请用 bash 工具。',
             parameters: {
               type: 'object',
               properties: {

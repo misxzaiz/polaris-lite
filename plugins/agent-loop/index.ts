@@ -31,12 +31,19 @@ const MAX_TOOL_CALLS = 80;
 const MAX_SAME_TOOL_FAILS = 4;
 const APPROVAL_TIMEOUT_MS = 120_000;
 /** 轻量直通的任务信号词：命中任意一个即视为「要用工具的任务」，不进轻量直通。
- *  覆盖：工具名、命令动词、文件/脚本/网页操作语境。中英都收。 */
+ *  覆盖：工具名、命令动词、文件/脚本/网页操作语境、常见技术文件名。中英都收。
+ *  2026-11-25 补：README/JSON 等文件名与「仓库」「读一下/看看…文件」类问法也会用工具，
+ *  已收录；宁可多走编排（多花一点上下文）也不要让需要工具的任务被直通掐掉。 */
 const TOOL_HINT_RE = new RegExp([
   'bash', 'files', 'files_write', 'render', 'browser', 'interactive', 'read_skill',
   'mcp_', 'cap\\.', '工具', '脚本', '命令', '终端', '执行', '跑一下', '写文件', '读文件',
   '目录', 'ls ', 'cd ', 'npm ', 'node ', 'python', 'git ', '搜索网页', '打开网页', '截图',
   '生成面板', 'html', '页面原型', '记账', '台账', '列表文件', '文件夹', '运行', '部署', '安装',
+  // 文件名/路径线索（带扩展名即几乎必然涉及文件操作）
+  '\\.md', '\\.json', '\\.ts', '\\.js', '\\.mjs', '\\.css', '\\.py', '\\.txt', '\\.yaml', '\\.yml',
+  'readme', 'package\\.json', 'manifest', 'config',
+  // 动作词：读/查/看看+文件语境、统计、总结文件、打开、列出
+  '读一下', '查一下', '看看', '总结', '统计', '列出', '打开', '检查', '分析.*文件', '仓库', '项目里',
 ].join('|'), 'i');
 /** 喂回模型的工具结果截断（上下文防爆） */
 const FEEDBACK_CAP = 8 * 1024;
@@ -660,6 +667,10 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           ? ` 用户为本对话关联了这些只读目录（可浏览/读取，不可写、bash 不在其中执行）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`
           : ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
       }
+      // files 工具路径语义提醒（2026-11-25 实测缺陷）：模型拿到绝对路径会直接当 path 传，
+      // 得到 FS_NOT_FOUND 后容易误判「文件不存在」。显式给出正确用法：先 roots 拿根 id，
+      // 再用「根 id + 相对路径」读取；bash 才能吃绝对路径。
+      readonlyHint += ' 用 files 工具读文件时：path 传相对工作区根的相对路径；要读其它项目目录（如仓库根）的文件，先调 roots 拿到对应根的 id，再用该 rootId+相对路径，不要把绝对路径当 path 传。';
     } catch { /* roots 不可用：保持默认提示 */ }
     // 会话工作区上报：钩子目录与本会话 bash/files 工作区对齐（此前 hook-bridge 用全局
     // activeRoot 解析，会话绑定非默认工作区时 settings.json 定位错位→钩子静默丢失）。
@@ -1303,6 +1314,15 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         emitTo(emit, 'message.continued', {
           sessionId, messageId: assistantId,
           attempt: Math.floor(toolOnlyStreak / 12), max: 0, reason: 'tool-streak-nudge',
+        });
+      }
+      // 碎命令提醒（2026-11-25 9826 对话审计）：真实会话出现过单条消息 244 张工具卡
+      // （229 次 bash，多为逐文件 sed/grep 碎命令）。到阈值注入「合并命令」提示，
+      // 减少 round-trip 与上下文占用。
+      if (totalToolCalls > 0 && totalToolCalls % 60 === 0) {
+        shadow.push({
+          role: 'user',
+          content: `（系统：本条消息已累计执行 ${totalToolCalls} 次工具调用。许多是逐文件的 sed/grep/cat 碎命令——请把同类操作合并成一条命令（如一次 find/grep 带多个路径、一次 sed 多段输出），减少往返；已经确认过的事实不要反复重查。）`,
         });
       }
       // 下一轮：shadow 最后一条是 tool 结果，继续循环
