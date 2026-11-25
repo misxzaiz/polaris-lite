@@ -10,6 +10,7 @@
  */
 import { useState } from 'react';
 import { respondInteractive } from './interactive-bridge';
+import { answerRunnerInteractive } from './runnerBridge';
 import type { InteractiveCardData } from './store';
 
 export interface InteractiveCardProps {
@@ -19,9 +20,11 @@ export interface InteractiveCardProps {
   payload: Record<string, unknown>;
   status?: InteractiveCardData['status'];
   answer?: Record<string, unknown>;
+  /** 所属会话（服务端 runner 通道作答回填用；旧通道可缺省） */
+  sessionId?: string;
 }
 
-export function InteractiveCard({ callId, kind, title, payload, status = 'awaiting', answer }: InteractiveCardProps) {
+export function InteractiveCard({ callId, kind, title, payload, status = 'awaiting', answer, sessionId }: InteractiveCardProps) {
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [submitted, setSubmitted] = useState(status === 'answered');
   // 已回执（事件回填 answered）：展示答案摘要，交互控件收起
@@ -34,7 +37,16 @@ export function InteractiveCard({ callId, kind, title, payload, status = 'awaiti
     if (answered) return;
     const a = override ?? draft;
     setSubmitted(true);
-    respondInteractive(callId, a);
+    // 服务端 runner 通道：作答回填到服务端挂起（任意在线设备先到先得）；
+    // 回填失败（runner 不可用/非 runner 会话）回落旧 window 桥（interactive-cards）。
+    if (sessionId) {
+      void answerRunnerInteractive(sessionId, callId, a).then((handled) => {
+        if (handled) return;
+        respondInteractive(callId, a);
+      });
+    } else {
+      respondInteractive(callId, a);
+    }
   };
 
   const options = Array.isArray(payload.options) ? payload.options.map(String) : [];

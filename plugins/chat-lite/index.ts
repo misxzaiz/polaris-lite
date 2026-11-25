@@ -617,6 +617,47 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
 
+    // 交互卡事件（服务端 runner 通道；旧通道走 interactive-cards 直发全局事件）：
+    // runner 的 interactive.required/resolved 落成 assistant 消息里的 interactive 块，
+    // 作答经 POST /api/agent/interactive 回填服务端挂起。
+    if (envelope.kind === 'interactive.required') {
+      armPhaseWatchdog();
+      const callId = String(inner.callId ?? '');
+      if (!callId) return;
+      const st2 = useSessionStore.getState();
+      const msg2 = st2.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+      const blocks2 = (msg2 as { blocks?: { type: string; card?: { callId: string } }[] } | undefined)?.blocks;
+      if (!msg2 || !Array.isArray(blocks2)) return;
+      if (blocks2.some((b) => b.type === 'interactive' && b.card?.callId === callId)) return; // 幂等
+      st2.appendAssistantBlock(sid, assistantId, {
+        type: 'interactive',
+        card: {
+          callId,
+          kind: (inner.kind as 'question' | 'form' | 'confirm') ?? 'question',
+          title: String(inner.title ?? '请确认'),
+          payload: { options: inner.options ?? [], fields: inner.fields ?? [] },
+          status: 'awaiting',
+        },
+      });
+      return;
+    }
+    if (envelope.kind === 'interactive.resolved') {
+      // 服务端已收到作答（本端或其他设备）：卡片收敛为已答（答案内容以 store 里已有为准）
+      const callId = String(inner.callId ?? '');
+      if (!callId) return;
+      const st3 = useSessionStore.getState();
+      const msg3 = st3.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+      const blocks3 = (msg3 as { blocks?: { type: string; card?: { callId: string; status?: string } }[] } | undefined)?.blocks;
+      const blk = blocks3?.find((b) => b.type === 'interactive' && b.card?.callId === callId);
+      if (blk) {
+        st3.patchAssistantInteractiveBlock(sid, assistantId, callId, {
+          status: 'answered',
+          answer: (blk as { card?: { answer?: Record<string, unknown> } }).card?.answer ?? {},
+        });
+      }
+      return;
+    }
+
     if (envelope.kind === 'message.reasoning' && inner.delta) {
       armWatchdog(); // 思考流也是活跃信号：长思考期间看门狗持续续期（只软提示不收敛）
       pushReasoning(inner.delta);

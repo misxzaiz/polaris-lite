@@ -234,7 +234,7 @@ export function createServerPart(options = {}) {
         }
         const entry = { id: hashId(real), path: real, label: label || real.split(/[\\/]/).filter(Boolean).pop() || real, builtin: false };
         writeRoots([...roots.filter((r) => !r.builtin), entry]);
-        audit({ at: Date.now(), op: 'add-root', path: real, user: session.user?.name });
+        audit({ at: Date.now(), op: 'add-root', path: real, user: session?.user?.name });
         return send(200, { roots: currentRoots() });
       }
 
@@ -248,7 +248,7 @@ export function createServerPart(options = {}) {
         if (target.builtin) return send(403, { error: '内建 workspace 根不可重命名', code: 'FS_ROOT_BUILTIN' });
         if (!label) return send(400, { error: 'label required', code: 'BAD_REQUEST' });
         writeRoots(currentRoots().map((r) => (r.id === id ? { ...r, label } : r)));
-        audit({ at: Date.now(), op: 'rename-root', path: target.path, label, user: session.user?.name });
+        audit({ at: Date.now(), op: 'rename-root', path: target.path, label, user: session?.user?.name });
         return send(200, { roots: currentRoots() });
       }
 
@@ -258,7 +258,7 @@ export function createServerPart(options = {}) {
         if (!root) return send(404, { error: 'root not found', code: 'FS_ROOT_NOT_FOUND' });
         if (root.builtin) return send(403, { error: '内建 workspace 根不可移除', code: 'FS_ROOT_BUILTIN' });
         writeRoots(currentRoots().filter((r) => r.id !== root.id));
-        audit({ at: Date.now(), op: 'remove-root', path: root.path, user: session.user?.name });
+        audit({ at: Date.now(), op: 'remove-root', path: root.path, user: session?.user?.name });
         return send(200, { roots: currentRoots() });
       }
 
@@ -313,7 +313,7 @@ export function createServerPart(options = {}) {
               });
             } catch { /* 权限/占用跳过 */ }
           }
-          audit({ at: Date.now(), op: 'tree', rootId, path: dir, count: nodes.length, user: session.user?.name });
+          audit({ at: Date.now(), op: 'tree', rootId, path: dir, count: nodes.length, user: session?.user?.name });
           return send(200, { nodes, absoluteBase: sv.real });
         }
 
@@ -342,7 +342,7 @@ export function createServerPart(options = {}) {
             });
           } catch { /* 跳过 */ }
         }
-        audit({ at: Date.now(), op: 'tree-roam', path: sv.real, count: nodes.length, user: session.user?.name });
+        audit({ at: Date.now(), op: 'tree-roam', path: sv.real, count: nodes.length, user: session?.user?.name });
         return send(200, { nodes, absoluteBase: sv.real });
       }
 
@@ -364,7 +364,7 @@ export function createServerPart(options = {}) {
         }
         const entry = { id: hashId(sv.real), path: sv.real, label: label || sv.real.split(/[\\/]/).filter(Boolean).pop() || sv.real, builtin: false };
         writeRoots([...roots.filter((r) => !r.builtin), entry]);
-        audit({ at: Date.now(), op: 'add-root-from-tree', path: sv.real, user: session.user?.name });
+        audit({ at: Date.now(), op: 'add-root-from-tree', path: sv.real, user: session?.user?.name });
         return send(200, { roots: currentRoots() });
       }
 
@@ -406,7 +406,7 @@ export function createServerPart(options = {}) {
             entries.push({ name, isDir: s.isDirectory(), size: s.isDirectory() ? undefined : s.size, mtime: s.mtimeMs });
           } catch { /* 单项 stat 失败跳过（权限/占用） */ }
         }
-        audit({ at: Date.now(), op: 'list', mode, rootId: rootId || undefined, path: q.get('path') ?? '', count: entries.length, user: session.user?.name });
+        audit({ at: Date.now(), op: 'list', mode, rootId: rootId || undefined, path: q.get('path') ?? '', count: entries.length, user: session?.user?.name });
         return send(200, { entries, truncated });
       }
 
@@ -438,14 +438,14 @@ export function createServerPart(options = {}) {
         const isText = !BINARY_EXT.has(ext) && looksTextable(ext);
         const textCap = roam ? 256 * 1024 : TEXT_PREVIEW_CAP;
         if (st.size > (isText ? textCap : BINARY_PREVIEW_CAP)) {
-          audit({ at: Date.now(), op: 'read-oversize', mode: roam ? 'roam' : 'root', path: rel, size: st.size, user: session.user?.name });
+          audit({ at: Date.now(), op: 'read-oversize', mode: roam ? 'roam' : 'root', path: rel, size: st.size, user: session?.user?.name });
           return send(200, {
             tooLarge: true, size: st.size, isText,
             hint: isText ? `文件超过 ${Math.round(textCap / 1024)}KB 预览上限，可用 head/tail 参数取片段（或让 AI 用 bash 取）` : '文件超过 1MB 二进制预览上限',
           });
         }
         const buf = readFileSync(real);
-        audit({ at: Date.now(), op: 'read', mode: roam ? 'roam' : 'root', rootId: rootId || undefined, path: rel, size: st.size, user: session.user?.name });
+        audit({ at: Date.now(), op: 'read', mode: roam ? 'roam' : 'root', rootId: rootId || undefined, path: rel, size: st.size, user: session?.user?.name });
         if (isText) {
           let text = buf.toString('utf8');
           if (head) text = text.split('\n').slice(0, head).join('\n');

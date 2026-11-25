@@ -201,7 +201,7 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
         ) : (
           <div className={`chat-bubble ${!isUser ? 'markdown' : ''}`}>
             {!isUser && hasBlocks(m)
-              ? renderBlocks(m.blocks, !!m.streaming, () => resumeTruncated(sid, m.id))
+              ? renderBlocks(m.blocks, !!m.streaming, () => resumeTruncated(sid, m.id), sid)
               : !isUser
                 ? <Markdown text={m.content} />
                 : m.content}

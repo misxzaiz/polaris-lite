@@ -61,6 +61,7 @@ function scanHtml(html) {
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const root = resolve(dataDir, 'previews');
   const hardOff = process.env.PLITE_PREVIEW === '0';
@@ -105,9 +106,13 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/preview/')) return next?.();
 
-    // 会话 cookie 硬门禁（raw 也不豁免：iframe 请求带同源 cookie，不破渲染）
+    // 登录门禁：会话 cookie 或本地回环 Bearer（auth-session 临时凭证；agent-runner
+    // 服务端编排 loopback 调用走 Bearer，与 agent-bash/fs 同一纪律）二选一。
+    const authHeader = String(req.headers?.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const bearerValid = !!(bearerToken && verifyTempToken(bearerToken));
     const session = getSession?.(req);
-    if (!session) {
+    if (!session && !bearerValid) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }

@@ -168,6 +168,7 @@ export function renderBlocks(
   blocks: AsstBlock[],
   streaming: boolean,
   onResume?: () => void,
+  sessionId?: string,
 ): React.ReactNode {
   const groups = identifyGroups(blocks);
 
@@ -249,7 +250,7 @@ export function renderBlocks(
         if (original) processed.add(original); // 归组的 artifact 随组渲染（标记回块引用）
       });
     } else if (b.type === 'interactive') {
-      result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} />);
+      result.push(<InteractiveCard key={`ia-${b.card.callId}`} callId={b.card.callId} kind={b.card.kind} title={b.card.title} payload={b.card.payload} status={b.card.status} answer={b.card.answer} sessionId={sessionId} />);
     } else if (b.type === 'artifact') {
       // 通用产物块：渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记（rendererType → 组件），
       // chat-lite 不再为每种可视化产物加硬编码分支。未登记（插件被停用）渲兜底提示，不崩不空白。
