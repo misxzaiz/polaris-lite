@@ -29,6 +29,9 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, ren
 import { resolve, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Agent, fetch as undiciFetch } from 'undici';
+// 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
+// 零 DOM/零副作用：UsageAccumulator/estimateTokens/compactShadow 均可服务端复用。
+import { UsageAccumulator, estimateTokens, compactShadow } from '../shared/context-compact.ts';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const RUNS_DIR = 'agent-runs';
@@ -466,6 +469,104 @@ export function createServerPart(options = {}) {
   }
 
   // ------------------------------------------------------------------
+  // 上下文压缩（服务端版；对齐前端 agent-loop §5.2 语义）
+  // ------------------------------------------------------------------
+  const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+  /** 窗口解析：优先 start payload 显式窗口 → 供应商能力表 maxInputTokens → 默认 200k */
+  function resolveCtxWindow(run) {
+    if (run.ctxWindow > 0) return run.ctxWindow;
+    try {
+      const caps = run.model?.provider?.models?.find((m) => m.id === run.model.activeModel)?.capabilities
+        ?? run.model?.provider?.models?.[0]?.capabilities;
+      const win = Number(caps?.maxInputTokens ?? 0);
+      if (Number.isFinite(win) && win > 0) { run.ctxWindow = win; return win; }
+    } catch { /* 能力表缺失：回默认 */ }
+    run.ctxWindow = DEFAULT_CONTEXT_WINDOW;
+    return DEFAULT_CONTEXT_WINDOW;
+  }
+
+  /** 非流式补全（压缩摘要专用；走同款上游、key 在服务端、显式 max_tokens、不进 shadow） */
+  async function compactComplete(run, { system, user, maxTokens }) {
+    const { provider, activeModel } = run.model;
+    const body = {
+      model: activeModel,
+      stream: false,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: maxTokens,
+    };
+    const resp = await undiciFetch(`${provider.baseURL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify(body),
+      dispatcher: upstreamAgent,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`compact HTTP ${resp.status}: ${text.slice(0, 160)}`);
+    }
+    const json = await resp.json().catch(() => null);
+    const choice = json?.choices?.[0];
+    let text = '';
+    const content = choice?.message?.content;
+    if (typeof content === 'string') text = content;
+    else if (Array.isArray(content)) text = content.map((p) => p?.text ?? '').join('');
+    const truncated = choice?.finish_reason === 'length'
+      || (!text.trim() && (choice?.message?.reasoning !== undefined || choice?.message?.reasoning_content !== undefined));
+    return { text, truncated };
+  }
+
+  /**
+   * 每轮引擎调用前触发压缩（对齐前端 agent-loop）：
+   * 水位（真实 usage 优先，字符估算兜底）达阈值 + 未熔断 + 未在压 → compactShadow。
+   * 非破坏：失败回滚原 shadow，任务继续（context.compact-failed 事件可见）。
+   */
+  async function maybeCompact(run) {
+    const { sessionId, assistantId } = run;
+    const policy = run.ctxPolicy;
+    if (!policy.autoCompact || run.compacting || run.acc.exhausted) return;
+    const window = resolveCtxWindow(run);
+    if (!run.acc.shouldCompact(window, policy.threshold, run.shadow)) return;
+    run.compacting = true;
+    emitEvent(run, 'context.compacting', {
+      sessionId, messageId: assistantId,
+      estimatedTokens: run.acc.lastInput > 0 ? run.acc.lastInput : estimateTokens(run.shadow),
+      window,
+    });
+    try {
+      const outcome = await compactShadow(run.shadow, window, policy.keepRecent, (req) => compactComplete(run, req));
+      if (outcome.ok) {
+        run.acc.resetLast();
+        emitEvent(run, 'context.compacted', {
+          sessionId, messageId: assistantId,
+          summary: outcome.summary, removedMessages: outcome.removedMessages,
+          tokensBefore: outcome.tokensBefore, tokensAfter: outcome.tokensAfter, at: Date.now(),
+        });
+      } else if (outcome.error !== 'range-too-small') {
+        emitEvent(run, 'context.compact-failed', { sessionId, messageId: assistantId, reason: outcome.error ?? 'unknown' });
+      }
+      // range-too-small：静默跳过（下一轮消息增多后区间可选再压），不打扰 UI
+    } catch (err) {
+      emitEvent(run, 'context.compact-failed', { sessionId, messageId: assistantId, reason: String(err?.message ?? err).slice(0, 200) });
+    } finally {
+      run.compacting = false;
+    }
+  }
+
+  /** usage 采集：engineTurn 返回的真实 usage 优先（流末帧），否则按 shadow 估算 */
+  function noteUsage(run, wireUsage) {
+    const input = Number(wireUsage?.prompt_tokens ?? 0);
+    if (input > 0) run.acc.add(input);
+    else run.acc.add(estimateTokens(run.shadow));
+    // 压缩后冷却期结束判断：刚压缩完又立刻超阈 → 熔断（对齐 notePostCompactRound）
+    const window = resolveCtxWindow(run);
+    run.acc.notePostCompactRound(run.acc.lastInput >= window * run.ctxPolicy.threshold);
+  }
+
+  // ------------------------------------------------------------------
   // 编排主循环（前端 agent-loop 的服务端移植；事件形状保持一致）
   // ------------------------------------------------------------------
   async function runLoop(run) {
@@ -480,6 +581,9 @@ export function createServerPart(options = {}) {
       let toolOnlyStreak = 0;
       let autoContinueLeft = 3;
       for (; !signal.aborted; turn += 1) {
+        // 触发压缩（先压再请求；水位达阈值 + 未熔断；失败非破坏回滚）
+        await maybeCompact(run);
+        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
         if (turn >= MAX_LOOP_TURNS || totalToolCalls >= MAX_TOOL_CALLS) {
           run.shadow.push({
             role: 'user',
@@ -502,6 +606,8 @@ export function createServerPart(options = {}) {
           onRetry: (attempt, maxAttempts) => emitEvent(run, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts }),
         });
         if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+        // usage 采集：压缩触发基准（真实 usage 优先，估算兜底）
+        noteUsage(run, run.lastUsage);
 
         // 无工具调用：正文收敛
         if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
@@ -597,10 +703,20 @@ export function createServerPart(options = {}) {
           emitEvent(run, 'message.continued', { sessionId, messageId: assistantId, attempt: Math.floor(toolOnlyStreak / 12), max: 0, reason: 'tool-streak-nudge' });
         }
       }
-      emitEvent(run, 'context.snapshot', {
-        sessionId, messageId: assistantId,
-        messages: run.shadow.length,
-      });
+      // 上下文水位快照：ContextMeter 数据源（真实 usage 优先，字符估算兜底；spec §5.2）
+      {
+        const window = resolveCtxWindow(run);
+        const used = run.acc.lastInput > 0 ? run.acc.lastInput : estimateTokens(run.shadow);
+        emitEvent(run, 'context.snapshot', {
+          sessionId, messageId: assistantId,
+          usedTokens: used,
+          window,
+          percent: window > 0 ? Math.min(1, used / window) : 0,
+          messages: run.shadow.length,
+          compacted: run.acc.roundsSinceCompact !== null,
+          exhausted: run.acc.exhausted,
+        });
+      }
       emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
       emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
     } catch (err) {
@@ -905,6 +1021,16 @@ export function createServerPart(options = {}) {
         execCwd: body.execCwd,
         boundRootId: body.rootId,
         shellHint: body.shellHint,
+        // 上下文压缩状态（spec §5.2）：真实 usage 优先、字符估算兜底；会话级策略
+        // autoCompact/threshold/keepRecent 由 start payload 透传（缺省对齐前端默认）。
+        acc: new UsageAccumulator(),
+        ctxWindow: 0,
+        ctxPolicy: {
+          autoCompact: body.ctxPolicy?.autoCompact !== false,
+          threshold: Number(body.ctxPolicy?.threshold) || 0.75,
+          keepRecent: Number(body.ctxPolicy?.keepRecent) || 6,
+        },
+        compacting: false,
       };
       if (!run.model) {
         return send(res, 400, { error: 'no usable model provider (missing key?)', code: 'NO_PROVIDER' });
