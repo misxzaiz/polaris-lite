@@ -430,6 +430,16 @@
         "cap.ai.chat:event",
         "notifications-changed"
       ]
+    },
+    "extquad": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "plite-guide": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }

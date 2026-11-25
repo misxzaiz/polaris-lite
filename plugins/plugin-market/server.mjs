@@ -47,6 +47,11 @@ export function createServerPart(options = {}) {
   const repoRoot = options.repoRoot ?? resolve(here, '..', '..');
   const publicRegistry = join(repoRoot, 'public', 'plugins', 'registry.json');
   const distRegistry = join(repoRoot, 'dist', 'plugins', 'registry.json');
+  // grants 双写（与 registry 双写同路径约定）：宿主启动 fetch /grants.json（vite build 快照
+  // 进 dist，sync-dist 同步 public→dist）。商城安装的外部插件若只进 registry 不进 grants，
+  // 宿主会弹「未在 grants.json 登记，已按 manifest 自声明放行」的启动告警条（BootNotices）。
+  const publicGrants = join(repoRoot, 'public', 'grants.json');
+  const distGrants = join(repoRoot, 'dist', 'grants.json');
 
   function loadSources() {
     try {
@@ -78,6 +83,57 @@ export function createServerPart(options = {}) {
       try {
         if (existsSync(p)) writeFileSync(p, JSON.stringify(data, null, 2) + '\n');
       } catch { /* 只写存在的；缺失侧由构建补齐 */ }
+    }
+  }
+
+  /** 读取 grants.json（public 优先，回退 dist）；损坏/缺失返回 null */
+  function readGrants() {
+    for (const f of [publicGrants, distGrants]) {
+      try {
+        if (!existsSync(f)) continue;
+        const j = JSON.parse(readFileSync(f, 'utf8'));
+        if (j && typeof j === 'object' && j.plugins) return { file: f, data: j };
+      } catch { /* 下一份 */ }
+    }
+    return null;
+  }
+
+  /**
+   * 商城安装的插件同步登记 grants（unlistedPolicy='declare' 的落盘等价物）：
+   * 授权项 = 插件 plugin.json 的 manifest 自声明（capabilities/provides/events），
+   * 与宿主 resolvePolicy 对未登记插件的放行口径完全一致——本修复只消除
+   * 「registry 有、grants 无」的启动告警与 listed=false 状态，不放大任何权限。
+   * 双写 public + dist（缺侧跳过，与 registry 双写同纪律）。
+   */
+  function grantExtPlugin(id, manifest) {
+    const found = readGrants();
+    if (!found) return; // 连 grants 文件都没有：宿主本来就走全量自声明，无需写
+    const g = found.data;
+    g.plugins[id] = {
+      capabilities: Array.isArray(manifest.capabilities) ? manifest.capabilities : [],
+      provides: Array.isArray(manifest.provides) ? manifest.provides : [],
+      events: Array.isArray(manifest.events) ? manifest.events : [],
+    };
+    if (typeof g.version === 'number') g.version += 1;
+    for (const f of [publicGrants, distGrants]) {
+      try {
+        if (!existsSync(f)) continue;
+        writeFileSync(f, JSON.stringify(g, null, 2) + '\n');
+      } catch { /* 只写存在的 */ }
+    }
+  }
+
+  /** 卸载时同步移除 grants 条目（registry 移除了，授权留着会成僵尸条目） */
+  function revokeExtPlugin(id) {
+    const found = readGrants();
+    if (!found || !found.data.plugins[id]) return;
+    delete found.data.plugins[id];
+    if (typeof found.data.version === 'number') found.data.version += 1;
+    for (const f of [publicGrants, distGrants]) {
+      try {
+        if (!existsSync(f)) continue;
+        writeFileSync(f, JSON.stringify(found.data, null, 2) + '\n');
+      } catch { /* 只写存在的 */ }
     }
   }
 
@@ -176,6 +232,7 @@ export function createServerPart(options = {}) {
       ...(hasStyle ? { style: `/ext-plugins/${id}/style.css?v=${v}` } : {}),
     });
     writeRegistry(registry);
+    grantExtPlugin(id, manifest);
     return { ok: true, id, version: entry.version ?? manifest.version, note: '刷新页面生效' };
   }
 
@@ -230,6 +287,7 @@ export function createServerPart(options = {}) {
       ...(existsSync(join(dest, 'style.css')) ? { style: `/ext-plugins/${id}/style.css?v=${v}` } : {}),
     });
     writeRegistry(registry);
+    grantExtPlugin(id, manifest);
     return { ok: true, id, version: entry.version ?? manifest.version, note: '刷新页面生效' };
   }
 
@@ -351,6 +409,7 @@ export function createServerPart(options = {}) {
       reg.plugins = (reg.plugins ?? []).filter((p) => !p || p.id !== id);
       writeRegistry(reg);
     }
+    revokeExtPlugin(id);
     try { rmSync(dest, { recursive: true, force: true }); } catch (e) { return { error: `删除失败：${e?.message ?? e}` }; }
     return { ok: true, id, note: '刷新页面生效' };
   }
