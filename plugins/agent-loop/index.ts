@@ -20,7 +20,7 @@ import type { LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
 import {
   UsageAccumulator, estimateTokens, compactShadow,
   type NonStreamComplete, type UsageSample,
-} from './context-compact';
+} from '../shared/context-compact';
 import { summarizeToolCall } from './tool-summary';
 
 // 轮次/工具调用数量上限（2026-11-25 恢复护栏）：无限循环实测会烧穿上下文与预算
@@ -47,6 +47,41 @@ const TOOL_HINT_RE = new RegExp([
 ].join('|'), 'i');
 /** 喂回模型的工具结果截断（上下文防爆） */
 const FEEDBACK_CAP = 8 * 1024;
+
+/**
+ * 结构化工具结果（2026-11-25 P1-A，替代中文标签拼接）：
+ * 旧格式 `[bash 执行完成 exit=0]\nSTDOUT:\n...` 把状态、协议字段与输出混在自然语言里，
+ * 模型要靠猜解析；不同工具标签还不一致（files/browser/ledger 各写各的）。
+ * 统一为一行状态 JSON + 原始输出两段式：
+ *   {"ok":true,"tool":"bash","exit":0,"ms":123}   ← 机器可读状态（恒为单行）
+ *   <stdout/stderr/结果原文>                       ← 原样内容（模型直接消费）
+ * 好处：状态判断零歧义、失败原因不与输出混杂、token 开销更低。
+ */
+function toolFeedback(opts: {
+  tool: string;
+  ok: boolean;
+  /** bash exitCode / HTTP status 等数值状态 */
+  code?: number;
+  durationMs?: number;
+  /** 结构化附加字段（files 的 roots/entries、render 的 previewId 等），并入状态行 */
+  data?: Record<string, unknown>;
+  /** 主输出（stdout / 文件内容 / 作答 JSON），已按 FEEDBACK_CAP 截断 */
+  output?: string;
+  /** 次输出（stderr），仅失败或非空时带 */
+  stderr?: string;
+  /** 失败原因（exec.error 等） */
+  error?: string;
+}): string {
+  const status: Record<string, unknown> = { ok: opts.ok, tool: opts.tool };
+  if (opts.code !== undefined) status.code = opts.code;
+  if (opts.durationMs !== undefined) status.ms = opts.durationMs;
+  if (opts.data) for (const [k, v] of Object.entries(opts.data)) status[k] = v;
+  if (!opts.ok && opts.error) status.error = String(opts.error).slice(0, 300);
+  const parts = [JSON.stringify(status)];
+  if (opts.output) parts.push(opts.output);
+  if (opts.stderr && opts.stderr.trim()) parts.push(`STDERR:\n${opts.stderr}`);
+  return parts.join('\n');
+}
 
 /** 上下文压缩默认策略（chat-lite 可按会话覆盖，spec §4.3） */
 const DEFAULT_CTX_POLICY = { autoCompact: true, threshold: 0.75, keepRecent: 6 };
@@ -957,12 +992,18 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           const timedOut = ia.ok && ia.answer && ia.answer.__timeout === true;
           const skipped = ia.ok && ia.answer && ia.answer.__skipped === true;
           const feedback = timedOut
-            ? `[无人值守：交互卡等待超时，用户未作答。请用已有信息继续当前任务，做出合理默认选择或直接给出结论；不要停下来等待用户回复，也不要重复发起同一提问。]`
+            ? toolFeedback({
+                tool: 'interactive', ok: false, error: 'interactive-timeout',
+                output: '用户未在等待期内作答（无人值守超时）。请用已有信息继续当前任务，做出合理默认选择或直接给出结论；不要停下来等待用户回复，也不要重复发起同一提问。',
+              })
             : skipped
-              ? `[用户跳过了本次交互，未提供答案。请尊重用户的跳过选择：用已有信息继续当前任务，自行做出合理默认选择或明确说明该信息缺失后继续；不要停下来等待用户回复，也不要重复发起同一提问。]`
+              ? toolFeedback({
+                  tool: 'interactive', ok: false, error: 'interactive-skipped',
+                  output: '用户跳过了本次交互，未提供答案。请尊重用户的跳过选择：用已有信息继续当前任务，自行做出合理默认选择或明确说明该信息缺失后继续；不要停下来等待用户回复，也不要重复发起同一提问。',
+                })
               : ia.ok && ia.answer
-                ? `[用户交互作答] ${JSON.stringify(ia.answer)}`
-                : `[交互卡失败] ${ia.error ?? 'no answer'}`;
+                ? toolFeedback({ tool: 'interactive', ok: true, data: { answer: ia.answer } })
+                : toolFeedback({ tool: 'interactive', ok: false, error: ia.error ?? 'no answer' });
           // 工具卡终态回执：交互卡没有 exec 语义，也必须发 tool.result 收敛卡片，
           // 否则 UI 永远停在「执行中」转圈（2026-11-20 工具卡状态不回显修复）。
           // stdout 带作答摘要：hasBody 判定需要非空内容，否则成功卡永远无法展开查看。
@@ -995,8 +1036,12 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             pr = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
           const feedback = pr.ok
-            ? `[预览已生成] previewId=${pr.previewId} 版本=${pr.versionLabel ?? '?'} 标题=${pr.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
-            : `[预览生成失败] ${pr.error ?? 'unknown error'}`;
+            ? toolFeedback({
+                tool: 'render', ok: true,
+                data: { previewId: pr.previewId, version: pr.versionLabel ?? '?', title: pr.title ?? '' },
+                output: 'HTML 面板已生成，用户可在对话卡片与「预览」面板中查看运行。',
+              })
+            : toolFeedback({ tool: 'render', ok: false, error: pr.error ?? 'unknown error' });
           // 工具卡终态回执：render 不走 exec 通用路径，同样必须发 tool.result 收敛卡片
           // stdout 带生成摘要（previewId/版本/标题），成功卡可展开查看
           emitTo(emit, 'tool.result', {
@@ -1014,7 +1059,7 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         if (!desc) {
           const msg = `工具 ${call.name} 未注册`;
           emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'error', stderr: msg });
-          shadow.push({ role: 'tool', content: `[工具执行失败] ${msg}`, tool_call_id: call.id, name: call.name });
+          shadow.push({ role: 'tool', content: toolFeedback({ tool: call.name, ok: false, error: 'tool-not-registered', output: msg }), tool_call_id: call.id, name: call.name });
           continue;
         }
 
@@ -1024,8 +1069,14 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command });
           // 无人值守超时自动拒绝 ≠ 用户主动否决：给 AI 明确可执行的继续指令，避免它停下来等待或反复重试同一命令。
           const feedback = verdict === 'timeout'
-            ? `[无人值守：该工具调用等待 ${APPROVAL_TIMEOUT_MS / 1000}s 无用户审批，已自动拒绝（并非用户否决本次操作）。请改用不需要危险权限的安全方式继续当前任务——例如用只读工具查看信息、把需要执行的命令作为建议写给用户、或继续处理其它可自动完成的步骤。不要停下等待用户回复，也不要原样重试同一被拒命令。]`
-            : '[工具被用户拒绝执行。请尊重用户决定，改用其他方式或直接回答。]';
+            ? toolFeedback({
+                tool: call.name, ok: false, error: 'approval-timeout（无人值守：用户长期未审批，自动拒绝，并非用户否决本次操作）',
+                output: `该工具调用等待 ${APPROVAL_TIMEOUT_MS / 1000}s 无用户审批，已自动拒绝。请改用不需要危险权限的安全方式继续当前任务——例如用只读工具查看信息、把需要执行的命令作为建议写给用户、或继续处理其它可自动完成的步骤。不要停下等待用户回复，也不要原样重试同一被拒命令。`,
+              })
+            : toolFeedback({
+                tool: call.name, ok: false, error: 'user-denied',
+                output: '工具被用户拒绝执行。请尊重用户决定，改用其他方式或直接回答。',
+              });
           shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
           continue;
         }
@@ -1044,7 +1095,10 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             emitTo(emit, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command });
             shadow.push({
               role: 'tool',
-              content: `[工具被生命周期钩子拦截] ${reason}。请尊重该策略，改用其他方式或直接回答；不要原样重试同一被拦截调用。`,
+              content: toolFeedback({
+                tool: call.name, ok: false, error: 'hook-denied',
+                output: `工具被生命周期钩子拦截。${reason}。请尊重该策略，改用其他方式或直接回答；不要原样重试同一被拦截调用。`,
+              }),
               tool_call_id: call.id,
               name: call.name,
             });
@@ -1134,10 +1188,14 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           } catch (err) {
             fr = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
-          // 喂回 shadow：结构化结果转摘要（read 全文按上限截断），AI 下一轮据此继续
+          // 喂回 shadow：结构化状态行 + 结果原文（read 全文按上限截断），AI 下一轮据此继续
           const feedback = fr.ok
-            ? `[files 完成] ${frSummary || JSON.stringify(fr).slice(0, FEEDBACK_CAP)}`
-            : `[files 工具执行失败] ${fr.error ?? 'unknown error'}`;
+            ? toolFeedback({
+                tool: 'files', ok: true,
+                data: { action: String(safeFsArgs(call.arguments).action ?? '') },
+                output: frSummary || capText(JSON.stringify(fr), FEEDBACK_CAP),
+              })
+            : toolFeedback({ tool: 'files', ok: false, error: fr.error ?? 'unknown error' });
           // stdout 带结果摘要，成功卡可展开查看（hasBody 需要非空内容）
           emitTo(emit, 'tool.result', {
             sessionId, messageId: assistantId, callId,
@@ -1167,8 +1225,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
             lr = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
           const feedback = lr.ok
-            ? `[记账成功] ${JSON.stringify(lr)}${lr.hint ? `；${lr.hint}` : ''}`
-            : `[记账失败] ${lr.error ?? 'unknown error'}`;
+            ? toolFeedback({ tool: 'ledger', ok: true, data: { result: lr }, output: lr.hint ?? '' })
+            : toolFeedback({ tool: 'ledger', ok: false, error: lr.error ?? 'unknown error' });
           // 工具卡终态回执：ledger 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
           // stdout 带入账结果摘要，成功卡可展开查看
           emitTo(emit, 'tool.result', {
@@ -1208,8 +1266,8 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
           }
           // 喂回 shadow：只回摘要级 JSON（截图 base64 不进 transcript——服务端落盘只回引用）
           const feedback = br.ok
-            ? `[浏览器操作完成] ${JSON.stringify(br)}`
-            : `[浏览器操作失败] ${br.error ?? 'unknown error'}`;
+            ? toolFeedback({ tool: 'browser', ok: true, data: { result: br } })
+            : toolFeedback({ tool: 'browser', ok: false, error: br.error ?? 'unknown error' });
           // 工具卡终态回执：browser 动作语义工具不走 exec 通用路径，同样发 tool.result 收敛卡片
           // stdout 带操作结果摘要（标签/搜索结果/截图引用等），成功卡可展开查看
           emitTo(emit, 'tool.result', {
@@ -1293,8 +1351,15 @@ const loopHandler: StreamCapabilityHandler = async (req, emit) => {
         else toolFailStreak.set(call.name, (toolFailStreak.get(call.name) ?? 0) + 1);
         const failN = toolFailStreak.get(call.name) ?? 0;
         const feedback = exec.ok
-          ? `[bash 执行完成 exit=${exec.exitCode ?? '?'} ${exec.durationMs ?? '?'}ms]\nSTDOUT:\n${capText(String(exec.stdout ?? '') || '(空)')}\nSTDERR:\n${capText(String(exec.stderr ?? '') || '(空)')}`
-          : `[工具执行失败] ${exec.error ?? `exit=${exec.exitCode}`}\nSTDERR:\n${capText(String(exec.stderr ?? ''))}`;
+          ? toolFeedback({
+              tool: call.name, ok: true, code: exec.exitCode, durationMs: exec.durationMs,
+              output: `STDOUT:\n${capText(String(exec.stdout ?? '') || '(空)')}` +
+                (String(exec.stderr ?? '').trim() ? `\nSTDERR:\n${capText(String(exec.stderr ?? ''))}` : ''),
+            })
+          : toolFeedback({
+              tool: call.name, ok: false, code: exec.exitCode, error: exec.error ?? `exit=${exec.exitCode}`,
+              output: String(exec.stderr ?? '').trim() ? `STDERR:\n${capText(String(exec.stderr ?? ''))}` : undefined,
+            });
         shadow.push({ role: 'tool', content: feedback, tool_call_id: call.id, name: call.name });
         if (!okExec && failN >= MAX_SAME_TOOL_FAILS && failN % MAX_SAME_TOOL_FAILS === 0) {
           shadow.push({

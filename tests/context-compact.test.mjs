@@ -1,5 +1,5 @@
 /**
- * 上下文压缩纯逻辑回归测试（plugins/agent-loop/context-compact.ts）。
+ * 上下文压缩纯逻辑回归测试（plugins/shared/context-compact.ts）。
  *
  * 对齐 simple_ai/compact.rs 已验证语义（spec：docs/context-insight-plan.md §6）：
  * - 压缩范围按工具配对边界回退（不切断 assistant.tool_calls ↔ tool）；
@@ -19,7 +19,7 @@ import {
   compactShadow,
   COMPACT_INSTRUCTION,
   COMPACT_ROLLING_INSTRUCTION,
-} from '../plugins/agent-loop/context-compact.ts';
+} from '../plugins/shared/context-compact.ts';
 
 /** 快捷造消息 */
 const sys = (t) => ({ role: 'system', content: t });
