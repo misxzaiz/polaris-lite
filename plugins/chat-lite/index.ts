@@ -364,6 +364,7 @@ async function streamCodebuddyTurn(
   handleEnvelope: (payload: unknown) => void,
   onSettled: () => void,
   model?: string,
+  workdir?: string,
 ): Promise<void> {
   const streamKey = `${sid}::${assistantId}`;
   const abort = new AbortController();
@@ -381,9 +382,15 @@ async function streamCodebuddyTurn(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      // model 缺省=CLI 默认（hy4free）；选了模型但 CLI 升级后没了该 ID → CLI 报错
-      // 经 stream.error 呈现给用户重新选（动态清单原则：不在前端二次白名单）
-      body: JSON.stringify({ sessionId: sid, messageId: assistantId, prompt: effectiveText, history, ...(model ? { model } : {}) }),
+      // model 缺省=CLI 默认（hy4flash-free）；workdir=会话绑定工作区 path（服务端白名单校验）
+      body: JSON.stringify({
+        sessionId: sid,
+        messageId: assistantId,
+        prompt: effectiveText,
+        history,
+        ...(model ? { model } : {}),
+        ...(workdir ? { workdir } : {}),
+      }),
       signal: abort.signal,
     });
     if (!resp.ok || !resp.body) {
@@ -900,9 +907,22 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       settle();
       return;
     }
-    // 会话级模型（会话设置「模型」行写入；缺省=CLI 默认）。服务端校验在 CLI 侧：
-    // 不认识的 ID 由 CLI 报错经 stream.error 呈现，不在这里二次白名单（清单是动态的）。
-    void streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle, activeSession.codebuddyModel);
+    // 会话级模型（会话设置「模型」行写入；缺省=CLI 默认 hy4flash-free）。服务端校验在
+    // CLI 侧：不认识的 ID 由 CLI 报错经 stream.error 呈现，不在这里二次白名单（清单是动态的）。
+    // 工作目录：会话绑定的工作区 path（root id → /api/fs/roots 解析），随 workdir 透传；
+    // 未绑定/解析失败不传 → 服务端 resolveWorkdir 回落 builtin workspace（既有安全白名单校验不变）。
+    void (async () => {
+      let workdir: string | undefined;
+      if (activeSession.workspaceId) {
+        try {
+          const r = await fetch('/api/fs/roots', { credentials: 'include' });
+          const j = (await r.json()) as { roots?: { id: string; path: string; missing?: boolean }[] };
+          const root = j.roots?.find((x) => x.id === activeSession.workspaceId && !x.missing);
+          if (root?.path) workdir = root.path;
+        } catch { /* 解析失败：不传，服务端回落 builtin */ }
+      }
+      await streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle, activeSession.codebuddyModel, workdir);
+    })();
     return;
   }
 

@@ -344,7 +344,7 @@ export function createServerPart(options = {}) {
       const prompt = flattenPrompt(payload);
       const run = { sessionId, messageId, dataDir, killed: false, child: null, adapterStdin: null };
       running.set(key, run);
-      audit(dataDir, { event: 'start', sessionId, messageId, workdir, model: payload.model ?? 'hy4free' });
+      audit(dataDir, { event: 'start', sessionId, messageId, workdir, model: payload.model ?? 'hy4flash-free' });
 
       const finish = (reason, extraEvent) => {
         if (!running.has(key)) return;
@@ -375,7 +375,7 @@ export function createServerPart(options = {}) {
         session_id: sessionId,
         message: prompt,
         work_dir: workdir,
-        model: String(payload.model ?? 'hy4free'),
+        model: String(payload.model ?? 'hy4flash-free'),
         permission_mode: 'bypassPermissions',
       };
       // MCP 透传（plans/extension-capability-pure-plugin-plan.md §2.1）：

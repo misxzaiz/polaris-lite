@@ -92,7 +92,7 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
    *  'codebuddy' = CodeBuddy 引擎（chat-lite 直连 /api/codebuddy/stream SSE，CLI 自持工具）。
    *  与 providerId/modelId 同口径：随会话 JSON 上云，多端一致。 */
   engineId?: 'codebuddy';
-  /** CodeBuddy 引擎的会话级模型（CLI 模型 ID，如 glm-5.3；缺省=CLI 默认 hy4free）。
+  /** CodeBuddy 引擎的会话级模型（CLI 模型 ID，如 glm-5.3；缺省=CLI 默认 hy4flash-free）。
    *  仅 engineId='codebuddy' 时有意义；清单来自 /api/codebuddy/health 的 models。 */
   codebuddyModel?: string;
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。

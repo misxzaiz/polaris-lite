@@ -503,9 +503,9 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
                 <button
                   className={`chat-model-row ${!codebuddyModel ? 'sel' : ''}`}
                   onClick={() => onSetSessionCodebuddyModel(undefined)}
-                  title="使用 CodeBuddy CLI 的默认模型"
+                  title="使用 CodeBuddy CLI 的默认模型（hy4flash-free）"
                 >
-                  <span className="chat-model-name">CLI 默认</span>
+                  <span className="chat-model-name">CLI 默认（hy4flash-free）</span>
                   {!codebuddyModel && <span className="chat-model-current">当前</span>}
                 </button>
                 {codebuddyModels.map((m) => (
