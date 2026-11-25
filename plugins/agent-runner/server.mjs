@@ -118,6 +118,164 @@ export function createServerPart(options = {}) {
   function runLogPath(runId) { return join(runsDir, `${runId}.events.jsonl`); }
   function runStatePath(runId) { return join(runsDir, `${runId}.state.json`); }
 
+  // ------------------------------------------------------------------
+  // 会话档服务端直写（消除「发消息后关页面 → 对话消失」的易失窗口）
+  // ------------------------------------------------------------------
+  // 背景：会话消息的持久化此前完全依赖客户端（chat-lite 消费事件后防抖 PUT
+  // chat-store）。发起端在防抖窗口内被杀（关 App/浏览器/切后台被冻结）时，
+  // 用户消息与 AI 回复都不会进入服务端会话档——任务虽在服务端跑完，重开页面
+  // 却看不到这条对话。
+  //
+  // 做法：编排器在服务端把「用户消息 + 本轮 AI 产出」直接写进 chat-store 的
+  // 会话文件（<dataDir>/chat-store/<sessionId>.json，与 chat-store 插件的
+  // readRecord/writeRecord 同构：{version,updatedAt,session}）。跨插件直写
+  // 文件先例：本文件已直连 kv-store sqlite（kvDb/readKvSync）。
+  //
+  // 合并语义（幂等键 = 消息 id）：
+  // - 写前必重读文件（客户端/其他端可能并发 PUT 过）——服务端档是权威，
+  //   本地有的消息不重复、不覆盖，只补缺失的本 run 消息；
+  // - version 取 max(现有+1, 1) 递增，updatedAt 刷新——与 PUT 通道的版本
+  //   语义一致，客户端 409 对账后 pull 即拿到含本轮消息的完整档；
+  // - 失败只审计不阻断编排（会话档写失败 ≠ 任务失败）。
+  const chatStoreDir = resolve(dataDir, 'chat-store');
+
+  function readChatRecord(sessionId) {
+    const file = join(chatStoreDir, `${sessionId}.json`);
+    if (!existsSync(file)) return null;
+    try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+  }
+
+  function writeChatRecord(sessionId, record) {
+    mkdirSync(chatStoreDir, { recursive: true });
+    const file = join(chatStoreDir, `${sessionId}.json`);
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(record), 'utf8');
+    renameSync(tmp, file);
+  }
+
+  /**
+   * 把消息合并进服务端会话档（幂等：按消息 id 去重；缺会话则建壳）。
+   * messages: 追加的完整消息对象（ChatMessage / AssistantBlockMessage 形状）。
+   * mergeBlocks: true 时对已存在的 assistant 消息做块级合并（同一 assistantId
+   * 跨多轮增量落档——后到的 blocks 追加到既有消息，content 取最长正文）。
+   * 返回是否实际写入（无可新增内容时 false，不空转版本号）。
+   */
+  function mergeChatMessages(sessionId, title, messages, { createdAt, mergeBlocks = false } = {}) {
+    if (!sessionId || !ID_RE.test(sessionId) || !messages?.length) return false;
+    try {
+      const rec = readChatRecord(sessionId);
+      const session = rec?.session ?? {
+        id: sessionId,
+        title: typeof title === 'string' && title ? title : '新会话',
+        messages: [],
+        createdAt: Number(createdAt) || Date.now(),
+      };
+      if (!Array.isArray(session.messages)) session.messages = [];
+      const known = new Map(session.messages.map((m) => [m?.id, m]).filter(([id]) => !!id));
+      const fresh = [];
+      let changed = false;
+      for (const m of messages) {
+        if (!m?.id) continue;
+        const exist = known.get(m.id);
+        if (!exist) { fresh.push(m); known.set(m.id, m); continue; }
+        if (!mergeBlocks) continue;
+        // 块级合并：同一 assistant 消息的后续轮次产出追加（工具卡/正文/思考保序），
+        // content 镜像取累计最长文本；endedAt 以最后一次为准。
+        const before = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
+        exist.blocks = [...(exist.blocks ?? []), ...(m.blocks ?? [])];
+        if ((m.content ?? '').length > (exist.content ?? '').length) exist.content = m.content;
+        if (m.endedAt) exist.endedAt = m.endedAt;
+        const after = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
+        if (after > before) changed = true;
+      }
+      if (fresh.length === 0 && !changed) return false;
+      session.messages.push(...fresh);
+      // 自动命名（对齐前端 ensureAutoTitle 口径）：仍是「新会话」才用首条用户消息前 40 字
+      if (session.title === '新会话') {
+        const firstUser = [...messages].reverse().find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
+        const t = firstUser ? firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+        if (t) session.title = t;
+      }
+      const version = (Number(rec?.version) || 0) + 1;
+      writeChatRecord(sessionId, { version, updatedAt: Date.now(), session });
+      audit({ op: 'chat-sync', sessionId, version, added: fresh.length, merged: changed ? 1 : 0 });
+      return true;
+    } catch (e) {
+      audit({ op: 'chat-sync-fail', sessionId, error: String(e?.message ?? e).slice(0, 120) });
+      return false;
+    }
+  }
+
+  /** 本 run 的用户消息（start 时落一次；幂等） */
+  function syncUserMessage(run, prompt, createdAt) {
+    if (!prompt?.trim()) return;
+    mergeChatMessages(run.sessionId, null, [{
+      id: `u-${run.id}`,
+      role: 'user',
+      content: prompt,
+      createdAt: Number(createdAt) || Date.now(),
+    }], { createdAt });
+  }
+
+  /**
+   * 本轮 AI 产出落档（每轮 engineTurn 收敛后调用；增量、幂等）。
+   * 结构：text/thinking 聚合为 blocks（与前端 appendAssistantBlock 同形状），
+   * 工具卡逐个落 tool 块（含结果回填），interactive/artifact 落对应块。
+   */
+  function syncTurnToSession(run, turnNo) {
+    const seen = run.syncedSeq ?? 0;
+    const evs = run.buffer.filter((e) => e.seq > seen);
+    if (evs.length === 0) return;
+    run.syncedSeq = evs[evs.length - 1].seq;
+    const blocks = [];
+    let text = '';
+    for (const ev of evs) {
+      const p = ev.payload ?? {};
+      if (ev.kind === 'message.reasoning' && p.delta) {
+        const last = blocks[blocks.length - 1];
+        if (last?.type === 'thinking') last.text += p.delta;
+        else blocks.push({ type: 'thinking', text: p.delta });
+      } else if (ev.kind === 'message.delta' && p.delta) {
+        text += p.delta;
+        const last = blocks[blocks.length - 1];
+        if (last?.type === 'text') last.text += p.delta;
+        else blocks.push({ type: 'text', text: p.delta });
+      } else if (ev.kind === 'tool.card') {
+        blocks.push({ type: 'tool', card: { callId: p.callId, name: p.name, command: p.command, argsJson: p.argsJson, status: 'running' } });
+      } else if (ev.kind === 'tool.result') {
+        const card = blocks.find((b) => b.type === 'tool' && b.card?.callId === p.callId)?.card;
+        if (card) {
+          card.status = p.status === 'done' ? 'done' : p.status === 'denied' ? 'denied' : 'error';
+          card.stdout = p.stdout; card.stderr = p.stderr; card.exitCode = p.exitCode;
+          card.durationMs = p.durationMs; card.truncated = p.truncated;
+        }
+      } else if (ev.kind === 'tool.approval.resolved') {
+        const card = blocks.find((b) => b.type === 'tool' && b.card?.callId === p.callId)?.card;
+        if (card && card.status === 'running' && (p.decision === 'deny' || p.autoRejected)) card.status = 'denied';
+      } else if (ev.kind === 'interactive.required') {
+        blocks.push({ type: 'interactive', card: { callId: p.callId, kind: p.kind ?? 'question', title: p.title ?? '', payload: { options: p.options ?? [], fields: p.fields ?? [] }, status: 'awaiting' } });
+      } else if (ev.kind === 'interactive.resolved') {
+        const card = blocks.find((b) => b.type === 'interactive' && b.card?.callId === p.callId)?.card;
+        if (card) { card.status = 'answered'; card.answer = p.answer ?? {}; }
+      } else if (ev.kind === 'artifact.created') {
+        blocks.push({ type: 'artifact', card: { callId: p.callId, rendererType: p.rendererType, title: p.title ?? '产物', status: 'ready', data: p.data ?? {} } });
+      } else if (ev.kind === 'message.continued') {
+        blocks.push({ type: 'notice', text: `[已自动续写 ${p.attempt ?? '?'}/${p.max ?? 3}]` });
+      } else if (ev.kind === 'message.truncated') {
+        blocks.push({ type: 'truncated', text: p.text ?? '回复因达到输出上限被截断' });
+      }
+    }
+    if (blocks.length === 0) return;
+    mergeChatMessages(run.sessionId, null, [{
+      id: run.assistantId,
+      role: 'assistant',
+      content: text,
+      blocks,
+      createdAt: run.turnStartedAt ?? Date.now(),
+      ...(run.finished ? { endedAt: Date.now() } : {}),
+    }], { mergeBlocks: true });
+  }
+
   /** 事件先落盘再扇出。返回全局递增 seq（=Last-Event-Id 续传游标）。 */
   function emitEvent(run, kind, payload) {
     run.seq += 1;
@@ -767,6 +925,7 @@ export function createServerPart(options = {}) {
           emitEvent(run, 'message.delta', { sessionId, messageId: assistantId, delta: r.text });
           emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
           emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn, guardLimit: true });
+          syncTurnToSession(run, turn);
           return;
         }
         const result = await engineTurn(run, {
@@ -777,7 +936,9 @@ export function createServerPart(options = {}) {
           onReasoning: (delta) => emitEvent(run, 'message.reasoning', { sessionId, messageId: assistantId, delta }),
           onRetry: (attempt, maxAttempts) => emitEvent(run, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts }),
         });
-        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); syncTurnToSession(run, turn); return; }
+        // 本轮 AI 产出落服务端会话档（幂等增量）：发起端被杀也留痕
+        syncTurnToSession(run, turn);
         // usage 采集：压缩触发基准（真实 usage 优先，估算兜底）
         noteUsage(run, result.usage);
         // ai.usage 事件（spec §4.1）：ContextMeter/速率展示的数据源——与 real-engine
@@ -911,12 +1072,14 @@ export function createServerPart(options = {}) {
       }
       emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
       emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
+      syncTurnToSession(run, turn);
     } catch (err) {
       if (signal.aborted) {
         emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true });
       } else {
         emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: err instanceof Error ? err.message : String(err) });
       }
+      syncTurnToSession(run, turn);
     } finally {
       finishRun(run);
     }
@@ -1382,6 +1545,8 @@ export function createServerPart(options = {}) {
         .then(async () => {
           run.toolDefs = [...buildServerToolDefs(run), ...run.extraToolDefs];
           await seedShadow(run, body, prompt);
+          // 用户消息即刻落服务端会话档（幂等）：发起端随后被杀也不丢这条对话
+          syncUserMessage(run, prompt, body?.createdAt);
           await runLoop(run);
         })
         .catch((e) => {
