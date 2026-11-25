@@ -384,6 +384,19 @@ export function createServerPart(options = {}) {
         const feedback = ok
           ? `[预览已生成] previewId=${j.previewId} 版本=${j.versionLabel ?? '?'} 标题=${j.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
           : `[预览生成失败] ${j.error ?? `HTTP ${r.status}`}`;
+        // 通用产物事件（对齐 html-preview 前端半边 emit 的 artifact.created）：
+        // chat-lite 据此在对话里落 artifact 块（rendererType=html-preview → PreviewCard）。
+        // callId 用工具调用 callId——artifact 归位到本工具卡之后（而非沉到消息尾）。
+        if (ok) {
+          emitEvent(run, 'artifact.created', {
+            sessionId: run.sessionId,
+            messageId: run.assistantId,
+            callId: call.id,
+            rendererType: 'html-preview',
+            title: String(j.title ?? args.title ?? '交互面板'),
+            data: { previewId: j.previewId, url: j.url, versionLabel: j.versionLabel },
+          });
+        }
         return { ok, stdout: ok ? feedback : '', stderr: ok ? '' : feedback };
       }
       if (name === 'browser') {
@@ -1229,8 +1242,10 @@ export function createServerPart(options = {}) {
       const pending = run?.interactives.get(callId);
       if (!run || !pending) return send(res, 404, { error: 'interactive not found', code: 'INTERACTIVE_NOT_FOUND' });
       run.interactives.delete(callId);
-      pending.resolve(JSON.stringify(body.answer ?? { __skipped: true }));
-      emitEvent(run, 'interactive.resolved', { sessionId: run.sessionId, messageId: run.assistantId, callId });
+      const answer = body.answer ?? { __skipped: true };
+      pending.resolve(JSON.stringify(answer));
+      // resolved 事件带回作答内容：本端/他端卡片收敛时才有回显数据（否则「已提交 · {}」空白）
+      emitEvent(run, 'interactive.resolved', { sessionId: run.sessionId, messageId: run.assistantId, callId, answer });
       return send(res, 200, { ok: true });
     }
 
