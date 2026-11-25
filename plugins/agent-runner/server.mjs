@@ -107,6 +107,8 @@ export function createServerPart(options = {}) {
   const runs = new Map();
   /** sessionId → runId（同会话单飞；重复 start 返回既有 run） */
   const runsBySession = new Map();
+  /** sessionId → 上一 run 的 shadow（多轮会话跨 run 延续；进程内存态） */
+  const sessionShadows = new Map();
 
   function runLogPath(runId) { return join(runsDir, `${runId}.events.jsonl`); }
   function runStatePath(runId) { return join(runsDir, `${runId}.state.json`); }
@@ -652,15 +654,25 @@ export function createServerPart(options = {}) {
             continue;
           }
 
-          // 审批：confirm/allowlist 模式由服务端挂起；yolo 直接放行（与 agent-bash 裁决一致）
+          // 审批：confirm/allowlist 模式由服务端挂起；yolo 直接放行（与 agent-bash 裁决一致）。
+          // 会话级白名单：always=按 approvalKey 前缀；trust=按工具名（run 内内存态）。
           const mode = readToolMode();
           const approvalKey = approvalKeyOf(call);
-          const allowlisted = mode.allowPrefixes.some((p) => approvalKey === p || approvalKey.startsWith(`${p} `));
-          const needApproval = mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted);
+          const allowlisted = mode.allowPrefixes.some((p) => approvalKey === p || approvalKey.startsWith(`${p} `))
+            || (run.sessionAllow?.has(approvalKey) ?? false)
+            || (run.sessionAllow?.has(`tool:${call.name}`) ?? false);
+          const needApproval = (mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted)) && !allowlisted;
           let verdict = 'ok';
           if (needApproval) verdict = await askApproval(run, call, display);
           if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
-          if (verdict !== 'ok') {
+          // 审批决策映射（对齐前端 decideApproval）：once=放行一次；always/trust=
+          // 沉淀会话级白名单（后续同前缀/同工具免审批）；deny/timeout=拒绝。
+          if (verdict === 'always' || verdict === 'trust') {
+            const set = run.sessionAllow ?? (run.sessionAllow = new Set());
+            set.add(verdict === 'always' ? approvalKey : `tool:${call.name}`);
+          }
+          const approved = verdict === 'ok' || verdict === 'once' || verdict === 'always' || verdict === 'trust';
+          if (!approved) {
             emitEvent(run, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'denied', command: display });
             const feedback = verdict === 'timeout'
               ? `[无人值守：该工具调用等待 ${APPROVAL_TIMEOUT_MS / 1000}s 无用户审批，已自动拒绝（并非用户否决本次操作）。请改用不需要危险权限的安全方式继续当前任务。不要停下等待用户回复，也不要原样重试同一被拒命令。]`
@@ -973,7 +985,15 @@ export function createServerPart(options = {}) {
     );
     sysParts.push(' 用 files 工具读文件时：path 传相对工作区根的相对路径；要读其它项目目录（如仓库根）的文件，先调 roots 拿到对应根的 id，再用该 rootId+相对路径，不要把绝对路径当 path 传。');
     const shadow = [{ role: 'system', content: sysParts.join('') }];
-    if (Array.isArray(body.history)) {
+    // 多轮会话 shadow 延续：同会话上一 run 的 shadow 仍在（服务端常驻），优先续用——
+    // 它包含完整工具调用过程（前端 history 只有可见文本，工具结果会丢）。
+    // system prompt 每轮重建（日期/工作区可能变化），history 段从旧 shadow 尾部续。
+    const prev = sessionShadows.get(run.sessionId);
+    if (prev && Array.isArray(body.history) && body.history.length > 0) {
+      // 以最后一条 user 消息为界：旧 shadow 中该消息之前的部分与前端可见历史对齐，
+      // 直接整段续用（含 tool_calls/tool 结果），之后追加本条 prompt。
+      shadow.push(...prev.slice(1));
+    } else if (Array.isArray(body.history)) {
       for (const m of body.history) {
         shadow.push({ role: m.role, content: m.content });
       }
@@ -989,6 +1009,8 @@ export function createServerPart(options = {}) {
       shadow.push({ role: 'user', content: prompt });
     }
     run.shadow = shadow;
+    // 留档供下一 run 延续（同会话 shadow 跨 run 不断档）
+    sessionShadows.set(run.sessionId, shadow);
   }
 
   // ------------------------------------------------------------------
