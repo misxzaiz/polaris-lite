@@ -654,6 +654,29 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
 
+    // 产物事件（服务端 runner 通道；旧通道是 html-preview 等产物插件直发全局事件）：
+    // 落通用 artifact 块，渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记。
+    if (envelope.kind === 'artifact.created') {
+      const callId = String(inner.callId ?? '');
+      if (!sid || !assistantId || !callId || !inner.rendererType) return;
+      const st4 = useSessionStore.getState();
+      const msg4 = st4.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+      const blocks4 = (msg4 as { blocks?: { type: string; card?: { callId: string } }[] } | undefined)?.blocks;
+      if (!msg4 || !Array.isArray(blocks4)) return;
+      if (blocks4.some((b) => b.type === 'artifact' && b.card?.callId === callId)) return; // 幂等
+      st4.appendAssistantBlock(sid, assistantId, {
+        type: 'artifact',
+        card: {
+          callId,
+          rendererType: String(inner.rendererType),
+          title: String(inner.title ?? '产物'),
+          status: 'ready',
+          data: (inner.data ?? {}) as Record<string, unknown>,
+        },
+      });
+      return;
+    }
+
     if (envelope.kind === 'message.reasoning' && inner.delta) {
       armWatchdog(); // 思考流也是活跃信号：长思考期间看门狗持续续期（只软提示不收敛）
       pushReasoning(inner.delta);

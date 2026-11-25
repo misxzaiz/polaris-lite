@@ -44,6 +44,9 @@ export interface StreamEnvelope {
     text?: string;
     /** message.done（length 截断）：聚合中被截断的半截工具调用数 */
     partialToolCalls?: number;
+    /** artifact.created：产物渲染类型与数据（html-preview 等） */
+    rendererType?: string;
+    data?: Record<string, unknown>;
     // 上下文水位
     usedTokens?: number;
     window?: number;
