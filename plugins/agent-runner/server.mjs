@@ -28,10 +28,14 @@
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, renameSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { Agent, fetch as undiciFetch } from 'undici';
 // 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
 // 零 DOM/零副作用：UsageAccumulator/estimateTokens/compactShadow 均可服务端复用。
 import { UsageAccumulator, estimateTokens, compactShadow } from '../shared/context-compact.ts';
+// pocket-ledger 计算内核（纯 CJS vendor；与面板/MCP server 共用同一权威实现）。
+const require = createRequire(import.meta.url);
+const ledgerCore = require('../pocket-ledger/ledger-core.cjs');
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const RUNS_DIR = 'agent-runs';
@@ -317,6 +321,144 @@ export function createServerPart(options = {}) {
     return { status: resp.status, ok: resp.ok, json };
   }
 
+  // ------------------------------------------------------------------
+  // ledger（记账）服务端实现：数据在 kv-store（cap.kv → /api/kv/*），
+  // 计算复用 pocket-ledger/ledger-core.cjs 单一权威内核（与面板/AI 旧通道同源）。
+  // ------------------------------------------------------------------
+  const LEDGER_NS = 'pocket-ledger';
+  const ledgerSettings = () => {
+    const s = readKvSync(LEDGER_NS, 'settings');
+    return { ...ledgerCore.DEFAULT_SETTINGS, ...(s && typeof s === 'object' ? s : {}) };
+  };
+  // kv 读写直连 kv-store 的 sqlite（表 items，id=`${namespace}.${key}`，与插件同构）。
+  // 数据目录无库/表时按空处理（首次记账自动建）。
+  function kvDb() {
+    const dbFile = resolve(dataDir, 'stores', 'kv-store.db');
+    mkdirSync(resolve(dataDir, 'stores'), { recursive: true });
+    const Database = require('node:sqlite').DatabaseSync;
+    const db = new Database(dbFile);
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    return db;
+  }
+  function readKvSync(ns, key) {
+    try {
+      const db = kvDb();
+      const row = db.prepare('SELECT data FROM items WHERE id = ?').get(`${ns}.${key}`);
+      db.close();
+      return row ? JSON.parse(row.data) : null;
+    } catch { return null; }
+  }
+  function writeKvSync(ns, key, value) {
+    try {
+      const db = kvDb();
+      db.prepare('INSERT INTO items (id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+        .run(`${ns}.${key}`, JSON.stringify(value ?? null), Date.now());
+      db.close();
+    } catch { /* 写失败按业务错误返回 */ }
+  }
+  function ledgerDayKeys() {
+    const keys = [];
+    try {
+      const db = kvDb();
+      const rows = db.prepare('SELECT id FROM items WHERE id LIKE ?').all(`${LEDGER_NS}.ledger.day.%`);
+      db.close();
+      for (const r of rows) keys.push(String(r.id).slice(`${LEDGER_NS}.`.length));
+    } catch { /* 忽略 */ }
+    return keys.sort();
+  }
+
+  async function execLedger(run, args, signal) {
+    const settings = ledgerSettings();
+    const valid = [...new Set([...(settings.categories ?? []), ...(settings.incomeCategories ?? [])])];
+    const action = String(args.action ?? '');
+    if (action === 'add') {
+      let ts;
+      if (Number(args.ts) > 0) ts = Number(args.ts);
+      else {
+        const resolved = ledgerCore.resolveBillTime({ date: args.date, time: args.time, timeOfDay: args.timeOfDay, hint: args.note }, Date.now());
+        if (resolved.error) return { ok: false, error: resolved.error };
+        ts = resolved.ts;
+      }
+      const norm = ledgerCore.normalizeBill({ amount: Number(args.amount), type: args.type === 'income' ? 'income' : 'expense', category: args.category, note: args.note, ts, source: 'ai' }, valid);
+      if (norm.error || !norm.bill) return { ok: false, error: norm.error ?? '账单不合法' };
+      const bill = norm.bill;
+      const dk = ledgerCore.K.day(ledgerCore.dayKeyOf(bill.ts));
+      const existing = readKvSync(LEDGER_NS, dk) ?? [];
+      const merged = ledgerCore.appendBills(Array.isArray(existing) ? existing : [], [bill]);
+      writeKvSync(LEDGER_NS, dk, merged);
+      return { ok: true, stdout: JSON.stringify({ ok: true, bill, total: merged.length }) };
+    }
+    if (action === 'query' || action === 'stats') {
+      const month = args.month === 'last' ? ledgerCore.shiftMonth(ledgerCore.currentMonth(), -1)
+        : args.month && args.month !== 'this' ? String(args.month) : ledgerCore.currentMonth();
+      const prefix = `ledger.day.${month}-`;
+      let bills = [];
+      for (const dk of ledgerDayKeys()) {
+        if (!dk.startsWith(prefix)) continue;
+        const arr = readKvSync(LEDGER_NS, dk);
+        if (Array.isArray(arr)) bills.push(...arr);
+      }
+      bills = ledgerCore.filterBills(bills, { category: args.category, type: args.type === 'income' ? 'income' : args.type === 'expense' ? 'expense' : undefined, keyword: args.keyword });
+      if (action === 'stats') {
+        const stats = ledgerCore.computeStats(bills, settings, month);
+        const hint = ledgerCore.budgetHint(stats);
+        return { ok: true, stdout: JSON.stringify({ month, stats, ...(hint ? { hint } : {}) }).slice(0, FEEDBACK_CAP) };
+      }
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100);
+      const slim = bills.slice(-limit).reverse().map((b) => ({ id: b.id, amount: b.amount, type: b.type, category: b.category, note: b.note, time: new Date(b.ts).toLocaleString('zh-CN', { hour12: false }) }));
+      return { ok: true, stdout: JSON.stringify({ month, count: bills.length, bills: slim }).slice(0, FEEDBACK_CAP) };
+    }
+    if (action === 'delete' || action === 'update') {
+      const id = String(args.id ?? '');
+      if (!id) return { ok: false, error: 'id required（先用 query 拿 id）' };
+      for (const dk of ledgerDayKeys()) {
+        const arr = readKvSync(LEDGER_NS, dk);
+        if (!Array.isArray(arr)) continue;
+        if (action === 'delete') {
+          const { arr: next, removed } = ledgerCore.removeBill(arr, id);
+          if (removed) { writeKvSync(LEDGER_NS, dk, next); return { ok: true, stdout: JSON.stringify({ ok: true, deleted: id }) }; }
+        } else {
+          const patch = args.patch ?? {};
+          let ts;
+          if (patch.date !== undefined || patch.time !== undefined || patch.timeOfDay !== undefined) {
+            const resolved = ledgerCore.resolveBillTime({ date: patch.date, time: patch.time, timeOfDay: patch.timeOfDay, hint: patch.note }, Date.now());
+            if (!resolved.error) ts = resolved.ts;
+          }
+          const next = { ...args };
+          const { arr: updated, found, bill } = ledgerCore.updateBill(arr, id, { amount: patch.amount !== undefined ? Number(patch.amount) : undefined, category: patch.category, note: patch.note, type: patch.type, ts });
+          if (found) { writeKvSync(LEDGER_NS, dk, updated); return { ok: true, stdout: JSON.stringify({ ok: true, bill }) }; }
+        }
+      }
+      return action === 'delete'
+        ? { ok: false, error: `未找到账单 ${id}（先用 query 拿 id）` }
+        : { ok: false, error: `未找到账单 ${id}（先用 query 拿 id）` };
+    }
+    if (action === 'categories') {
+      const op = String(args.op ?? 'list');
+      if (op === 'list') return { ok: true, stdout: JSON.stringify({ categories: settings.categories, incomeCategories: settings.incomeCategories, budgets: settings.budgets }).slice(0, FEEDBACK_CAP) };
+      if (op === 'add') {
+        const name = String(args.name ?? '').trim();
+        const kind = args.kind === 'income' ? 'incomeCategories' : 'categories';
+        if (!name) return { ok: false, error: 'name required' };
+        if (settings[kind].includes(name)) return { ok: true, stdout: JSON.stringify({ ok: true, already: true }) };
+        settings[kind].push(name);
+        writeKvSync(LEDGER_NS, 'settings', settings);
+        return { ok: true, stdout: JSON.stringify({ ok: true, categories: settings[kind] }) };
+      }
+      if (op === 'remove') {
+        const name = String(args.name ?? '').trim();
+        const kind = args.kind === 'income' ? 'incomeCategories' : 'categories';
+        settings[kind] = (settings[kind] ?? []).filter((c) => c !== name);
+        delete settings.budgets[name];
+        writeKvSync(LEDGER_NS, 'settings', settings);
+        return { ok: true, stdout: JSON.stringify({ ok: true, removed: true }) };
+      }
+      return { ok: false, error: `unknown op: ${op}` };
+    }
+    return { ok: false, error: `unknown action: ${action}（可用：add/query/stats/delete/update/categories）` };
+  }
+
   /** 执行单个工具调用（按工具家族分发；返回 {feedback, status, stdout, stderr, exitCode}） */
   async function execTool(run, call, signal) {
     const args = parseArgs(call.arguments);
@@ -427,6 +569,19 @@ export function createServerPart(options = {}) {
         const j = r.json ?? {};
         const ok = r.ok && j.ok !== false;
         return { ok, stdout: ok ? String(j.stdout ?? JSON.stringify(j).slice(0, FEEDBACK_CAP)) : '', stderr: ok ? '' : String(j.error ?? `HTTP ${r.status}`) };
+      }
+      if (name === 'ledger') {
+        const r = await execLedger(run, args, signal);
+        return { ok: !!r.ok, stdout: r.stdout, stderr: r.ok ? '' : (r.error ?? 'ledger 执行失败') };
+      }
+      if (name === 'translate') {
+        const text = String(args.text ?? '').trim();
+        if (!text) return { ok: false, stdout: '', stderr: 'text 不能为空' };
+        const to = args.to ? String(args.to) : (/[一-鿿]/.test(text) ? 'en' : 'zh');
+        const r = await callToolEndpoint('/api/translate/translate', { text, to }, signal);
+        const j = r.json ?? {};
+        const ok = r.ok && j.ok !== false;
+        return { ok, stdout: ok ? String(j.text ?? j.translated ?? JSON.stringify(j).slice(0, 2000)) : '', stderr: ok ? '' : String(j.error ?? `HTTP ${r.status}`) };
       }
       if (name === 'interactive') {
         // 交互卡：服务端不持 UI——把交互需求作为事件广播，等待任一设备回填。
@@ -900,6 +1055,50 @@ export function createServerPart(options = {}) {
             fields: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, label: { type: 'string' } } }, description: 'form 的字段列表' },
           },
           required: ['kind', 'title'],
+        },
+      },
+    });
+    defs.push({
+      type: 'function',
+      function: {
+        name: 'ledger',
+        description: '日常记账。用户说「午饭 35」「打车 48」这类消费/收入时调用 add 记账：amount=金额（正数），type 缺省 expense（收入才传 income），category 从对话语境选（餐饮/交通/购物/居住/娱乐/医疗/学习/人情/其他；收入用 工资/理财/红包/退款/其他收入），note 写简短备注（含菜品/事由，会用于时段推导），时间不明就传 date（today/yesterday/YYYY-MM-DD），不传 time/timeOfDay（按备注触发词或当前时刻就近归档）。用户问「花了多少/这个月怎么样」用 stats/query；改账先 query 拿 id 再 update/delete。入账响应自带预算提醒。',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['add', 'query', 'stats', 'delete', 'update', 'categories'], description: '要执行的动作' },
+            amount: { type: 'number', description: '金额（正数；add 必填）' },
+            type: { type: 'string', description: 'expense（默认）| income' },
+            category: { type: 'string', description: '分类；不传由 AI 按语境选' },
+            note: { type: 'string', description: '备注（简短）' },
+            date: { type: 'string', description: 'today | yesterday | YYYY-MM-DD' },
+            time: { type: 'string', description: 'HH:MM（24h）' },
+            timeOfDay: { type: 'string', description: '时段档位或中文（凌晨/早上/中午/下午/傍晚/晚上）' },
+            id: { type: 'string', description: '账单 id（delete/update 必填；从 query 结果取）' },
+            month: { type: 'string', description: 'this | last | YYYY-MM（query/stats）' },
+            keyword: { type: 'string', description: '备注/分类关键词（query 过滤）' },
+            limit: { type: 'number', description: 'query 返回条数上限（默认 20）' },
+            op: { type: 'string', description: 'categories 动作：list | add | remove' },
+            name: { type: 'string', description: 'categories add/remove 的分类名' },
+            kind: { type: 'string', description: 'categories 分类性质：expense | income' },
+            patch: { type: 'object', description: 'update 的字段 { amount?, category?, note?, date?, time?, timeOfDay? }' },
+          },
+          required: ['action'],
+        },
+      },
+    });
+    defs.push({
+      type: 'function',
+      function: {
+        name: 'translate',
+        description: '把文本翻译成目标语言（from=auto 自动检测源语言）。to 从 zh(中文)/en(英语)/jp(日语)/kor(韩语)/fra(法语)/de(德语)/ru(俄语)/spa(西班牙语)/wyw(文言文) 里选；不传 to 时自动判断：含中文译英语，否则译中文。文本 ≤6000 字。',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: '要翻译的文本（≤6000 字）' },
+            to: { type: 'string', description: '目标语言代码：zh|en|jp|kor|fra|de|ru|spa|wyw；省略时自动判断' },
+          },
+          required: ['text'],
         },
       },
     });

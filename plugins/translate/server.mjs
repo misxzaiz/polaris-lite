@@ -65,6 +65,7 @@ export const SUPPORTED_LANGS = [
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const policy = options.policy;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const pluginDir = resolve(dataDir, 'translate');
@@ -185,8 +186,13 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/translate/')) return next?.();
 
+    // 登录门禁：会话 cookie 或本地回环 Bearer（agent-runner 服务端编排 loopback 调用
+    // 走 Bearer，与 agent-bash/fs/preview 同一纪律）二选一。
+    const authHeader = String(req.headers?.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const bearerValid = !!(bearerToken && verifyTempToken(bearerToken));
     const session = getSession?.(req);
-    if (!session) {
+    if (!session && !bearerValid) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }
