@@ -203,13 +203,32 @@ export function createServerPart(options = {}) {
     return cliFoundCache;
   }
 
+  /** CLI 支持的模型清单（缓存一次；从 --help 的 --model 行解析）。
+   *  会话设置「模型」行的数据源——不硬编码清单：CLI 升级新增模型自动跟随，
+   *  解析失败回退空数组（UI 显示「默认」，仍可对话）。 */
+  let modelsCache = null;
+  function cliModels() {
+    if (modelsCache !== null) return modelsCache;
+    modelsCache = [];
+    try {
+      const help = process.platform === 'win32'
+        ? spawnSync('codebuddy', ['--help'], { windowsHide: true, timeout: 15000, shell: true, encoding: 'utf8' })
+        : spawnSync('codebuddy', ['--help'], { windowsHide: true, timeout: 15000, encoding: 'utf8' });
+      const m = /Currently supported:\s*\(([^)]*)\)/.exec(String(help.stdout ?? ''));
+      if (m) {
+        modelsCache = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+      }
+    } catch { /* 解析失败：空清单，UI 走「默认」 */ }
+    return modelsCache;
+  }
+
   return async function codebuddyMiddleware(req, res, next) {
     const url = req.url || '';
 
-    // ---- GET /api/codebuddy/health：引擎可用性探测（会话设置「AI 引擎」行数据源）----
+    // ---- GET /api/codebuddy/health：引擎可用性探测 + 模型清单（会话设置数据源）----
     if (url === '/api/codebuddy/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: !hardOff, cliFound: !hardOff && cliFound() }));
+      res.end(JSON.stringify({ ok: !hardOff, cliFound: !hardOff && cliFound(), models: !hardOff && cliFound() ? cliModels() : [] }));
       return;
     }
 

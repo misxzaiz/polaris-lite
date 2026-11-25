@@ -363,6 +363,7 @@ async function streamCodebuddyTurn(
   history: { role: string; content: unknown }[],
   handleEnvelope: (payload: unknown) => void,
   onSettled: () => void,
+  model?: string,
 ): Promise<void> {
   const streamKey = `${sid}::${assistantId}`;
   const abort = new AbortController();
@@ -380,7 +381,9 @@ async function streamCodebuddyTurn(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ sessionId: sid, messageId: assistantId, prompt: effectiveText, history }),
+      // model 缺省=CLI 默认（hy4free）；选了模型但 CLI 升级后没了该 ID → CLI 报错
+      // 经 stream.error 呈现给用户重新选（动态清单原则：不在前端二次白名单）
+      body: JSON.stringify({ sessionId: sid, messageId: assistantId, prompt: effectiveText, history, ...(model ? { model } : {}) }),
       signal: abort.signal,
     });
     if (!resp.ok || !resp.body) {
@@ -869,7 +872,8 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   // ---- CodeBuddy 引擎分支（会话设置 engineId='codebuddy'）----
   // 直连 SSE（不经 runner/cap 总线；CLI 自持工具与上下文）。done/error 经
   // handleEnvelope 统一收敛（settle 幂等），通知中心等旁听方经 re-emit 拿到同构事件。
-  if (useSessionStore.getState().sessions.find((s) => s.id === sid)?.engineId === 'codebuddy') {
+  const activeSession = useSessionStore.getState().sessions.find((s) => s.id === sid);
+  if (activeSession?.engineId === 'codebuddy') {
     if (hasAttachments) {
       // CLI 通道不支持附件：明示拒绝而不是静默丢文本（与 real-engine「失效即报错」同原则）
       useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
@@ -879,7 +883,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       settle();
       return;
     }
-    void streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle);
+    // 会话级模型（会话设置「模型」行写入；缺省=CLI 默认）。服务端校验在 CLI 侧：
+    // 不认识的 ID 由 CLI 报错经 stream.error 呈现，不在这里二次白名单（清单是动态的）。
+    void streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle, activeSession.codebuddyModel);
     return;
   }
 

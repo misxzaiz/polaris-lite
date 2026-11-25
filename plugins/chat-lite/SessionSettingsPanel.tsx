@@ -78,6 +78,11 @@ interface SessionSettingsPanelProps {
   // ---- AI 引擎（会话级：默认 real-engine / CodeBuddy CLI；codebuddy 时供应商/模型行禁用）----
   engineId: 'codebuddy' | undefined;
   codebuddyAvailable: boolean;
+  /** CodeBuddy 模型清单（服务端从 CLI --help 动态解析；空=解析失败只显示「默认」） */
+  codebuddyModels: string[];
+  /** CodeBuddy 会话级模型（undefined=CLI 默认） */
+  codebuddyModel: string | undefined;
+  onSetSessionCodebuddyModel: (model: string | undefined) => void;
   onSetSessionEngine: (engineId: 'codebuddy' | undefined) => void;
   // ---- 模型（会话级覆盖；undefined=跟随全局默认）----
   providerId: string | undefined;
@@ -116,7 +121,7 @@ interface SessionSettingsPanelProps {
 export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const {
     sessionTitle,
-    engineId, codebuddyAvailable, onSetSessionEngine,
+    engineId, codebuddyAvailable, codebuddyModels, codebuddyModel, onSetSessionCodebuddyModel, onSetSessionEngine,
     providerId, modelId, onSetSessionModel,
     workspaceId, wsLabel, wsMissing, linkedCount, onOpenWorkspacePicker,
     trustMode, trustTitle, trustLabel, onToggleTrust,
@@ -128,8 +133,8 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const [providers, setProviders] = useState<ProviderEntry[] | null>(null);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [providersErr, setProvidersErr] = useState(false);
-  /** 模型选择浮层：null=关；provider=选供应商；model=选模型 */
-  const [modelPop, setModelPop] = useState<null | 'provider' | 'model'>(null);
+  /** 模型选择浮层：null=关；provider=选供应商；model=选模型；cbmodel=选 CodeBuddy 模型 */
+  const [modelPop, setModelPop] = useState<null | 'provider' | 'model' | 'cbmodel'>(null);
   /** 面板定位（贴输入条上方）与模型浮层定位（叠面板同位）——两个状态分开，
    *  否则 resize 时两个跟随 listener 会互相覆盖对方的定位口径 */
   const [panelPos, setPanelPos] = useState<PopupPos | null>(null);
@@ -213,10 +218,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     };
   }, []);
 
-  const openModelPop = (kind: 'provider' | 'model') => {
+  const openModelPop = (kind: 'provider' | 'model' | 'cbmodel') => {
     setModelPos(computeModelPos());
     setModelPop(kind);
-    void loadProviders();
+    if (kind !== 'cbmodel') void loadProviders(); // cbmodel 清单经 props 传入（health 探测），无需现拉
   };
 
   // 点空白关闭（面板与模型浮层共用一处理：浮层内部 / 输入条 / 工作目录浮层内的点击不算外）
@@ -330,24 +335,46 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
                 !codebuddyAvailable
                   ? 'CodeBuddy 引擎不可用（CLI 未安装或已被禁用）'
                   : engineId === 'codebuddy'
-                    ? '当前：CodeBuddy（CLI 自持工具，本会话不支持供应商/模型选择与图片附件）。点击切回默认引擎'
+                    ? '当前：CodeBuddy（CLI 自持工具，本会话不支持图片附件）。点击切回默认引擎'
                     : '当前：默认引擎（real-engine / 服务端编排）。点击切换到 CodeBuddy（腾讯 CodeBuddy CLI，会话级）'
               }
             >
               {engineId === 'codebuddy' ? 'CodeBuddy' : '默认'}
             </button>
             {engineId === 'codebuddy' && (
-              <span className="chat-row-aux" title="CodeBuddy 会话：供应商/模型选择不适用（CLI 自持模型配置）；关闭页面会中断在途任务">
+              <span className="chat-row-aux" title="CodeBuddy 会话：关闭页面会中断在途任务；工具由 CLI 自持执行">
                 CLI 直连
               </span>
             )}
           </div>
+          {engineId === 'codebuddy' ? (
+            /* CodeBuddy 引擎：模型行变为 CLI 模型选择（清单动态来自 health，CLI 升级自动跟随）；
+             * 供应商概念不适用（CLI 自持配置），整行换成 CodeBuddy 模型 chip */
+            <div className="chat-assistant-row">
+              <span className="chat-assistant-key">模型</span>
+              <button
+                className={`chat-ws-chip chat-model-chip ${codebuddyModel ? 'pinned' : ''}`}
+                onClick={() => openModelPop('cbmodel')}
+                title="选择本对话使用的 CodeBuddy 模型（清单来自 CLI --help，随 CLI 版本更新）"
+              >
+                {codebuddyModel ?? '默认'}
+              </button>
+              {codebuddyModel && (
+                <button
+                  className="chat-model-reset"
+                  onClick={() => onSetSessionCodebuddyModel(undefined)}
+                  title="清除选择，回到 CLI 默认模型"
+                >
+                  恢复默认
+                </button>
+              )}
+            </div>
+          ) : (
           <div className="chat-assistant-row">
             <span className="chat-assistant-key">供应商</span>
             <button
               className={`chat-ws-chip chat-model-chip ${providerId ? 'pinned' : ''}`}
               onClick={() => openModelPop('provider')}
-              disabled={engineId === 'codebuddy'}
               title="选择本对话使用的模型供应商（会话级，不影响其他对话）"
             >
               {providerName ?? '默认'}
@@ -356,7 +383,6 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             <button
               className={`chat-ws-chip chat-model-chip ${modelId ? 'pinned' : ''}`}
               onClick={() => openModelPop('model')}
-              disabled={engineId === 'codebuddy'}
               title="选择本对话使用的模型（会话级；未指定时跟随所选供应商默认）"
             >
               {effectiveModel ?? '默认'}
@@ -365,13 +391,13 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               <button
                 className="chat-model-reset"
                 onClick={() => onSetSessionModel(undefined, undefined)}
-                disabled={engineId === 'codebuddy'}
                 title="清除会话级覆盖，回到跟随全局默认"
               >
                 恢复默认
               </button>
             )}
           </div>
+          )}
 
           {/* ===== 执行：工作目录（打开现有选择浮层，浮层不自动关）+ 执行模式 ===== */}
           <div className="chat-assistant-sec">执行</div>
@@ -462,15 +488,41 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
           ref={modelPopRef}
           className="chat-ws-pop chat-model-pop"
           role="dialog"
-          aria-label={modelPop === 'provider' ? '选择模型供应商' : '选择模型'}
+          aria-label={modelPop === 'provider' ? '选择模型供应商' : modelPop === 'cbmodel' ? '选择 CodeBuddy 模型' : '选择模型'}
           style={{ left: modelPos.left, bottom: modelPos.bottom, width: modelPos.width, maxHeight: modelPos.maxHeight }}
         >
           <div className="chat-picker-head">
-            <span className="chat-picker-title">{modelPop === 'provider' ? '选择供应商（会话级）' : '选择模型（会话级）'}</span>
+            <span className="chat-picker-title">
+              {modelPop === 'provider' ? '选择供应商（会话级）' : modelPop === 'cbmodel' ? '选择 CodeBuddy 模型（会话级）' : '选择模型（会话级）'}
+            </span>
             <button className="chat-picker-done" onClick={() => setModelPop(null)}>完成</button>
           </div>
           <div className="chat-model-list">
-            {providersErr ? (
+            {modelPop === 'cbmodel' ? (
+              <>
+                <button
+                  className={`chat-model-row ${!codebuddyModel ? 'sel' : ''}`}
+                  onClick={() => onSetSessionCodebuddyModel(undefined)}
+                  title="使用 CodeBuddy CLI 的默认模型"
+                >
+                  <span className="chat-model-name">CLI 默认</span>
+                  {!codebuddyModel && <span className="chat-model-current">当前</span>}
+                </button>
+                {codebuddyModels.map((m) => (
+                  <button
+                    key={m}
+                    className={`chat-model-row ${codebuddyModel === m ? 'sel' : ''}`}
+                    onClick={() => onSetSessionCodebuddyModel(m)}
+                  >
+                    <span className="chat-model-name">{m}</span>
+                    {codebuddyModel === m && <span className="chat-model-current">当前</span>}
+                  </button>
+                ))}
+                {codebuddyModels.length === 0 && (
+                  <div className="chat-model-empty">模型清单获取失败：保持 CLI 默认，或稍后重试</div>
+                )}
+              </>
+            ) : providersErr ? (
               <div className="chat-model-empty">供应商列表获取失败：请稍后重试</div>
             ) : !providers ? (
               <div className="chat-model-empty">加载中…</div>

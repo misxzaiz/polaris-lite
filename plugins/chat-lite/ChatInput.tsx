@@ -139,15 +139,22 @@ export function ChatInput() {
   /** 会话级 AI 引擎（'codebuddy'=CodeBuddy CLI 直连；undefined=默认引擎） */
   const sessionEngineId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.engineId);
   const setSessionEngine = useSessionStore((s) => s.setSessionEngine);
-  /** CodeBuddy 引擎可用性（探测 /api/codebuddy/stream 的握手：CLI 缺失/被禁用时锁定「默认」） */
+  /** CodeBuddy 引擎的会话级模型（undefined=CLI 默认 hy4free） */
+  const sessionCbModel = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.codebuddyModel);
+  const setSessionCodebuddyModel = useSessionStore((s) => s.setSessionCodebuddyModel);
+  /** CodeBuddy 引擎可用性 + 模型清单（探测 /api/codebuddy/health：CLI 缺失/被禁用时锁定「默认」；
+   *  models 从 CLI --help 动态解析，CLI 升级新增模型自动跟随，不写死） */
   const [codebuddyAvailable, setCodebuddyAvailable] = useState(false);
+  const [codebuddyModels, setCodebuddyModels] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
         const r = await fetch('/api/codebuddy/health', { credentials: 'include', cache: 'no-store' });
-        const j = (await r.json().catch(() => null)) as { ok?: boolean; cliFound?: boolean } | null;
-        if (alive) setCodebuddyAvailable(!!j?.ok && !!j?.cliFound);
+        const j = (await r.json().catch(() => null)) as { ok?: boolean; cliFound?: boolean; models?: string[] } | null;
+        if (!alive) return;
+        setCodebuddyAvailable(!!j?.ok && !!j?.cliFound);
+        setCodebuddyModels(Array.isArray(j?.models) ? j!.models! : []);
       } catch {
         if (alive) setCodebuddyAvailable(false);
       }
@@ -586,6 +593,9 @@ export function ChatInput() {
             sessionTitle={sessionTitle}
             engineId={sessionEngineId}
             codebuddyAvailable={codebuddyAvailable}
+            codebuddyModels={codebuddyModels}
+            codebuddyModel={sessionCbModel}
+            onSetSessionCodebuddyModel={(m) => setSessionCodebuddyModel(activeId ?? createSession(), m)}
             onSetSessionEngine={(eid) => setSessionEngine(activeId ?? createSession(), eid)}
             providerId={sessionProviderId}
             modelId={sessionModelId}

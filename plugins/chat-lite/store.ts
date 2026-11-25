@@ -92,6 +92,9 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
    *  'codebuddy' = CodeBuddy 引擎（chat-lite 直连 /api/codebuddy/stream SSE，CLI 自持工具）。
    *  与 providerId/modelId 同口径：随会话 JSON 上云，多端一致。 */
   engineId?: 'codebuddy';
+  /** CodeBuddy 引擎的会话级模型（CLI 模型 ID，如 glm-5.3；缺省=CLI 默认 hy4free）。
+   *  仅 engineId='codebuddy' 时有意义；清单来自 /api/codebuddy/health 的 models。 */
+  codebuddyModel?: string;
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。
    *  缺省回退 createdAt（旧快照兼容）。随会话 JSON 一并上云，多端排序一致。 */
   lastActiveAt?: number;
@@ -143,6 +146,8 @@ interface SessionState {
   setSessionModel: (id: string, providerId: string | undefined, modelId: string | undefined) => void;
   /** 设置会话级 AI 引擎（undefined/'real'=默认引擎；'codebuddy'=CodeBuddy CLI 引擎） */
   setSessionEngine: (id: string, engineId: 'codebuddy' | undefined) => void;
+  /** 设置/清除 CodeBuddy 引擎的会话级模型（undefined=CLI 默认） */
+  setSessionCodebuddyModel: (id: string, model: string | undefined) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -380,6 +385,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // undefined=显式删除键：与 setSessionModel 同口径（JSON 落盘不留 undefined 值）
         const next = { ...s };
         if (engineId === undefined) delete next.engineId; else next.engineId = engineId;
+        return touch(next);
+      })),
+    }));
+    dirty.add(id);
+    scheduleSync();
+  },
+
+  setSessionCodebuddyModel: (id, model) => {
+    set((st) => ({
+      sessions: sortSessions(st.sessions.map((s) => {
+        if (s.id !== id) return s;
+        const next = { ...s };
+        if (model === undefined) delete next.codebuddyModel; else next.codebuddyModel = model;
         return touch(next);
       })),
     }));
