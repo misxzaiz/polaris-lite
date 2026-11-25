@@ -642,19 +642,15 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
     if (envelope.kind === 'interactive.resolved') {
-      // 服务端已收到作答（本端或其他设备）：卡片收敛为已答（答案内容以 store 里已有为准）
+      // 服务端已收到作答：用事件携带的 answer 回填卡片（本端 draft 不进 store，
+      // 不带 answer 会回显「已提交 · {}」空白）；他端作答时同样能看到内容。
       const callId = String(inner.callId ?? '');
       if (!callId) return;
-      const st3 = useSessionStore.getState();
-      const msg3 = st3.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
-      const blocks3 = (msg3 as { blocks?: { type: string; card?: { callId: string; status?: string } }[] } | undefined)?.blocks;
-      const blk = blocks3?.find((b) => b.type === 'interactive' && b.card?.callId === callId);
-      if (blk) {
-        st3.patchAssistantInteractiveBlock(sid, assistantId, callId, {
-          status: 'answered',
-          answer: (blk as { card?: { answer?: Record<string, unknown> } }).card?.answer ?? {},
-        });
-      }
+      const answer = (inner.answer ?? {}) as Record<string, unknown>;
+      useSessionStore.getState().patchAssistantInteractiveBlock(sid, assistantId, callId, {
+        status: 'answered',
+        answer,
+      });
       return;
     }
 
