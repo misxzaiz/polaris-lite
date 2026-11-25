@@ -18,6 +18,9 @@ import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
 import { notifyRootsChanged } from './workspace-prefs';
+import { setRunnerConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner } from './runnerBridge';
+export type { StreamEnvelope } from './runnerTypes';
+import type { StreamEnvelope } from './runnerTypes';
 // 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown / 工具卡（原先散落在宿主 src/styles.css）
 import './chat.css';
 // 上下文透视：状态条 + 详情抽屉样式（spec docs/context-insight-plan.md）
@@ -263,6 +266,17 @@ export const chatLitePlugin: LitePlugin = {
         }
       }
     });
+
+    // ---- 服务端编排（B1）刷新恢复：页面加载后对服务端 running 表对账， ----
+    // 执行中的会话重建 SSE 订阅（事件日志重放 → UI 追平）；服务端继续执行不受刷新影响。
+    // 延迟到 sync bootstrap 之后再做（会话列表就绪才有遍历对象）；探活失败静默跳过。
+    setTimeout(() => {
+      void probeRunner().then((ok) => {
+        if (!ok) return;
+        const ids = useSessionStore.getState().sessions.map((s) => s.id);
+        void restoreRunnerRuns(ids);
+      });
+    }, 3000);
   },
 };
 
@@ -283,43 +297,8 @@ async function detectLoop(): Promise<boolean> {
   return loopAvailable;
 }
 
-interface StreamEnvelope {
-  kind: string;
-  payload?: {
-    sessionId?: string;
-    messageId?: string;
-    delta?: string;
-    message?: string;
-    interrupted?: boolean;
-    finishReason?: string;
-    /** 截断提示（agent-loop 发；finish_reason=length 落可见提示块，不静默） */
-    reason?: string;
-    text?: string;
-    /** message.continued：自动续写进度（agent-loop 发；burst 计数） */
-    max?: number;
-    /** message.done（length 截断）：聚合中被截断的半截工具调用数（不再静默丢弃） */
-    partialToolCalls?: number;
-    /** stream.retry：断流自动重试进度（real-engine 发，agent-loop 透传） */
-    attempt?: number;
-    maxAttempts?: number;
-    chars?: number;
-    // 工具卡事件（cap.agent.loop:event；source='agent-loop' 宿主注入不可伪造）
-    callId?: string;
-    name?: string;
-    command?: string;
-    argsJson?: string;
-    status?: 'done' | 'error' | 'denied';
-    stdout?: string;
-    stderr?: string;
-    exitCode?: number;
-    durationMs?: number;
-    truncated?: boolean;
-    decision?: 'once' | 'always' | 'trust' | 'deny';
-    autoRejected?: boolean;
-    turns?: number;
-  };
-  source?: string;
-}
+// StreamEnvelope 已上移 plugins/chat-lite/runnerTypes.ts（runnerBridge 与本文件共用同一形状；
+// 服务端 agent-runner 的 SSE 事件同构，渲染层零改动）。
 
 /** 工具块事件处理（仅 loop 模式；块内嵌于 assistant 消息，按 callId 幂等建块/更新） */
 function handleToolEvent(
@@ -685,13 +664,35 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
 
   // 双通道订阅：普通模式收 cap.ai.chat:event（引擎直达）；
   // loop 模式收 cap.agent.loop:event（loop 转发）。loop 的内部轮次 messageId 不同，不会串台。
+  // runner 通道（服务端编排）：事件形状一致，经 runnerBridge 的 SSE 消费者进入同一 handleEnvelope。
   const off = api.listen('cap.ai.chat:event', handleEnvelope);
   const offLoop = useLoop ? api.listen('cap.agent.loop:event', handleEnvelope) : null;
   unbind = () => {
     off();
     offLoop?.();
+    setRunnerConsumer(null); // 本轮流结束：摘除 runner 消费者（下一轮流再挂）
   };
+  setRunnerConsumer((envelope) => {
+    // runner 事件按 sessionId 精确过滤（与其他通道同口径）
+    const inner = envelope.payload ?? {};
+    if (inner.sessionId && inner.sessionId !== sid) return;
+    if (inner.messageId && inner.messageId !== assistantId) return;
+    handleEnvelope(envelope);
+  });
   armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
+
+  // ---- 服务端编排优先（B1）：runner 可用即走 /api/agent/start（服务端持循环，
+  // 刷新页面任务不死）；不可用/被拒回落既有 cap 通道（旧 loop / 纯引擎）。 ----
+  const session = store.sessions.find((s) => s.id === sid);
+  const runnerStarted = await startRunnerRun({
+    sessionId: sid,
+    messageId: assistantId,
+    prompt: effectiveText,
+    history: history ?? [],
+    providerId: session?.providerId,
+    modelId: session?.modelId,
+  });
+  if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
 
   await api.dispatch({
     target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
@@ -810,6 +811,8 @@ export function interruptChat(): void {
   const messageId = streamingMsg?.id;
 
   const doInterrupt = async (): Promise<{ ok: boolean; data?: { found?: boolean } }> => {
+    // 服务端编排通道：中断 run（服务端 abort 上游流 + 挂起审批 deny 收敛 + 树杀在途 exec）
+    if (await interruptRunnerRun(sessionId)) return { ok: true, data: { found: true } };
     if (await detectLoop()) {
       const res = await api.dispatch<{ found?: boolean }>({
         target: 'cap.agent.loop',
@@ -908,9 +911,13 @@ export function resolveApproval(callId: string, decision: 'once' | 'always' | 't
   const api = hostApi;
   const sessionId = useSessionStore.getState().activeId;
   if (!api || !sessionId || !callId) return;
-  void api
-    .dispatch({ target: 'cap.agent.loop', action: 'resolveApproval', payload: { sessionId, callId, decision } })
-    .catch(() => undefined);
+  // 服务端编排通道：审批挂起在服务端（任意在线设备先到先得）；通道不可用回落旧 loop
+  void resolveRunnerApproval(sessionId, callId, decision).then((handled) => {
+    if (handled) return;
+    return api
+      .dispatch({ target: 'cap.agent.loop', action: 'resolveApproval', payload: { sessionId, callId, decision } })
+      .catch(() => undefined);
+  });
 }
 
 // ===== 待发送队列（流式预输入）：流结束后自动逐条发送，附件随队列项完整保留 =====

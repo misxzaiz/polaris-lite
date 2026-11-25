@@ -26,9 +26,10 @@ export const SERVER_PLUGINS = [
   { id: 'kv-store', entry: './kv-store/server.mjs' },
   { id: 'plugin-manager', entry: './plugin-manager/server.mjs' },
   { id: 'chat-store', entry: './chat-store/server.mjs' },
+  // agent-runner：AI 编排循环服务端执行器（spec：docs/chat-server-orchestration-plan.md B1）
+  { id: 'agent-runner', entry: './agent-runner/server.mjs' },
   { id: 'phone-agent', entry: './phone-agent/server.mjs' },
   { id: 'codebuddy-engine', entry: './codebuddy-engine/server.mjs' },
-  // 扩展能力插件（plans/extension-capability-pure-plugin-plan.md）
   { id: 'skill-loader', entry: './skill-loader/server.mjs' },
   { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },
