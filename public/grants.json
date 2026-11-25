@@ -440,6 +440,11 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "article-sources": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }

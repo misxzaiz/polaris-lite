@@ -14,6 +14,13 @@
       "version": "0.1.3",
       "description": "polaris-lite 规范与使用说明：面板分节浏览 + AI 技能 + MCP 检索工具",
       "sha256": "180151200f861efbde6ac5974cfcc6c0e05c93008b81e1cedb7d5e49daa981c8"
+    },
+    {
+      "id": "article-sources",
+      "name": "文章源导航",
+      "version": "0.1.0",
+      "description": "开源文章源知识库（仅查询）：博客平台/中文社区/聚合工具/自建方案，面板浏览 + MCP 检索",
+      "sha256": "0c561d9652f851a001814f47f04974a5e26b2096974400684b3883db244e4284"
     }
   ]
 }
