@@ -33,6 +33,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 // 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
 // 零 DOM/零副作用：UsageAccumulator/estimateTokens/compactShadow 均可服务端复用。
 import { UsageAccumulator, estimateTokens, compactShadow } from '../shared/context-compact.ts';
+import { buildUsagePayload } from '../shared/usage.ts';
 // pocket-ledger 计算内核（纯 CJS vendor；与面板/MCP server 共用同一权威实现）。
 const require = createRequire(import.meta.url);
 const ledgerCore = require('../pocket-ledger/ledger-core.cjs');
@@ -262,7 +263,7 @@ export function createServerPart(options = {}) {
           : [];
         const partialToolCalls = finishReason && finishReason !== 'tool_calls' ? toolAcc.size : 0;
         run.lastUsage = wireUsage && sawUsage ? wireUsage : run.lastUsage;
-        return { text: attemptText, toolCalls, finishReason, partialToolCalls };
+        return { text: attemptText, toolCalls, finishReason, partialToolCalls, usage: (wireUsage && sawUsage ? wireUsage : null) };
       }
       carriedText += attemptText;
       if (attempt >= MAX_STREAM_RETRIES) {
@@ -751,6 +752,7 @@ export function createServerPart(options = {}) {
       let toolOnlyStreak = 0;
       let autoContinueLeft = 3;
       for (; !signal.aborted; turn += 1) {
+        run.turnStartedAt = Date.now();
         // 触发压缩（先压再请求；水位达阈值 + 未熔断；失败非破坏回滚）
         await maybeCompact(run);
         if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
@@ -777,7 +779,31 @@ export function createServerPart(options = {}) {
         });
         if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
         // usage 采集：压缩触发基准（真实 usage 优先，估算兜底）
-        noteUsage(run, run.lastUsage);
+        noteUsage(run, result.usage);
+        // ai.usage 事件（spec §4.1）：ContextMeter/速率展示的数据源——与 real-engine
+        // 同款 buildUsagePayload（缓存字段提取链对齐 simple_ai）。
+        emitEvent(run, 'ai.usage', buildUsagePayload({
+          sessionId, messageId: assistantId,
+          messages: run.shadow,
+          wireUsage: result.usage ?? null,
+          model: run.model?.activeModel,
+          maxInputTokens: resolveCtxWindow(run),
+          startedAt: run.turnStartedAt ?? Date.now(),
+        }));
+        // 上下文水位快照：ContextMeter 数据源（真实 usage 优先，字符估算兜底；spec §5.2）
+        {
+          const window = resolveCtxWindow(run);
+          const used = run.acc.lastInput > 0 ? run.acc.lastInput : estimateTokens(run.shadow);
+          emitEvent(run, 'context.snapshot', {
+            sessionId, messageId: assistantId,
+            usedTokens: used,
+            window,
+            percent: window > 0 ? Math.min(1, used / window) : 0,
+            messages: run.shadow.length,
+            compacted: run.acc.roundsSinceCompact !== null,
+            exhausted: run.acc.exhausted,
+          });
+        }
 
         // 无工具调用：正文收敛
         if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
@@ -882,20 +908,6 @@ export function createServerPart(options = {}) {
           });
           emitEvent(run, 'message.continued', { sessionId, messageId: assistantId, attempt: Math.floor(toolOnlyStreak / 12), max: 0, reason: 'tool-streak-nudge' });
         }
-      }
-      // 上下文水位快照：ContextMeter 数据源（真实 usage 优先，字符估算兜底；spec §5.2）
-      {
-        const window = resolveCtxWindow(run);
-        const used = run.acc.lastInput > 0 ? run.acc.lastInput : estimateTokens(run.shadow);
-        emitEvent(run, 'context.snapshot', {
-          sessionId, messageId: assistantId,
-          usedTokens: used,
-          window,
-          percent: window > 0 ? Math.min(1, used / window) : 0,
-          messages: run.shadow.length,
-          compacted: run.acc.roundsSinceCompact !== null,
-          exhausted: run.acc.exhausted,
-        });
       }
       emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
       emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });

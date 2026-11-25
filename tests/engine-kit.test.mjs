@@ -15,7 +15,8 @@ const kit = await import(resolve(kitRoot, 'index.ts').replaceAll('\\', '/')).cat
 
 // engine-kit 是 TS 源码,Node 直跑需经 tsx/tsc;测试环境无 tsx 时降级为「源码契约检查」
 // (与 reasoning/stream-retry 同模式:守卫关键实现细节的存在性)。
-const read = (f) => readFile(resolve(kitRoot, f), 'utf8');
+const sharedRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../plugins/shared');
+const read = (f) => readFile(f === 'usage.ts' ? resolve(sharedRoot, f) : resolve(kitRoot, f), 'utf8');
 
 test('sse reader:半行缓冲与 [DONE] 标记（源码契约）', async () => {
   const src = await read('sse.ts');

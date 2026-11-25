@@ -34,12 +34,18 @@ let runnerAvailable: boolean | null = null;
 /** 事件消费者（chat-lite 的 handleEnvelope；由 bridge 注册） */
 type EnvelopeConsumer = (envelope: StreamEnvelope) => void;
 let consumer: EnvelopeConsumer | null = null;
+/** 全局事件消费者（不随会话切换：ctxStore 的 ai.usage/context.* 水位透视） */
+let globalConsumer: EnvelopeConsumer | null = null;
 
 /** 中断回调（run 结束时通知 chat-lite 收敛队列等） */
 let onRunEnded: ((sessionId: string) => void) | null = null;
 
 export function setRunnerConsumer(fn: EnvelopeConsumer | null): void {
   consumer = fn;
+}
+/** 注册全局消费者：ai.usage/context.* 等跨会话事件（ContextMeter 数据源） */
+export function setRunnerGlobalConsumer(fn: EnvelopeConsumer | null): void {
+  globalConsumer = fn;
 }
 export function setRunnerEndedHook(fn: ((sessionId: string) => void) | null): void {
   onRunEnded = fn;
@@ -134,8 +140,11 @@ function subscribe(handle: RunHandle): void {
     try {
       const data = JSON.parse((ev as MessageEvent).data) as { seq: number; kind: string; payload: Record<string, unknown> };
       handle.lastSeq = Math.max(handle.lastSeq, data.seq ?? 0);
+      const envelope = { kind: data.kind, payload: data.payload, source: 'agent-runner' } as StreamEnvelope;
       // 事件形状与 cap.agent.loop:event 一致：chat-lite 渲染层零改动
-      consumer?.({ kind: data.kind, payload: data.payload, source: 'agent-runner' } as StreamEnvelope);
+      consumer?.(envelope);
+      // 跨会话全局消费（ContextMeter 的 ai.usage / context.* 水位透视）
+      globalConsumer?.(envelope);
     } catch { /* 非 JSON 忽略 */ }
   });
   es.addEventListener('run-ended', () => {

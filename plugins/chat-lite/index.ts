@@ -18,7 +18,7 @@ import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
 import { notifyRootsChanged } from './workspace-prefs';
-import { setRunnerConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner } from './runnerBridge';
+import { setRunnerConsumer, setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner } from './runnerBridge';
 export type { StreamEnvelope } from './runnerTypes';
 import type { StreamEnvelope } from './runnerTypes';
 // 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown / 工具卡（原先散落在宿主 src/styles.css）
@@ -219,21 +219,20 @@ export const chatLitePlugin: LitePlugin = {
     // 登录成功立即对账（auth-changed 由 mock-auth 在状态翻转时发出；登出也发，401 空拉无害）
     api.listen('auth-changed', () => syncPullNow());
     // ---- 上下文透视（spec §5.3）：ctxStore 单写者由事件驱动，UI 只读 ----
-    // ai.usage：real-engine 流末发出（输入/输出 token、缓存命中、耗时、速率分母）
-    api.listen('cap.ai.chat:event', (envelope) => {
-      const ev = envelope as { kind?: string; payload?: Record<string, unknown> };
-      if (ev.kind !== 'ai.usage' || !ev.payload) return;
-      const p = ev.payload as { sessionId?: string; inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number };
-      if (!p.sessionId) return;
-      useCtxStore.getState().applyUsage({ ...p, sessionId: p.sessionId });
-    });
-    // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
-    api.listen('cap.agent.loop:event', (envelope) => {
+    // 服务端 runner 通道（SSE）与 cap 总线双源合一：同一处理函数复用，
+    // 否则 runner 会话的输入框 token/缓存/水位透视失去数据源。
+    // （声明先于 setRunnerGlobalConsumer 使用——TDZ：块级 const 不能先用后定义）
+    const onCtxEvent = (envelope: unknown): void => {
       const ev = envelope as { kind?: string; payload?: Record<string, unknown> };
       const kind = ev.kind ?? '';
       const p = (ev.payload ?? {}) as { sessionId?: string; messageId?: string } & Record<string, unknown>;
       if (!p.sessionId) return;
       const store = useCtxStore.getState();
+      if (kind === 'ai.usage') {
+        const u = p as { inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number };
+        useCtxStore.getState().applyUsage({ ...u, sessionId: p.sessionId });
+        return;
+      }
       if (kind === 'context.snapshot') store.applySnapshot(p as never);
       else if (kind === 'context.compacting') store.applyCompacting(p.sessionId);
       else if (kind === 'context.compacted') {
@@ -265,7 +264,14 @@ export const chatLitePlugin: LitePlugin = {
           }
         }
       }
-    });
+    };
+    // ai.usage：real-engine 流末发出（输入/输出 token、缓存命中、耗时、速率分母）
+    api.listen('cap.ai.chat:event', onCtxEvent);
+    // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
+    api.listen('cap.agent.loop:event', onCtxEvent);
+    // runner 通道的全局消费者：ai.usage / context.* 水位透视（不随会话切换，
+    // 与上面 cap 总线的 onCtxEvent 同一处理函数——双源合一）。
+    setRunnerGlobalConsumer(onCtxEvent);
 
     // ---- 服务端编排（B1）刷新恢复：页面加载后对服务端 running 表对账， ----
     // 执行中的会话重建 SSE 订阅（事件日志重放 → UI 追平）；服务端继续执行不受刷新影响。

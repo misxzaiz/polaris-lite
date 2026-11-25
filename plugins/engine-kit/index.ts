@@ -17,7 +17,7 @@
  */
 
 export type { WireUsage, AiUsagePayload, ToolCallAgg, SseEvent, SseReader, InterruptMap } from './types';
-export { estimateTokens, buildUsagePayload } from './usage';
+export { estimateTokens, buildUsagePayload } from '../shared/usage.ts';
 export { createSseReader, isUpstreamDisconnectFrame, aggregateToolCallDelta } from './sse';
 export { parseLimitFromError, classifyLimitError } from './limits';
 export { createInterruptMap } from './interrupt';

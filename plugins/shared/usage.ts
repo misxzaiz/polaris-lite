@@ -25,11 +25,11 @@ export function buildUsagePayload(args: {
   sessionId: string;
   messageId: string;
   messages: { content: unknown; tool_calls?: unknown }[];
-  wireUsage: import('./types').WireUsage | null;
+  wireUsage: import('../engine-kit/types').WireUsage | null;
   model?: string;
   maxInputTokens?: number;
   startedAt: number;
-}): import('./types').AiUsagePayload {
+}): import('../engine-kit/types').AiUsagePayload {
   const { sessionId, messageId, messages, wireUsage, model, maxInputTokens, startedAt } = args;
   const durationMs = Date.now() - startedAt;
   const contextWindow = maxInputTokens && maxInputTokens > 0 ? maxInputTokens : undefined;
