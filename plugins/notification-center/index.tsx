@@ -22,7 +22,7 @@ import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_STATE, CHANNEL_DRAWER_EVENT } from '@sdk';
 import { NotificationPanel } from './Panel';
 import {
-  MAX_VISIBLE, TOAST_TTL_MS, loadInbox, pushNotice, setNotifyApi,
+  MAX_VISIBLE, TOAST_TTL_MS, loadInbox, loadPrefs, getPrefs, pushNotice, setNotifyApi,
   subscribe, type NotifyItem, type NotifyLevel,
 } from './store';
 import './panel.css';
@@ -198,16 +198,42 @@ function enqueueToast(t: Toast): void {
 function watchStream(api: SlotHostApi): void {
   // envelope: { source, kind, payload }（与 chat-lite / app-updater 的处理约定一致）
   api.listen('cap.ai.chat:event', (raw) => {
-    const env = raw as { source?: string; kind?: string };
+    const env = raw as { source?: string; kind?: string; payload?: { sessionId?: string; interrupted?: boolean; message?: string } };
     if (!env?.source || !env?.kind) return;
     if (env.kind === 'message.delta') {
       streaming = true;
-    } else if (env.kind === 'message.done' || env.kind === 'stream.error') {
-      streaming = false;
-      while (pendingQueue.length) {
-        const t = pendingQueue.shift();
-        if (t) pushToast(t);
-      }
+      return;
+    }
+    if (env.kind !== 'message.done' && env.kind !== 'stream.error') return;
+    streaming = false;
+    // 会话完成通知（可开关）：一轮回复结束/失败/被打断后提醒。多标签页会重复弹——
+    // 每个标签页都订阅同一事件总线，这是既有 toast 通道的已知口径（与 app-updater 相同）。
+    void (async () => {
+      await loadPrefs();
+      if (!getPrefs().notifyOnDone) return;
+      const failed = env.kind === 'stream.error';
+      const interrupted = env.payload?.interrupted === true;
+      const level: NotifyLevel = failed ? 'error' : interrupted ? 'warn' : 'success';
+      const title = failed ? '回复失败' : interrupted ? '回复已中断' : '回复完成';
+      const body = failed
+        ? (env.payload?.message ?? '生成出错，可重试')
+        : `会话 ${env.payload?.sessionId?.slice(0, 8) ?? ''} 一轮回复结束`;
+      await pushNotice({
+        id: `done:${env.payload?.sessionId ?? 'x'}:${Date.now()}`,
+        level,
+        title,
+        body,
+        source: 'notification-center',
+      });
+      enqueueToast({
+        id: `done:${env.payload?.sessionId ?? 'x'}:${Date.now()}`,
+        level, title, body, source: 'notification-center', at: Date.now(), read: false,
+        ttl: TOAST_TTL_MS,
+      });
+    })();
+    while (pendingQueue.length) {
+      const t = pendingQueue.shift();
+      if (t) pushToast(t);
     }
   });
 }
@@ -244,6 +270,7 @@ export const notificationCenterPlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     setNotifyApi(api);
     void loadInbox();
+    void loadPrefs();
     api.registerCapability.register('cap.ui.notify', createNotifyHandler());
     watchStream(api);
     // ToastHost 不经槽位：直接挂 body（面板卸载不影响 toast 常驻）

@@ -25,11 +25,66 @@ export interface NotifyItem {
 
 const NS = 'notification-center';
 const KEY = 'inbox';
+/** 用户偏好（通知开关等），独立 key 持久化；notifyOnDone 默认开（改动前行为=无完成提醒，显式默认让「能切换」成立） */
+const PREFS_KEY = 'prefs';
 export const MAX_INBOX = 100;
 /** toast 同时最多可见条数，溢出折叠为 +N */
 export const MAX_VISIBLE = 3;
 /** 非 error 级自动消退时长 */
 export const TOAST_TTL_MS = 5000;
+
+export interface NotifyPrefs {
+  /** 会话完成通知（AI 回复 done/error 后提醒） */
+  notifyOnDone: boolean;
+}
+
+const DEFAULT_PREFS: NotifyPrefs = { notifyOnDone: true };
+
+let prefsCache: NotifyPrefs | null = null;
+const prefsSubs = new Set<() => void>();
+
+export function subscribePrefs(fn: () => void): () => void {
+  prefsSubs.add(fn);
+  return () => {
+    prefsSubs.delete(fn);
+  };
+}
+
+export function getPrefs(): NotifyPrefs {
+  return prefsCache ?? DEFAULT_PREFS;
+}
+
+function emitPrefsChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('nc-prefs-changed'));
+  prefsSubs.forEach((fn) => fn());
+}
+
+export async function loadPrefs(): Promise<NotifyPrefs> {
+  if (prefsCache) return prefsCache;
+  if (!api) return DEFAULT_PREFS;
+  try {
+    const res = await api.dispatch<{ value?: Partial<NotifyPrefs> | null }>({
+      target: 'cap.kv', action: 'get', payload: { namespace: NS, key: PREFS_KEY },
+    });
+    const raw = res.ok ? res.data?.value : null;
+    prefsCache = { ...DEFAULT_PREFS, ...(raw && typeof raw === 'object' ? raw : {}) };
+  } catch {
+    prefsCache = DEFAULT_PREFS;
+  }
+  return prefsCache;
+}
+
+export async function savePrefs(next: NotifyPrefs): Promise<void> {
+  prefsCache = { ...DEFAULT_PREFS, ...next };
+  try {
+    await api?.dispatch({
+      target: 'cap.kv', action: 'set', payload: { namespace: NS, key: PREFS_KEY, value: prefsCache },
+    });
+  } catch {
+    /* 持久化失败不阻断 UI：会话内仍生效 */
+  }
+  emitPrefsChanged();
+}
 
 let api: SlotHostApi | null = null;
 let cache: NotifyItem[] | null = null;
@@ -37,6 +92,10 @@ const subs = new Set<() => void>();
 
 export function setNotifyApi(a: SlotHostApi | null): void {
   api = a;
+  if (!a) {
+    // 宿主重载/插件重装：缓存作废，避免拿到上一个实例的旧数据
+    prefsCache = null;
+  }
 }
 
 export function subscribe(fn: () => void): () => void {

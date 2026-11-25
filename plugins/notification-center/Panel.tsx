@@ -6,8 +6,8 @@
  */
 import { useEffect, useState } from 'react';
 import {
-  clearInbox, loadInbox, markAllRead, markRead, subscribe, unreadCount,
-  type NotifyItem,
+  clearInbox, getPrefs, loadInbox, loadPrefs, markAllRead, markRead, savePrefs, subscribe, subscribePrefs, unreadCount,
+  type NotifyItem, type NotifyPrefs,
 } from './store';
 
 function fmtTime(ts: number): string {
@@ -35,6 +35,7 @@ function Ico({ level }: { level: NotifyItem['level'] }) {
 
 export function NotificationPanel() {
   const [items, setItems] = useState<NotifyItem[]>([]);
+  const [prefs, setPrefs] = useState<NotifyPrefs>(() => getPrefs());
 
   useEffect(() => {
     let alive = true;
@@ -44,15 +45,24 @@ export function NotificationPanel() {
       });
     };
     refresh();
+    void loadPrefs().then((p) => {
+      if (alive) setPrefs({ ...p });
+    });
     const off = subscribe(refresh);
+    const offPrefs = subscribePrefs(() => setPrefs({ ...getPrefs() }));
     // 同页 DOM 事件兜底（本插件 emit 时同步派发）
     window.addEventListener('notifications-changed', refresh);
     return () => {
       alive = false;
       off();
+      offPrefs();
       window.removeEventListener('notifications-changed', refresh);
     };
   }, []);
+
+  const toggleDone = (): void => {
+    void savePrefs({ ...prefs, notifyOnDone: !prefs.notifyOnDone });
+  };
 
   const unread = unreadCount(items);
 
@@ -72,6 +82,25 @@ export function NotificationPanel() {
         <button type="button" className="ncp-clear" onClick={() => void clearInbox()} disabled={items.length === 0}>
           清空
         </button>
+      </div>
+      <div className="ncp-prefs" data-testid="nc-prefs">
+        <div className="ncp-pref-row">
+          <span className="ncp-pref-main">
+            <span className="ncp-pref-t">会话完成通知</span>
+            <span className="ncp-pref-d">每轮 AI 回复结束/中断/失败时提醒</span>
+          </span>
+          <button
+            type="button"
+            className={`ncp-switch ${prefs.notifyOnDone ? 'on' : ''}`}
+            role="switch"
+            aria-checked={prefs.notifyOnDone}
+            aria-label="会话完成通知开关"
+            data-testid="nc-switch-done"
+            onClick={toggleDone}
+          >
+            <span className="ncp-switch-knob" />
+          </button>
+        </div>
       </div>
       <div className="ncp-list">
         {items.length === 0 ? (
