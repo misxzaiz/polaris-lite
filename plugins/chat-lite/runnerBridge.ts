@@ -79,9 +79,14 @@ export async function startRunnerRun(payload: {
   system?: string;
   providerId?: string;
   modelId?: string;
-  execCwd?: string;
-  rootId?: string;
-  shellHint?: string;
+  /** 会话绑定工作区根 id（服务端据此解析 bash cwd / files 默认根 / system prompt） */
+  workspaceId?: string;
+  /** 关联只读目录 ids（files 可读、bash 不可达） */
+  linkedWorkspaceIds?: string[];
+  /** 会话级上下文压缩策略 */
+  ctxPolicy?: { autoCompact?: boolean; threshold?: number; keepRecent?: number };
+  /** 附件（图片 base64 data URL / 文本内容；vision 由服务端能力表裁定） */
+  attachments?: { name?: string; mime?: string; content?: string; textContent?: string }[];
 }): Promise<boolean> {
   if (!(await probeRunner())) return false;
   const { sessionId, messageId } = payload;

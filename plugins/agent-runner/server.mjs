@@ -900,6 +900,97 @@ export function createServerPart(options = {}) {
     } catch { /* MCP 不可用：无 MCP 工具继续 */ }
   }
 
+  /**
+   * 工作区解析（对齐前端 agent-loop 语义）：
+   * - payload.workspaceId 命中已登记根 → bash cwd=该根路径，files 默认根跟随；
+   * - 绑定失效 → 回落内建 workspace 并在 system prompt 说明；
+   * - 未绑定 → 回落内建 workspace；
+   * - 关联只读目录（linkedWorkspaceIds）进 system prompt 只读提示。
+   * 同时解析 bash 语法提示（server config.shell）。
+   */
+  async function prepareWorkspace(run, body) {
+    try {
+      const rr = await fsGet('/api/fs/roots', run.controller.signal);
+      const list = Array.isArray(rr.json?.roots) ? rr.json.roots : [];
+      const boundId = String(body.workspaceId ?? '');
+      const bound = boundId ? list.find((r) => r.id === boundId) : undefined;
+      const builtin = list.find((r) => r.builtin);
+      if (bound?.path) {
+        run.boundRootId = bound.id;
+        run.execCwd = bound.path;
+        run.wsHint = `${bound.label ?? bound.id}（${bound.path}）`;
+      } else {
+        if (boundId) run.wsFallbackNote = `注意：会话绑定的工作区已失效（id=${boundId}），已回落默认工作区。`;
+        if (builtin?.path) {
+          run.boundRootId = builtin.id;
+          run.execCwd = builtin.path;
+          run.wsHint = builtin.path;
+        }
+      }
+      // 只读可见范围：显式关联优先，否则其余已登记根（与前端 agent-loop 同口径）
+      const linkedIds = Array.isArray(body.linkedWorkspaceIds) ? body.linkedWorkspaceIds.map(String) : [];
+      const linkedSet = new Set(linkedIds);
+      const readonly = linkedIds.length > 0
+        ? list.filter((r) => linkedSet.has(r.id) && r.path !== run.execCwd)
+        : list.filter((r) => !r.builtin && r.path !== run.execCwd);
+      if (readonly.length > 0) {
+        run.readonlyHint = linkedIds.length > 0
+          ? ` 用户为本对话关联了这些只读目录（可浏览/读取，不可写、bash 不在其中执行）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`
+          : ` files 工具另可只读浏览这些已登记目录（bash 不可达、不可写入）：${readonly.map((r) => `${r.label}（${r.path}）`).join('、')}。`;
+      }
+    } catch { /* roots 不可用：保持默认（tool-exec 服务端仍会按白名单校验 cwd） */ }
+    try {
+      const cfg = readToolMode();
+      run.shellHint = cfg.shell ?? undefined;
+    } catch { /* 默认 bash 语法 */ }
+  }
+
+  /**
+   * shadow 播种（对齐前端 agent-loop）：system（含 cwd/工具语义/日期）+ history
+   * + skill 附录 + 时间提示 + prompt。skill 附录经 /api/skills/appendix（索引 +
+   * AGENTS.md/CLAUDE.md 项目指令），不可用时静默跳过。
+   */
+  async function seedShadow(run, body, prompt) {
+    const sysParts = [];
+    sysParts.push(
+      '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具与 files 工具（浏览/读取文件，只读）。',
+    );
+    sysParts.push(`当前日期时间：${new Date().toLocaleString('zh-CN', { hour12: false })}（宿主本地时区）。`);
+    if (run.wsHint) sysParts.push(`bash 的 cwd 固定为：${run.wsHint}。`);
+    if (run.wsFallbackNote) sysParts.push(run.wsFallbackNote);
+    sysParts.push(
+      '需要读写文件、跑脚本、查状态时优先用工具，不要凭空编造输出；' +
+      '命令要一次做完一件事；输出很长时先自己截取关键部分再回答。' +
+      'bash 的读写只能发生在 cwd 内；需要浏览或读取 cwd 之外的文件时，用 files 工具的 roots/list/read（只读）。' +
+      'files_write 工具可写/编辑工作区文件（write/edit/patch 三个动作）。' +
+      'interactive 工具可向用户发起结构化提问/表单/确认（question/form/confirm）；' +
+      '当任务缺少用户的必要信息或需要用户拍板时，优先用 interactive 直接问，不要自行猜测用户偏好。' +
+      'render 工具可生成自包含 HTML 交互面板（小游戏/原型/图表/教具），在对话卡片与「预览」面板中运行；' +
+      'HTML 必须自包含：内联 CSS/JS、不引 CDN、不 fetch、模型与贴图用 base64；改动旧面板传 basePreviewId。' +
+      'browser 工具可驱动系统 Chrome 搜索/阅读/操作网页（search 搜索、read 读正文、click/fill 交互、screenshot 截图）；' +
+      '本会话的操作自动路由到本会话绑定的标签，不会影响其他会话打开的网页；优先用结构化动作而非 evaluate。' +
+      (run.readonlyHint ?? ''),
+    );
+    sysParts.push(' 用 files 工具读文件时：path 传相对工作区根的相对路径；要读其它项目目录（如仓库根）的文件，先调 roots 拿到对应根的 id，再用该 rootId+相对路径，不要把绝对路径当 path 传。');
+    const shadow = [{ role: 'system', content: sysParts.join('') }];
+    if (Array.isArray(body.history)) {
+      for (const m of body.history) {
+        shadow.push({ role: m.role, content: m.content });
+      }
+    }
+    // skill 附录（技能索引 + 项目指令 AGENTS.md/CLAUDE.md）
+    try {
+      const r = await fsGet('/api/skills/appendix', run.controller.signal);
+      const text = String(r.json?.text ?? '');
+      if (text) shadow[0].content += '\n\n' + text;
+    } catch { /* 附录不可用：无附录继续 */ }
+    if (prompt) {
+      shadow.push({ role: 'user', content: `（系统提示：当前日期时间 ${new Date().toLocaleString('zh-CN', { hour12: false })}，宿主本地时区。）` });
+      shadow.push({ role: 'user', content: prompt });
+    }
+    run.shadow = shadow;
+  }
+
   // ------------------------------------------------------------------
   // 工具模式（读 agent-bash 的 tool-exec.json；confirm/allowlist/yolo 裁决同源）
   // ------------------------------------------------------------------
@@ -993,6 +1084,7 @@ export function createServerPart(options = {}) {
       const sessionId = String(body.sessionId ?? '');
       if (!ID_RE.test(sessionId)) return send(res, 400, { error: 'sessionId invalid', code: 'BAD_REQUEST' });
       const assistantId = String(body.messageId ?? `m-${Date.now().toString(36)}`);
+      const prompt = String(body.prompt ?? '');
       // 同会话单飞：已有 run 直接返回（前端重复触发/多端同时发起都收敛到同一次执行）
       const existing = runsBySession.get(sessionId);
       if (existing && !existing.finished) {
@@ -1037,23 +1129,20 @@ export function createServerPart(options = {}) {
       }
       runs.set(runId, run);
       runsBySession.set(sessionId, run);
-      // shadow 播种：system + history + 时间提示 + prompt（对齐前端 agent-loop 播种语义）
-      run.shadow = [
-        { role: 'system', content: String(body.system ?? '你是 polaris-lite 工作台里的 AI 助手。') },
-        ...(Array.isArray(body.history) ? body.history.map((m) => ({ role: m.role, content: m.content })) : []),
-      ];
-      const prompt = String(body.prompt ?? '');
-      if (prompt) {
-        run.shadow.push({ role: 'user', content: `（系统提示：当前日期时间 ${new Date().toLocaleString('zh-CN', { hour12: false })}，宿主本地时区。）` });
-        run.shadow.push({ role: 'user', content: prompt });
-      }
-      audit({ op: 'run-start', runId, sessionId, assistantId, promptLen: prompt.length });
-      emitEvent(run, 'loop.start', { sessionId, messageId: assistantId, runId });
-      // 异步执行（不等完成；HTTP 立即返回 runId）
-      ensureMcpTools(run).finally(() => {
-        run.toolDefs = [...buildServerToolDefs(run), ...run.extraToolDefs];
-        runLoop(run).catch((e) => audit({ op: 'run-fatal', runId, error: String(e?.message ?? e) }));
-      });
+      // 异步执行（不等完成；HTTP 立即返回 runId）。
+      // 工作区解析 + system prompt + skill 附录都在异步段做（需要 await roots/appendix）。
+      ensureMcpTools(run)
+        .then(() => prepareWorkspace(run, body))
+        .then(async () => {
+          run.toolDefs = [...buildServerToolDefs(run), ...run.extraToolDefs];
+          await seedShadow(run, body, prompt);
+          await runLoop(run);
+        })
+        .catch((e) => {
+          audit({ op: 'run-fatal', runId, error: String(e?.message ?? e) });
+          emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: String(e?.message ?? e).slice(0, 300) });
+          finishRun(run);
+        });
       return send(res, 200, { ok: true, runId, existing: false });
     }
 

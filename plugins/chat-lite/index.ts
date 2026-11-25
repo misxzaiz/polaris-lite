@@ -691,6 +691,11 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     history: history ?? [],
     providerId: session?.providerId,
     modelId: session?.modelId,
+    // 会话绑定工作区 + 关联只读目录（服务端据此解析 bash cwd / files 默认根 / system prompt）
+    workspaceId: session?.workspaceId,
+    linkedWorkspaceIds: session?.linkedWorkspaceIds,
+    ctxPolicy: useLoop ? ctxPolicyOf(sid) : undefined,
+    ...(hasAttachments && attachments ? { attachments } : {}),
   });
   if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
 
