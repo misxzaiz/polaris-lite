@@ -4,7 +4,7 @@
     {
       "id": "extquad",
       "name": "extquad 四合一",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "外部四合一验证插件：面板 + Skill + MCP + Hook",
       "sha256": "2c2f6c7a42ba14ae3c18a7f3f54e5fbbf8272057bca9849132bae534cbf4612f"
     },
@@ -18,9 +18,9 @@
     {
       "id": "article-sources",
       "name": "文章源导航",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "开源文章源知识库（仅查询）：博客平台/中文社区/聚合工具/自建方案，面板浏览 + MCP 检索",
-      "sha256": "0c561d9652f851a001814f47f04974a5e26b2096974400684b3883db244e4284"
+      "sha256": "1a7e09aef78e248362ba583d5002a274375769c868c24efa919a82490499a68b"
     }
   ]
 }

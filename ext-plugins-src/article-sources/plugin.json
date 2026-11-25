@@ -1,7 +1,7 @@
 {
   "id": "article-sources",
   "name": "文章源导航",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "开源文章源知识库（仅查询）：博客平台/中文社区/聚合工具/自建方案，面板浏览 + MCP 检索（sources_sections/sources_get/sources_search）",
   "contributes": {
     "slots": [

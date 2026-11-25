@@ -22,7 +22,7 @@ d.jsx = f;
 d.jsxs = f;
 R.exports = d;
 var e = R.exports;
-const g = "0.1.0", S = [
+const g = "0.1.1", S = [
   {
     id: "blog-wordpress",
     section: "blog",

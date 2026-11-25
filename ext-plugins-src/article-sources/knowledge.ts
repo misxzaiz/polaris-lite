@@ -2,7 +2,7 @@
  * article-sources — 开源文章源知识库数据（仅查询，无保存）。
  * 与 mcp-server.mjs 内联 JSON 保持同一份（两处需同步更新）。
  */
-export const AS_VERSION = '0.1.0';
+export const AS_VERSION = '0.1.1';
 
 export type AsSection = 'blog' | 'cn' | 'agg' | 'diy';
 
