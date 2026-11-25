@@ -107,7 +107,7 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
           <div className="ctx-detail-heading">最近轮次</div>
           <table className="ctx-usage-table">
             <thead>
-              <tr><th>输入（含缓存）</th><th>缓存命中</th><th>输入（不含缓存）</th><th>输出</th><th>速率</th></tr>
+              <tr><th>输入（含缓存）</th><th>缓存命中</th><th>输入（不含缓存）</th><th>输出</th><th>命中率</th><th>速率</th></tr>
             </thead>
             <tbody>
               {history.map((h, i) => (
@@ -116,6 +116,7 @@ function DetailDrawer({ sid, ctx, policy, onClose }: {
                   <td>{h.cachedTokens ? fmtTokens(h.cachedTokens) : '—'}</td>
                   <td>{h.cachedTokens ? fmtTokens(Math.max(0, h.inputTokens - h.cachedTokens)) : fmtTokens(h.inputTokens)}</td>
                   <td>{fmtTokens(h.outputTokens)}</td>
+                  <td>{h.cachedTokens !== undefined && h.inputTokens > 0 ? `${Math.round((h.cachedTokens / h.inputTokens) * 100)}%` : '—'}</td>
                   <td>{h.outputTokens > 0 ? `${h.tps.toFixed(1)} tok/s` : '—'}</td>
                 </tr>
               ))}
