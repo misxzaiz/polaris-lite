@@ -476,7 +476,17 @@ function handleToolEvent(
       });
       return;
     }
-    if (kind === 'tool.approval.required') {
+    if (kind === 'tool.card') {
+      // codebuddy CLI 对同一 callId 连发两帧：content_block_start 时 input 恒为空（args={}），
+      // content_block_stop 后才带完整参数（adapter.cjs:135-164）。首帧已建卡，这里把
+      // 第二帧的非空字段回填，否则折叠头/ArgsBlock 永远停在 "{}"。与审批帧补丁同构，
+      // patchCard 不过 trimCard，长参数在此手动裁剪。
+      patchCard(callId, (c) => ({
+        ...c,
+        ...(inner.command ? { command: capArgs(inner.command) } : {}),
+        ...(inner.argsJson ? { argsJson: capArgs(inner.argsJson) } : {}),
+      }));
+    } else if (kind === 'tool.approval.required') {
       patchCard(callId, (c) => ({
         ...c,
         status: 'awaiting',
@@ -549,7 +559,14 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
   } catch { /* 钩子桥未装：正常发送 */ }
-  const slashMatch = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  // /name 斜杠技能展开仅对默认引擎生效：CodeBuddy 会话的 read_skill 工具不存在
+  // （CLI 自持 Skill 体系），改写文本会让 AI 拿到一个不存在的指令（2026-11-25 实测：
+  // AI 搜索后只能如实回答「没有该工具」）。codebuddy 会话原文直发，让 CLI 自己的
+  // 技能机制处理斜杠输入。
+  const slashSkipForCodebuddy = useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.engineId === 'codebuddy';
+  const slashMatch = !slashSkipForCodebuddy
+    ? /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim())
+    : null;
   if (slashMatch) {
     try {
       // 技能存在性由 skill-loader 的 /api/skills/read 校验（404=不存在）。

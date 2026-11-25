@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -120,6 +120,9 @@ function translateEvent(sessionId, messageId, frame) {
           callId: frame.call_id || randomUUID(),
           name: frame.tool || 'tool',
           command: typeof frame.args === 'object' ? JSON.stringify(frame.args) : String(frame.args ?? ''),
+          // 原始参数单独带一份：ArgsBlock / 悬浮岛变更统计 / ai-events 都读 argsJson，
+          // 只放在 command 里这些消费方看不到。首帧为 {}，第二帧由宿主幂等回填完整值。
+          ...(frame.args && typeof frame.args === 'object' ? { argsJson: JSON.stringify(frame.args) } : {}),
         },
       };
     case 'tool_call_end':
@@ -160,6 +163,63 @@ function audit(dataDir, entry) {
   } catch { /* 审计失败不阻断主流程 */ }
 }
 
+// ---- HTML 预览联动（2026-11-25）：CLI Write 工具写了 .html → 落 preview → artifact.created ----
+// 与 agent-runner 的 render 工具同一终点（/api/preview/render + artifact 事件），UI 零改动。
+// 系统自签 token（与 agent-runner ensureSystemToken 同机制）：Bearer 表达「本地系统调用已审批」。
+let systemToken = null;
+function ensureSystemToken(verifyTempToken, tempTokens, dataDir) {
+  try {
+    if (systemToken && verifyTempToken?.(systemToken)) return systemToken;
+    const ownerName = (() => {
+      try {
+        const ownerFile = resolve(dataDir, 'auth-owner.json');
+        if (existsSync(ownerFile)) return String(JSON.parse(readFileSync(ownerFile, 'utf8')).username ?? 'root');
+      } catch { /* 读不到按 root */ }
+      return 'root';
+    })();
+    const token = randomBytes(24).toString('hex');
+    const ttlMs = 24 * 60 * 60 * 1000;
+    tempTokens?.set?.(token, { expiresAt: Date.now() + ttlMs, owner: ownerName });
+    systemToken = token;
+    return token;
+  } catch { return null; }
+}
+
+/**
+ * Write 工具写 .html 成功后的预览联动。
+ * 尺寸护栏：CLI Write 无上限，preview/render 端自身限 2MB + 入库扫描；这里先按字节粗检
+ * （>2MB 跳过联动，文件本身仍保留）。失败不阻断 SSE（联动是增益不是依赖）。
+ */
+async function previewFromWrite(dataDir, selfPort, verifyTempToken, tempTokens, filePath, callId, sessionId, messageId) {
+  try {
+    const abs = resolve(String(filePath ?? ''));
+    if (!abs.toLowerCase().endsWith('.html')) return null;
+    if (!existsSync(abs)) return null;
+    const html = readFileSync(abs, 'utf8');
+    if (!html.trim() || html.length > 2 * 1024 * 1024) return null;
+    const headers = { 'Content-Type': 'application/json' };
+    const token = ensureSystemToken(verifyTempToken, tempTokens, dataDir);
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const resp = await fetch(`http://127.0.0.1:${selfPort}/api/preview/render`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ html, title: abs.split(sep).pop()?.replace(/\.html?$/i, '') || '交互面板' }),
+    });
+    const j = await resp.json().catch(() => null);
+    if (!resp.ok || !j?.previewId) return null;
+    // 同一事件形状：runner 的 artifact.created（chat-lite 落 artifact 块 → PreviewCard）
+    return {
+      kind: 'artifact.created',
+      payload: {
+        sessionId, messageId, callId,
+        rendererType: 'html-preview',
+        title: String(j.title ?? '交互面板'),
+        data: { previewId: j.previewId, url: j.url, versionLabel: j.versionLabel },
+      },
+    };
+  } catch { return null }
+}
+
 /** SSE 帧写出 */
 function sseWrite(res, obj) {
   try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* 连接已断 */ }
@@ -186,6 +246,10 @@ export function createServerPart(options = {}) {
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_CODEBUDDY === '0';
+  // 预览联动用的本地自调端口 + 系统通道（与 agent-runner 的 callToolEndpoint 同机制）
+  const selfPort = Number(process.env.PORT ?? 5000);
+  const verifyTempToken = options.verifyTempToken;
+  const tempTokens = options.tempTokens;
 
   mkdirSync(resolve(dataDir, 'workspace'), { recursive: true });
 
@@ -318,6 +382,7 @@ export function createServerPart(options = {}) {
       // mcp-bridge 的原生配置 <dataDir>/mcp-servers.json 是单一数据源；这里把启用的
       // stdio server 转成 engine-v1 的 mcp_servers 形态，adapter.cjs 会写成临时 JSON
       // 并以 --strict-mcp-config --mcp-config 传给 codebuddy CLI（通道本就存在）。
+      // env/cwd 也一并透传（2026-11-25 补齐）：带 API key 环境变量的 server 此前会起不来。
       try {
         const mcpCfgPath = resolve(run.dataDir, 'mcp-servers.json');
         if (existsSync(mcpCfgPath)) {
@@ -325,7 +390,13 @@ export function createServerPart(options = {}) {
           const servers = mcpCfg?.servers ?? {};
           const mcpServers = Object.entries(servers)
             .filter(([, s]) => s && s.enabled !== false && typeof s.command === 'string' && s.command.trim())
-            .map(([name, s]) => ({ server_name: name, command: s.command, args: Array.isArray(s.args) ? s.args : [] }));
+            .map(([name, s]) => ({
+              server_name: name,
+              command: s.command,
+              args: Array.isArray(s.args) ? s.args : [],
+              ...(s.env && typeof s.env === 'object' && Object.keys(s.env).length > 0 ? { env: s.env } : {}),
+              ...(typeof s.cwd === 'string' && s.cwd.trim() ? { cwd: s.cwd } : {}),
+            }));
           if (mcpServers.length > 0) startParams.mcp_servers = mcpServers;
         }
       } catch { /* MCP 配置不可读：不透传，引擎照常启动 */ }
@@ -348,6 +419,23 @@ export function createServerPart(options = {}) {
           if (frame.type === 'session_end') { finish(frame.reason === 'aborted' ? 'interrupted' : 'completed'); return; }
           const ev = translateEvent(sessionId, messageId, frame);
           if (ev) sseWrite(res, ev);
+          // HTML 预览联动：Write 工具成功写了 .html → 落 preview 并发 artifact.created
+          //（Write 的参数在 tool_call_start 帧；start/end 两帧按 call_id 配对取 file_path）。
+          if (frame.type === 'tool_call_start' && frame.tool === 'Write') {
+            try {
+              const a = typeof frame.args === 'object' ? frame.args : JSON.parse(frame.args ?? '{}');
+              (run.writeArgs ??= new Map()).set(frame.call_id, String(a?.file_path ?? ''));
+            } catch { /* 参数解析失败：跳过联动 */ }
+          }
+          if (frame.type === 'tool_call_end' && frame.success !== false && frame.tool === 'Write') {
+            const filePath = run.writeArgs?.get(frame.call_id);
+            run.writeArgs?.delete(frame.call_id);
+            if (filePath) {
+              void previewFromWrite(dataDir, selfPort, verifyTempToken, tempTokens, filePath, frame.call_id || '', sessionId, messageId)
+                .then((artifactEv) => { if (artifactEv && running.has(key)) sseWrite(res, artifactEv); })
+                .catch(() => { /* 联动失败不影响主流程 */ });
+            }
+          }
         }
       });
       adapter.stderr.on('data', (chunk) => {

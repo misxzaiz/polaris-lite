@@ -336,11 +336,15 @@ function runSession(params, reqId) {
   let mcpFile = null;
   if (mcpServers.length > 0) {
     mcpFile = path.join(os.tmpdir(), `cb-mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
-    // engine-v1 mcp_servers 形态 {server_name, command, args} → claude mcp-config 形态 mcpServers.{name:{command,args}}
+    // engine-v1 mcp_servers 形态 {server_name, command, args, env?, cwd?} → claude mcp-config 形态
+    // mcpServers.{name:{command,args,env?,cwd?}}（env/cwd 2026-11-25 补齐：带 key 的 server 需要）
     const mcpConfig = { mcpServers: {} };
     for (const s of mcpServers) {
       if (s && s.server_name && s.command) {
-        mcpConfig.mcpServers[s.server_name] = { command: s.command, args: Array.isArray(s.args) ? s.args : [] };
+        const entry = { command: s.command, args: Array.isArray(s.args) ? s.args : [] };
+        if (s.env && typeof s.env === 'object' && Object.keys(s.env).length > 0) entry.env = s.env;
+        if (typeof s.cwd === 'string' && s.cwd.trim()) entry.cwd = s.cwd;
+        mcpConfig.mcpServers[s.server_name] = entry;
       }
     }
     fs.writeFileSync(mcpFile, JSON.stringify(mcpConfig, null, 2), 'utf8');
