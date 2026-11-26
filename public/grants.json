@@ -415,6 +415,13 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "deploy-panel": {
+      "capabilities": [
+        "cap.ui.notify"
+      ],
+      "provides": [],
+      "events": []
     }
   }
 }

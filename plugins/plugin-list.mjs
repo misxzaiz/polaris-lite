@@ -69,6 +69,9 @@ export const PLUGIN_LIST = [
   { id: 'translate', config: 'translate/vite.config.ts', dist: 'translate/dist', order: 39 },
   // notification-center = 全局通知中心：cap.ui.notify + overlay-root toast + panel
   { id: 'notification-center', config: 'notification-center/vite.config.ts', dist: 'notification-center/dist', order: 40 },
+  // deploy-panel = 9826 分析实例一键部署（server 端点是 detached worker 发布器；
+  // 仅 PLITE_DEPLOY_PANEL=1 的实例挂载，见 ecosystem.config.cjs 的 9826 env）
+  { id: 'deploy-panel', config: 'deploy-panel/vite.config.ts', dist: 'deploy-panel/dist', order: 41 },
 ].sort((a, b) => a.order - b.order);
 
 /** 是否启用（缺省 true）——server-registry 用它过滤 server 半边 */

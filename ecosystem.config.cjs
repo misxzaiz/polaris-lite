@@ -43,6 +43,9 @@ module.exports = {
         PORT: '9826',
         // 独立数据目录（绝对路径）：与 9825 生产、5000 dev 三者互不可见
         PLITE_DATA_DIR: path.resolve(__dirname, '.polaris-lite-pm2'),
+        // deploy-panel 的唯一开关：9825 生产不设此变量 → /api/deploy/* 全 404，
+        // 「部署」按钮即使被发布过去也点不出任何动作。
+        PLITE_DEPLOY_PANEL: '1',
       },
       out_file: './logs/pm2-out.log',
       error_file: './logs/pm2-error.log',

@@ -56,6 +56,9 @@ const RAW_SERVER_PLUGINS = [
   // （ledger / suggestions）。工具实现留在插件内，runner 不认识具体工具。
   { id: 'pocket-ledger', entry: './pocket-ledger/server.mjs' },
   { id: 'starter-suggestions', entry: './starter-suggestions/server.mjs' },
+  // deploy-panel：9826 一键部署（/api/deploy/*）。端点内部再按 PLITE_DEPLOY_PANEL=1
+  // 二次门禁——即使产物被发布到 9825，端点也不存在。
+  { id: 'deploy-panel', entry: './deploy-panel/server.mjs' },
 ];
 
 /** 与前端清单共享 enabled：前端关掉的插件，server 半边也不挂载。
