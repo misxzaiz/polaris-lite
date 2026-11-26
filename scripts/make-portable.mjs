@@ -78,25 +78,60 @@ cp(join(repoRoot, 'dist'), 'dist');
 // ── 2. server 宿主（8 个 .mjs，纯内置模块）───────────────────────────────
 cp(join(repoRoot, 'server'), 'server');
 
-// ── 3. plugins：registry + relay-hosts + 各插件 server 半边（依赖闭包）───
+// ── 3. plugins：registry + enabled 清单 + relay-hosts + 各插件 server 半边（依赖闭包）───
 cp(join(repoRoot, 'plugins', 'server-registry.mjs'), 'plugins/server-registry.mjs');
+// server-registry 顶层 import './plugin-list.mjs'（enabled 单一来源）；漏拷会启动即 ERR_MODULE_NOT_FOUND
+cp(join(repoRoot, 'plugins', 'plugin-list.mjs'), 'plugins/plugin-list.mjs');
 cp(join(repoRoot, 'plugins', 'relay-hosts.json'), 'plugins/relay-hosts.json');
+// agent-runner 运行时直接 import ../shared/*.ts（Node ≥22.18 默认类型擦除）——
+// 这些 .ts 必须随包，否则服务端起不来
+cp(join(repoRoot, 'plugins', 'shared'), 'plugins/shared');
 
-// 服务端会消费到的非 server.mjs 伴生文件（逐插件显式登记，新插件记得补）
-const SERVER_EXTRA = {
-  'browser-lite': ['engine.mjs'],
-  'transcript-share': ['redact.mjs', 'render.mjs'],
-  'codebuddy-engine': ['adapter.cjs'],
-};
+// 服务端会消费到的非模块伴生文件（json/文本等；.mjs/.cjs 由下面按目录自动收）
+const SERVER_EXTRA = {};
+
 // server-registry.mjs 里的 id 清单（避免手工维护两份）
 const registrySrc = readFileSync(join(repoRoot, 'plugins', 'server-registry.mjs'), 'utf8');
 const ids = [...registrySrc.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
 for (const id of ids) {
   const dir = join(repoRoot, 'plugins', id);
   if (!existsSync(dir)) throw new Error(`server-registry 引用的插件目录不存在：${id}`);
-  for (const f of ['server.mjs', ...(SERVER_EXTRA[id] ?? [])]) {
+  // 插件目录顶层的 .mjs/.cjs 全收：服务端 sibling import 无法静态穷举，
+  // 逐个登记曾连续漏掉 tool-adapters / bgm / core-constants（启动即 ERR_MODULE_NOT_FOUND）。
+  const siblings = readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.(mjs|cjs)$/.test(e.name))
+    .map((e) => e.name);
+  for (const f of new Set(['server.mjs', ...siblings, ...(SERVER_EXTRA[id] ?? [])])) {
     if (existsSync(join(dir, f))) cp(join(dir, f), `plugins/${id}/${f}`);
   }
+}
+
+// ── 3b. 跨插件引用依赖（server 半边运行时 require/import ../<id>/xxx，但该插件未在
+//        server-registry 登记——例如 agent-runner require('../pocket-ledger/ledger-core.cjs')）。
+//        只收被引用的插件目录顶层 .cjs/.mjs（纯 server 侧），不拖 UI/ts/node_modules。
+//        漏收的表现是包启动即 MODULE_NOT_FOUND。
+const DEP_IDS = new Set();
+for (const id of ids) {
+  const srcDir = join(repoRoot, 'plugins', id);
+  if (!existsSync(srcDir)) continue;
+  for (const f of readdirSync(srcDir)) {
+    if (!/\.(mjs|cjs)$/.test(f)) continue;
+    const src = readFileSync(join(srcDir, f), 'utf8');
+    for (const m of src.matchAll(/\.\.\/([A-Za-z0-9_-]+)\//g)) {
+      const dep = m[1];
+      if (dep !== id) DEP_IDS.add(dep); // 跨插件引用（../shared 等也被捕获，但 shared 已单独收，幂等跳过）
+    }
+  }
+}
+for (const dep of DEP_IDS) {
+  if (dep === 'shared') continue; // 上面已整体复制
+  const dir = join(repoRoot, 'plugins', dep);
+  if (!existsSync(dir)) continue; // 可能是相对路径片段，非插件目录
+  const files = readdirSync(dir)
+    .filter((e) => /\.(cjs|mjs)$/.test(e))
+    .filter((e) => existsSync(join(dir, e)));
+  for (const f of files) cp(join(dir, f), `plugins/${dep}/${f}`);
+  console.log(`[portable] 跨插件依赖收包：${dep} (${files.length} 个 .cjs/.mjs)`);
 }
 
 // ── 4. browser-lite 私有依赖（puppeteer-core，位置不可挪：相对 import.meta 解析）
@@ -125,7 +160,7 @@ cp(join(repoRoot, 'package-lock.json'), 'package-lock.json');
 // ── 5. 启动脚本 + README ────────────────────────────────────────────────
 const ver = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version;
 writeFileSync(join(outDir, 'start.cmd'), `@echo off
-rem polaris-lite portable v${ver} —— 一键启动（需 Node.js 20+）
+rem polaris-lite portable v${ver} —— 一键启动（需 Node.js ≥22.13）
 setlocal
 cd /d "%~dp0"
 if not defined PORT set PORT=9825
@@ -134,7 +169,7 @@ node server/prod-server.mjs
 pause
 `);
 writeFileSync(join(outDir, 'start.sh'), `#!/usr/bin/env bash
-# polaris-lite portable v${ver} —— 一键启动（需 Node.js 20+）
+# polaris-lite portable v${ver} —— 一键启动（需 Node.js ≥22.13）
 cd "$(dirname "$0")"
 export PORT="\${PORT:-9825}"
 echo "[polaris-lite] http://127.0.0.1:$PORT  (data: $PWD/.polaris-lite)"
@@ -142,7 +177,7 @@ node server/prod-server.mjs
 `);
 writeFileSync(join(outDir, 'README.md'), `# polaris-lite 便携包 v${ver}
 
-免安装运行包：无需拉代码、无需 npm install、无需构建。只需要 **Node.js 20+**。
+免安装运行包：无需拉代码、无需 npm install、无需构建。只需要 **Node.js ≥22.13**（node:sqlite 免 flag 下限）。
 
 ## 启动
 
@@ -197,4 +232,4 @@ if (wantZip) {
     console.error(`[portable] zip 失败（可手动压缩目录）: ${e.message}`);
   }
 }
-console.log('[portable] 完成。新机器：装 Node 20+ → 解压 → 运行 start.cmd / start.sh');
+console.log('[portable] 完成。新机器：装 Node ≥22.13 → 解压 → 运行 start.cmd / start.sh');
