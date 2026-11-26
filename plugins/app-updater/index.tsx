@@ -1,27 +1,28 @@
 /**
- * app-updater 插件前端半边：App 版本检查与刷新引导。
+ * app-updater 插件前端半边：「版本」统一面板（更新 + 部署合并）。
  *
- * 职责（docs/app-updater-plan.md）：
- * 1. 手动检查入口：panel 槽「更新」Tab——当前版本、服务器版本、「检查更新」按钮；
- * 2. 24h 惰性检查：不设常驻 timer，visibilitychange（App 切回前台）时看
- *    「距上次检查是否超 24h」，超了才请求一次 /api/app-updater/version；
- * 3. 流式保护：监听 cap.ai.chat:event 的 message.delta/message.done，流式回复
- *    进行中挂起更新提示，流结束补弹——不自动 reload，不打断正在生成的内容；
- * 4. 更新提示：纯 DOM toast 挂宿主 overlay root（fixed 锚定视口，插件 CSS 禁
- *    position:fixed——这是构建门禁规则），用户点「立即更新」才 location.reload()。
+ * 面板把版本链路画成一张图：
+ *   origin/master ──(build+发版)——>  服务器版本 ──(reload)——>  本页运行
+ *         └──(deploy:9826)——>  9826 分析实例 clone
+ *
+ * - app-updater 原「更新」职责（docs/app-updater-plan.md）：
+ *   1. 手动检查入口 + 24h 惰性检查（visibilitychange 门控，无常驻 timer）；
+ *   2. 流式保护：cap.ai.chat:event 的 delta 进行中挂起更新 toast，done 补弹；
+ *   3. 更新提示：纯 DOM toast 挂宿主 overlay root（插件 CSS 禁 position:fixed）。
+ * - deploy-panel 原「部署」职责（panel 半边并入此处，server 端点不动）：
+ *   9826 一键部署（detached worker），面板只做展示与投递；/api/deploy/* 404
+ *   （9825 生产 / dev 未开）时静默隐藏部署分支，面板退化为纯更新视图。
  *
  * 客户端当前版本来源：宿主 index.html 的 <meta name="plite-build-sha">（vite
  * 构建期由 injectBuildSha 注入；dev 下无注入 → meta 不存在 → 显示「开发环境」，
  * 比对逻辑跳过——dev 由 HMR 管新鲜度，不需要本插件）。
- *
- * reload 后新版本如何生效：SW 对 navigate 是 network-first（先给新鲜壳），
- * assets 是 hash 文件名 + SWR——reload 即干净切换，本插件不碰任何缓存逻辑。
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
 import './panel.css';
 
 const LAST_CHECK_KEY = 'app-updater.last-check.v1';
+const AUTO_CHECK_KEY = 'app-updater.auto-check.v1';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 
 interface ServerVersion {
@@ -29,6 +30,45 @@ interface ServerVersion {
   subject: string | null;
   time: string | null;
 }
+
+// ============================================================================
+// deploy-panel 状态模型（/api/deploy/status 的契约，与 server.mjs 对齐）
+// ============================================================================
+
+interface DeployJob {
+  id: string;
+  status: string;
+  phase: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  targetSha: string | null;
+  error: string | null;
+  logTail: string;
+}
+
+interface DeployLastRun {
+  id: string;
+  ok: boolean;
+  sha: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  error: string | null;
+  notified: boolean;
+}
+
+interface DeployStatus {
+  enabled: boolean;
+  instance: { port: string | null; dataDir: string };
+  current: { sha: string | null; subject: string | null; time: string | null };
+  target: { sha: string | null; subject: string | null };
+  behind: number | null;
+  dirty: { count: number; sample: string[] } | null;
+  job: DeployJob | null;
+  lastRun: DeployLastRun | null;
+  notice: unknown;
+}
+
+const short = (sha?: string | null): string => (sha ? sha.slice(0, 7) : '—');
 
 /** 读当前运行的构建版本（index.html meta；dev 无注入返回 null） */
 function clientSha(): string | null {
@@ -57,6 +97,25 @@ function fmtAgo(ts: number): string {
   if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
   if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
   return `${Math.floor(s / 86400)} 天前`;
+}
+
+function duration(start?: string | null, end?: string | null): string {
+  if (!start) return '';
+  const s = new Date(start).getTime();
+  const e = end ? new Date(end).getTime() : Date.now();
+  const sec = Math.max(0, Math.round((e - s) / 1000));
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
+}
+
+/** 后台自动检查开关（面板里可关；关掉 = 不再弹更新 toast） */
+function autoCheckEnabled(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  try {
+    return localStorage.getItem(AUTO_CHECK_KEY) !== '0';
+  } catch {
+    return true;
+  }
 }
 
 async function fetchServerVersion(): Promise<ServerVersion | null> {
@@ -120,7 +179,7 @@ function hideToast(): void {
 }
 
 // ============================================================================
-// panel 槽主面板：「更新」Tab
+// panel 槽主面板：「版本」Tab（更新 + 部署 版本链路图）
 // ============================================================================
 
 interface PanelState {
@@ -130,8 +189,25 @@ interface PanelState {
   result: '' | 'latest' | 'update' | 'unavailable';
 }
 
-export function AppUpdaterPanel() {
-  const [st, setSt] = useState<PanelState>({
+/** 链路节点：一行「● 名称 sha · 说明」 */
+function ChainNode({ dot, name, sha, meta }: { dot: 'ok' | 'warn' | 'err'; name: string; sha: string; meta?: string }): JSX.Element {
+  return (
+    <div className="au-node">
+      <span className={`au-dot au-dot-${dot}`} />
+      <div className="au-node-info">
+        <div className="au-node-head">
+          <span className="au-node-name">{name}</span>
+          <span className="au-mono au-node-sha">{sha}</span>
+        </div>
+        {meta && <div className="au-node-meta">{meta}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function VersionPanel(): JSX.Element {
+  // ── 更新半边（原 AppUpdaterPanel 状态）──
+  const [us, setUs] = useState<PanelState>({
     checking: false,
     server: null,
     lastCheck: (() => {
@@ -140,14 +216,59 @@ export function AppUpdaterPanel() {
     })(),
     result: '',
   });
+  const [autoCheck, setAutoCheck] = useState<boolean>(() => autoCheckEnabled());
   const mine = clientSha();
 
+  // ── 部署半边（原 DeployPanel 状态）──
+  const [st, setSt] = useState<DeployStatus | null>(null);
+  const [disabled, setDisabled] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const confirmTimer = useRef<number | null>(null);
+  // 404 = 本实例没有部署端点（9825 生产 / dev 未开）。轮询到此为止：
+  // 不要每 2.5s 打一发必然 404 的请求。静默隐藏部署分支，不渲染死提示。
+  const stopped = useRef(false);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/deploy/status', { cache: 'no-store' });
+      if (res.status === 404) {
+        stopped.current = true;
+        setDisabled(true);
+        return;
+      }
+      if (!res.ok) {
+        setError(`读取状态失败（HTTP ${res.status}）`);
+        return;
+      }
+      setDisabled(false);
+      setError(null);
+      setSt((await res.json()) as DeployStatus);
+    } catch {
+      // 9826 正在重启：静默，下一轮再说
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const iv = window.setInterval(() => {
+      if (stopped.current) return;
+      if (document.visibilityState === 'visible') void load();
+    }, 2500);
+    return () => window.clearInterval(iv);
+  }, [load]);
+
+  useEffect(() => () => {
+    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
+  }, []);
+
   const check = async (): Promise<void> => {
-    setSt((s) => ({ ...s, checking: true }));
+    setUs((s) => ({ ...s, checking: true }));
     const server = await fetchServerVersion();
     const now = Date.now();
     try { localStorage.setItem(LAST_CHECK_KEY, String(now)); } catch { /* 隐私模式 */ }
-    setSt((s) => ({
+    setUs((s) => ({
       ...s,
       checking: false,
       server,
@@ -158,53 +279,190 @@ export function AppUpdaterPanel() {
 
   const reload = (): void => { window.location.reload(); };
 
+  const toggleAutoCheck = (): void => {
+    const next = !autoCheck;
+    setAutoCheck(next);
+    try { localStorage.setItem(AUTO_CHECK_KEY, next ? '1' : '0'); } catch { /* 隐私模式 */ }
+  };
+
+  // ── 部署动作（原 DeployPanel 逻辑原样保留）──
+  const running = st?.job != null && (st.job.status === 'running' || st.job.status === 'queued');
+  const upToDate = st?.behind === 0;
+  // 上次失败时即使 behind===0 也允许重发：deploy-9826 失败前已经把 clone reset 到目标
+  // commit，此时「已是最新」但实际没跑起来 —— 不给重试按钮就把用户卡死了。
+  const failedLast = st?.lastRun != null && st.lastRun.ok === false;
+  const canDeploy = !running && (upToDate !== true || failedLast);
+  const deployBehind = st != null && st.behind != null && st.behind > 0;
+  const pageBehind = us.result === 'update';
+
+  const arm = (): void => {
+    setConfirming(true);
+    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
+    confirmTimer.current = window.setTimeout(() => setConfirming(false), 6000);
+  };
+
+  const deploy = async (): Promise<void> => {
+    setSubmitting(true);
+    setConfirming(false);
+    try {
+      const res = await fetch('/api/deploy/run', { method: 'POST' });
+      if (res.status === 409) {
+        setError('已有一个部署在进行，等它结束');
+      } else if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(data.error ?? `投递失败（HTTP ${res.status}）`);
+      } else {
+        setError(null);
+      }
+      await load();
+    } catch {
+      setError('投递失败：网络异常');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── 链路顶端：master 的展示 ──
+  // 9826（deploy 端点可用）上直接给 origin/master 的 target；其他实例退化为
+  // 服务器版本（app-updater 版本戳），语义等价：都是「应该运行在什么版本」。
+  const masterSha = st?.target.sha ?? us.server?.sha ?? null;
+  const masterMeta = st?.target.subject ?? us.server?.subject ?? (us.server?.time ? fmtTime(us.server.time) : null);
+
+  // ── 主按钮状态机（链路驱动）──
+  let mainBtn: { text: string; cls: string; disabled: boolean; onClick?: () => void };
+  if (running) {
+    mainBtn = { text: `部署中…（${st?.job?.phase ?? '进行中'}）`, cls: '', disabled: true };
+  } else if (failedLast) {
+    mainBtn = { text: '重新部署', cls: 'dp-btn-danger', disabled: !canDeploy, onClick: arm };
+  } else if (deployBehind) {
+    mainBtn = { text: '一键部署到 9826', cls: '', disabled: !canDeploy, onClick: arm };
+  } else if (pageBehind) {
+    mainBtn = { text: '立即更新（刷新）', cls: '', disabled: false, onClick: reload };
+  } else {
+    mainBtn = { text: '全部最新（一致）', cls: '', disabled: true };
+  }
+  // 次按钮：页面壳也落后时给一个并列的刷新入口（主按钮优先管部署）
+  const showRefreshBtn = !running && pageBehind && (deployBehind || failedLast);
+
   return (
     <div className="au-panel" data-testid="au-panel">
-      <h3>应用更新</h3>
-      <div className="au-row">
-        <span className="au-k">当前运行</span>
-        <span className="au-v au-mono" data-testid="au-client-sha">
-          {mine ? shortSha(mine) : '开发环境'}
-        </span>
+      <h3>版本状态</h3>
+
+      <div className="au-chain">
+        <ChainNode dot="ok" name="origin/master" sha={short(masterSha)} meta={masterMeta ?? undefined} />
+        <div className="au-branch">
+          <span className="au-branch-line" />
+          <div className="au-branch-body">
+            <div className={`au-gap ${pageBehind ? '' : 'au-gap-ok'}`}>
+              {us.result === 'unavailable' ? '版本信息不可用（dev 或未写版本戳）'
+                : !mine ? '开发环境（HMR 管新鲜度）'
+                : pageBehind ? '页面壳落后（刷新即得）' : '一致 · 本页运行最新'}
+            </div>
+            <ChainNode
+              dot={pageBehind ? 'warn' : 'ok'}
+              name="本页运行"
+              sha={mine ? shortSha(mine) : 'dev'}
+              meta={us.lastCheck != null ? `上次检查 · ${fmtAgo(us.lastCheck)}` : undefined}
+            />
+            {!disabled && (
+              <>
+                <div className={`au-gap ${deployBehind || failedLast ? '' : 'au-gap-ok'}`}>
+                  {st?.behind == null ? '差距未知'
+                    : failedLast ? '上次部署失败'
+                    : deployBehind ? `落后 ${st.behind} 个 commit`
+                    : '一致 · 9826 已是最新'}
+                </div>
+                <ChainNode
+                  dot={failedLast ? 'err' : running || deployBehind ? 'warn' : 'ok'}
+                  name="9826 分析实例"
+                  sha={short(st?.current.sha)}
+                  meta={st?.current.time ? fmtTime(st.current.time) : undefined}
+                />
+              </>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="au-row">
-        <span className="au-k">服务器版本</span>
-        <span className="au-v au-mono" data-testid="au-server-sha">
-          {st.server?.sha ? shortSha(st.server.sha) : st.result === 'unavailable' ? '不可用' : '—'}
-        </span>
+
+      {st?.dirty != null && st.dirty.count > 0 && (
+        <div className="dp-warn">
+          仓库本体有 {st.dirty.count} 处未提交改动，<b>不会</b>被发布（发布的是 commit）。
+          {st.dirty.sample.length > 0 && <div className="dp-dim">{st.dirty.sample.join(' · ')}</div>}
+        </div>
+      )}
+
+      {/* ── 行动区 ── */}
+      <div className="dp-actions">
+        {confirming ? (
+          <>
+            <button className={`dp-btn ${failedLast ? 'dp-btn-danger' : ''}`} onClick={() => void deploy()} disabled={submitting}>
+              确认部署 {short(st?.target.sha)}
+            </button>
+            <button className="dp-btn dp-btn-ghost" onClick={() => setConfirming(false)} disabled={submitting}>取消</button>
+          </>
+        ) : (
+          <>
+            {!disabled && (
+              <button className={`dp-btn ${mainBtn.cls}`} onClick={mainBtn.onClick} disabled={mainBtn.disabled}>
+                {mainBtn.text}
+              </button>
+            )}
+            {showRefreshBtn && (
+              <button className="dp-btn dp-btn-ghost" onClick={reload}>刷新页面</button>
+            )}
+          </>
+        )}
       </div>
-      {st.server?.time && (
-        <div className="au-row">
-          <span className="au-k">发布时间</span>
-          <span className="au-v">{fmtTime(st.server.time)}</span>
+
+      {error && <div className="dp-error">{error}</div>}
+
+      {/* ── 部署半边：进行中 / 上次运行 ── */}
+      {st?.job != null && (running || st.job.status === 'stale') && (
+        <div className="dp-block">
+          <div className="dp-block-head">
+            <span>{running ? '进行中' : '已中断'} · {st.job.phase ?? st.job.status}</span>
+            <span className="dp-dim">{duration(st.job.startedAt, st.job.endedAt)}</span>
+          </div>
+          {st.job.error && <div className="dp-error">{st.job.error}</div>}
+          {st.job.logTail && <pre className="dp-log">{st.job.logTail}</pre>}
         </div>
       )}
-      {st.server?.subject && (
-        <div className="au-row">
-          <span className="au-k">提交说明</span>
-          <span className="au-v">{st.server.subject}</span>
+
+      {st?.lastRun != null && !running && (
+        <div className="dp-block">
+          <div className="dp-block-head">
+            <span className={st.lastRun.ok ? 'dp-ok' : 'dp-bad'}>
+              上次{st.lastRun.ok ? '成功' : '失败'} · {short(st.lastRun.sha)}
+            </span>
+            <span className="dp-dim">{fmtTime(st.lastRun.endedAt)}</span>
+          </div>
+          {st.lastRun.error && <div className="dp-error">{st.lastRun.error}</div>}
         </div>
       )}
-      {st.result === 'update' && st.server?.sha && (
-        <div className="au-update-box" data-testid="au-update-box">
-          <span>有新版本可用（{shortSha(mine ?? '')} → {shortSha(st.server.sha)}）</span>
-          <button className="au-btn" onClick={reload}>立即更新</button>
-        </div>
-      )}
-      {st.result === 'latest' && <div className="au-hint">已是最新版本。</div>}
-      {st.result === 'unavailable' && (
-        <div className="au-hint">服务器未提供版本信息（dev 环境或部署未写版本文件）。</div>
-      )}
+
+      {/* ── 更新半边：手动检查 ── */}
       <button
         className="au-btn au-btn-check"
-        disabled={st.checking}
+        disabled={us.checking}
         onClick={() => void check()}
         data-testid="au-check-btn"
       >
-        {st.checking ? '检查中…' : '检查更新'}
+        {us.checking ? '检查中…' : '检查更新'}
       </button>
-      {st.lastCheck != null && <div className="au-hint">上次检查：{fmtAgo(st.lastCheck)}</div>}
-      <div className="au-hint">安装到手机的 App 没有刷新入口：更新提示出现在对话空闲时（流式回复中不打扰）；也可以随时在这里手动检查。</div>
+      <label className="au-toggle">
+        <input type="checkbox" checked={autoCheck} onChange={toggleAutoCheck} />
+        <span>后台自动检查（每 24h，弹更新提示）</span>
+      </label>
+
+      {!disabled && (
+        <div className="au-hint">
+          发布成功会自动重启 9826；本页会自动重连，刷新后即跑在新版本上。
+          发布目标固定为 origin/master；会 <b>reset --hard</b> 9826 的 clone（里面未提交的实验改动会被覆盖）。
+        </div>
+      )}
+      <div className="au-hint">
+        安装到手机的 App 没有刷新入口：更新提示出现在对话空闲时（流式回复中不打扰）；也可以随时在这里手动检查。
+      </div>
     </div>
   );
 }
@@ -239,6 +497,7 @@ function startBackgroundWatcher(api: SlotHostApi): void {
 
   const checkOnce = async (): Promise<void> => {
     if (inFlight) return;
+    if (!autoCheckEnabled()) return; // 用户在面板里关掉了自动检查
     inFlight = true;
     try {
       const server = await fetchServerVersion();
@@ -287,13 +546,13 @@ function createUpdaterHandler(): CapabilityHandler {
 export const appUpdaterPlugin: LitePlugin = {
   manifest: {
     id: 'app-updater',
-    name: '应用更新',
-    version: '0.1.0',
+    name: '版本',
+    version: '0.2.0',
     capabilities: [],
     provides: ['cap.app.updater'],
     events: ['cap.ai.chat:event'],
     contributes: {
-      slots: [{ slot: 'panel', component: 'AppUpdaterPanel', order: 15, title: '更新' }],
+      slots: [{ slot: 'panel', component: 'VersionPanel', order: 15, title: '版本' }],
     },
   },
   setup(api: SlotHostApi) {

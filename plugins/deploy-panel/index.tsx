@@ -1,22 +1,17 @@
 /**
- * deploy-panel 插件：9826 分析实例的「一键部署」面板。
+ * deploy-panel 插件：9826 分析实例的「一键部署」。
  *
- * 为什么需要它：9826 代码在独立 clone，升级只能显式发布；而人在 9826 对话里让
- * AI 跑 deploy 会把当前会话所在进程重启掉。这个插件把发布变成「点一下 → 后台跑
- * → 回来通知」，面板本身不参与构建。
+ * 前端 panel 半边已并入 app-updater 的「版本」统一面板（VersionPanel：
+ * 版本链路图 + 状态机主按钮），本文件只保留：
+ * 1. server 半边（server.mjs，server-registry.mjs 单独登记）：status/run/ack
+ *    三端点 + detached worker —— 契约零改动；
+ * 2. 完成通知 watcher（setup 起的轮询）：9826 重启期间页面不在，所以不靠
+ *    「推」而靠「重启后拉」——发现 last-run 未确认就经 cap.ui.notify 补弹一次
+ *    并 ack。这样即便当时关了页面，下次打开也会收到。
  *
- * 三块职责：
- * 1. panel 槽「部署」：版本差距 / 进度 / 一键部署（Panel.tsx）；
- * 2. server 半边（server.mjs）：status / run / ack 三端点 + detached worker；
- * 3. 完成通知：9826 重启期间页面不在，所以不靠「推」而靠「重启后拉」——
- *    setup 起的 watcher 发现 last-run 未确认，就经 cap.ui.notify 补弹一次并 ack。
- *    这样即便当时关了页面，下次打开也会收到。
+ * 通知里带「刷新到新版本」的引导文案，与 app-updater 的更新闭环衔接。
  */
 import type { LitePlugin, SlotHostApi } from '@sdk';
-import { DeployPanel } from './Panel';
-import './panel.css';
-
-export { DeployPanel };
 
 const short = (sha?: string | null): string => (sha ? sha.slice(0, 7) : '—');
 
@@ -49,7 +44,7 @@ function startNoticeWatcher(api: SlotHostApi): void {
         action: 'notify',
         payload: {
           title: `9826 已更新到 ${short(notice.sha)}`,
-          body: '发布成功，本页刷新后即运行在新版本上。',
+          body: '发布成功；到「版本」面板刷新页面即可运行在新版本上。',
           level: 'success',
           dedupeKey: `deploy:${notice.id}`,
           source: 'deploy-panel',
@@ -78,13 +73,13 @@ export const deployPanelPlugin: LitePlugin = {
   manifest: {
     id: 'deploy-panel',
     name: '部署',
-    version: '0.1.0',
+    version: '0.2.0',
     capabilities: ['cap.ui.notify'],
     requires: ['cap.ui.notify'],
     provides: [],
     events: [],
     contributes: {
-      slots: [{ slot: 'panel', component: 'DeployPanel', order: 41, title: '部署' }],
+      slots: [], // 前端面板并入 app-updater「版本」Tab；本插件只剩 server 端点 + 通知 watcher
     },
   },
   setup(api: SlotHostApi) {

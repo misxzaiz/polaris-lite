@@ -107,3 +107,154 @@
   cursor: pointer;
   flex-shrink: 0;
 }
+
+/* ==========================================================================
+   以下为「版本」统一面板：链路图 + 部署半边样式（原 deploy-panel 的 dp- 样式并入）
+   门禁约束同上：不用 position:fixed、不碰宿主选择器，dp- 前缀命名空间照旧。
+   ========================================================================== */
+
+/* 版本链路图 */
+.au-chain {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0;
+}
+.au-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+}
+.au-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+.au-dot-ok { background: #6fbf73; box-shadow: 0 0 5px rgba(111, 191, 115, .5); }
+.au-dot-warn { background: #d9b46a; box-shadow: 0 0 5px rgba(217, 180, 106, .5); }
+.au-dot-err { background: #e0866d; box-shadow: 0 0 5px rgba(224, 134, 109, .5); }
+.au-node-info { flex: 1; min-width: 0; }
+.au-node-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.au-node-name { font-size: 12px; }
+.au-node-sha { font-size: 11px; color: var(--text-faint); }
+.au-node-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.au-branch { display: flex; gap: 8px; }
+.au-branch-line {
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border, #2e2e2e);
+  flex-shrink: 0;
+  margin-left: 3px;
+}
+.au-branch-body { flex: 1; min-width: 0; }
+.au-gap {
+  font-size: 11px;
+  color: #d9b46a;
+  padding: 1px 0 6px 2px;
+}
+.au-gap-ok { color: var(--text-faint); }
+
+/* 部署半边（原 dp- 样式） */
+.dp-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dp-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong, #3a3a3a);
+  background: var(--surface-2, #232323);
+  color: var(--text, #ddd);
+  cursor: pointer;
+}
+.dp-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.dp-btn-danger {
+  border-color: #b4543f;
+  color: #e0866d;
+}
+.dp-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-faint);
+}
+.dp-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #7a5b1e;
+  background: rgba(180, 140, 46, .12);
+  color: #d9b46a;
+}
+.dp-error {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #7a3a30;
+  background: rgba(180, 70, 50, .12);
+  color: #e0866d;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dp-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #2e2e2e);
+}
+.dp-block-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.dp-ok { color: #6fbf73; }
+.dp-bad { color: #e0866d; }
+.dp-dim { color: var(--text-faint); }
+.dp-log {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-1, #1a1a1a);
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 自动检查开关 */
+.au-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+  user-select: none;
+}
+.au-toggle input { cursor: pointer; }
