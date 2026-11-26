@@ -192,7 +192,8 @@ export class HostRuntime {
       t: (key) => translate(key),
       layout: {
         get isMobile() {
-          return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
+          // 2026-11-26 移动端修复：与 shellState NARROW_QUERY 对齐（宽度或触屏并集）
+          return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)').matches;
         },
         openDrawer: (which) => {
           setDrawer(which);

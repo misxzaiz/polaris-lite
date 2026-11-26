@@ -194,7 +194,7 @@ body.ws-dragging-tab { cursor: grabbing; }
 .ws-fallback-grid > .slot-stream { grid-area: stream; }
 .ws-fallback-grid > .slot-input { grid-area: input; }
 .ws-fallback-grid > .slot-panel { grid-area: panel; overflow-y: auto; }
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .ws-fallback-grid {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr) auto;
@@ -417,7 +417,7 @@ body.ws-dragging-tab { cursor: grabbing; }
 .shell-topbar { display: none; }
 .drawer-mask { display: none; }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   :root { font-size: 15px; }
   .shell-topbar {
     display: flex;
@@ -511,6 +511,8 @@ body.ws-dragging-tab { cursor: grabbing; }
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     box-shadow: none;
+    /* 2026-11-26 移动端修复：iOS 上抽屉内滚动到边界会带动整页橡皮筋 */
+    overscroll-behavior: contain;
   }
   .shell-sidebar.open { transform: translateX(0); box-shadow: 18px 0 60px rgba(0, 0, 0, 0.5); }
   .shell-panel {
@@ -526,6 +528,8 @@ body.ws-dragging-tab { cursor: grabbing; }
     padding-bottom: env(safe-area-inset-bottom, 0px);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    /* 2026-11-26 移动端修复：iOS 上抽屉内滚动到边界会带动整页橡皮筋 */
+    overscroll-behavior: contain;
   }
   .shell-panel.open { transform: translateX(0); box-shadow: -18px 0 60px rgba(0, 0, 0, 0.5); }
   /* 能力面板关闭栏（P0-3，WorkspaceTree 渲染）：sticky 吸顶，✕ 命中区 44px */

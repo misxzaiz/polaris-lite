@@ -195,7 +195,7 @@
    宿主此前用 position:fixed 的 bottom-sheet;插件 CSS 门禁禁止 fixed(会逃出窗格),
    窄屏改用 absolute 全宽下拉(贴 wrap 定位上下文,不溢出抽屉),行为差异:菜单贴
    tab 条下方而非屏幕底部——避开门禁红线,可访问性等价。 */
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .sc-menu {
     left: 0;
     right: 0;

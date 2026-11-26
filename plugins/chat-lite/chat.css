@@ -522,7 +522,7 @@
 .chat-stream::-webkit-scrollbar-track, .chat-sessions::-webkit-scrollbar-track { background: transparent; }
 .chat-stream::-webkit-scrollbar-thumb, .chat-sessions::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .chat-stream { padding: 22px 16px 18px; }
   .chat-conversation { gap: 24px; }
   .chat-msg { gap: 10px; }
@@ -1410,7 +1410,7 @@
 @keyframes msg-meta-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* ===== 手机端（≤768px）：触屏无 hover → 操作条常显图标化；编辑框占满行宽 ===== */
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .msg-actions { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
   .msg-meta { opacity: .75; font-size: 10.5px; }
   .msg-act { padding: 3px 7px; position: relative; }

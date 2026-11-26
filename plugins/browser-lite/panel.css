@@ -165,6 +165,10 @@
 }
 .bl-tab:hover .bl-tab-close { visibility: visible; }
 .bl-tab-close:hover { background: var(--bg-hover, #eee); color: var(--plite-danger, #c33); }
+/* 2026-11-26 移动端修复：触屏没有 hover，tab 关闭按钮必须常显（同 chat-lite ws-tab-close 纪律） */
+@media (hover: none) {
+  .bl-tab-close { visibility: visible; }
+}
 
 .bl-empty {
   padding: 12px;

@@ -432,7 +432,7 @@
 }
 .chat-attach-remove:hover { color: var(--plite-danger); border-color: var(--plite-danger); }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .chat-input-bar { padding: 8px 9px 7px; border-radius: 13px; }
   .chat-textarea { max-height: min(120px, 20dvh); min-height: 46px; font-size: 16px; }
   .chat-textarea::-webkit-resizer { display: none; }
@@ -792,7 +792,7 @@
 .wpb-crumb:last-child::after { content: ''; }
 .wpb-err { flex: 0 0 auto; padding: 4px 8px; color: var(--plite-danger); font-size: 10px; }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .chat-send.session-settings { margin-right: auto; max-width: 150px; height: 28px; font-size: 11.5px; }
   .chat-ws-pop { border-radius: 14px; }
   .wpb-row { padding: 7px 8px; }

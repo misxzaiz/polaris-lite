@@ -63,7 +63,13 @@ export function subscribeDrawer(fn: (d: LayoutDrawer) => void): () => void {
 
 // ---------- 断点 ----------
 
-const NARROW_QUERY = '(max-width: 768px)';
+// 2026-11-26 移动端修复：断点从「纯宽度」扩展为「宽度 或 触屏」。
+// 原因：手机横屏（如 844×390）宽度 > 768px，落入桌面多栏布局后 390px 高度根本不够用；
+// 反之触屏笔记本窄窗口按宽度命中触屏样式也不对。第二分支 (hover:none)(pointer:coarse)
+// 只在真触屏设备成立，与宽度分支并集后：窄窗口/手机横屏/触屏平板全部走移动形态。
+// 此字面量是全站视觉契约：与 narrowBridge.ts / stateBridge.ts / hostRuntime.ts 及
+// 全部 CSS @media 对齐，改动需同步（见 docs，CSS 侧为逗号并集写法）。
+const NARROW_QUERY = '(max-width: 768px), (hover: none) and (pointer: coarse)';
 
 function readNarrow(): boolean {
   if (typeof window === 'undefined') return false;

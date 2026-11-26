@@ -731,7 +731,7 @@ button.ma-model-chip.more:hover { border-color: var(--border-strong); background
 /* ===== 移动端档位（≤768px，宿主 root 15px；面板此前全是 px 小字，密度不适配触屏） =====
  * 原则：触控目标 ≥32px（chips/按钮/开关）、输入字号 ≥16px（iOS 聚焦缩放）、
  * 正文字号 ≥12.5px、间距整体 +1 档。桌面规则不变。 */
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .ma-item { padding: 14px; gap: 10px; }
   .ma-name { font-size: 15px; }
   .ma-badge { font-size: 12px; padding: 2px 8px; }

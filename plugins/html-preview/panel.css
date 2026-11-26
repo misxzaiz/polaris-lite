@@ -165,7 +165,7 @@
  *    改为顶部横向条带（单行滚动选应用），运行区占满全宽。
  * 3. 触控目标：按钮高度提到 32px（Apple HIG 44 的收敛版，卡片操作钮在
  *    顶栏内以 32px 为限）；操作钮常显由上面 hover:none 规则负责。 */
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   /* 抽屉 fixed inset:0 全高；.slot 是内容高容器撑不开 height:100%——
    * 显式取视口高减安全区（抽屉内容区的真实可用高） */
   .hp-panel {

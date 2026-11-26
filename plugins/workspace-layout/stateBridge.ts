@@ -58,7 +58,9 @@ export function setDrawer(d: Drawer): void {
 }
 
 // ---- 窄屏断点(与 shell-chrome/narrowBridge 同纪律) ----
-const NARROW_QUERY = '(max-width: 768px)';
+// 2026-11-26 移动端修复：与宿主 shellState 同步扩展为「宽度或触屏」并集
+// （手机横屏 >768px 也要走移动形态）。字面量与 shellState.ts 严格对齐。
+const NARROW_QUERY = '(max-width: 768px), (hover: none) and (pointer: coarse)';
 
 function readNarrow(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;

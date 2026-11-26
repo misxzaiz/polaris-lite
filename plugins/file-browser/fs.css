@@ -151,6 +151,11 @@
 .fb-node-ops { display: flex; gap: 3px; flex-shrink: 0; opacity: 0; transition: opacity var(--plite-dur) var(--plite-ease); }
 .fb-node:hover .fb-node-ops { opacity: 1; }
 .fb-node.is-workspace .fb-node-ops { opacity: 1; }
+/* 2026-11-26 移动端修复：触屏没有 hover，行内操作按钮必须常显，否则删除/置顶永远不可触达 */
+@media (hover: none) {
+  .fb-node-ops { opacity: 1; }
+  .fb-node-ops .fb-mini { min-height: 32px; padding: 5px 9px; }
+}
 
 .fb-roam-tag {
   font-size: 10px;

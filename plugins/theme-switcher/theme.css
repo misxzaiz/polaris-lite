@@ -48,7 +48,7 @@
 }
 .theme-option:focus-visible { outline: none; box-shadow: var(--plite-focus-ring); }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .theme-switcher { margin: 8px 10px 10px; }
   .theme-option { height: 34px; } /* 触摸目标 */
 }
