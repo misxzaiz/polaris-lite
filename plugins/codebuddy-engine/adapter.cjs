@@ -332,9 +332,13 @@ function runSession(params, reqId) {
   // Polaris 插件/内置 MCP 挂载：宿主 mcp_servers → 临时 JSON 文件 → --mcp-config
   // （claude 系 CLI 标准参数；strict-mcp-config 隔离用户全局 MCP 配置，只用本会话注入的）。
   // mcpFile 的清理在 spawn 成功后挂到 child close；spawn 失败路径同步删除。
+  // 关键：即使启用的 server 数为 0，也必须写一份空的 mcp-config 并带 --strict-mcp-config。
+  // 否则 CLI 会回落加载用户级 ~/.codebuddy/.mcp.json，把 Polaris 的桥接 server
+  // （polaris-browser / pocket-ledger 等）注入到 polaris-lite 会话里——跨实例串台，
+  // 表现为「在 9826 里记账却记到别处」。空配置 = 本实例没有 MCP，就一个都不要。
   const mcpServers = Array.isArray(params.mcp_servers) ? params.mcp_servers : [];
   let mcpFile = null;
-  if (mcpServers.length > 0) {
+  {
     mcpFile = path.join(os.tmpdir(), `cb-mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
     // engine-v1 mcp_servers 形态 {server_name, command, args, env?, cwd?} → claude mcp-config 形态
     // mcpServers.{name:{command,args,env?,cwd?}}（env/cwd 2026-11-25 补齐：带 key 的 server 需要）
