@@ -16,14 +16,13 @@
         "cap.ai.chat",
         "cap.ai.chat.interrupt",
         "cap.ai.engine",
-        "cap.agent.loop",
         "cap.meta",
         "cap.hook.bridge"
       ],
       "provides": [],
       "events": [
         "cap.ai.chat:event",
-        "cap.agent.loop:event",
+        "cap.ai.chat.runner:event",
         "user.prompt",
         "interactive.created",
         "interactive.answered",
@@ -98,37 +97,6 @@
         "tool-registered"
       ]
     },
-    "agent-loop": {
-      "capabilities": [
-        "cap.ai.chat",
-        "cap.ai.chat.interrupt",
-        "cap.tool.bash",
-        "cap.meta",
-        "cap.tool.fs",
-        "cap.interactive",
-        "cap.tool.render",
-        "cap.model.admin",
-        "cap.tool.ledger",
-        "cap.tool.browser",
-        "cap.tool.files-write",
-        "cap.tool.skill",
-        "cap.skill.appendix",
-        "cap.hook.bridge",
-        "cap.tool.mcp",
-        "cap.tool.mcp-ops",
-        "cap.market.tool",
-        "cap.tool.transcript",
-        "cap.tool.translate"
-      ],
-      "provides": [
-        "cap.agent.loop"
-      ],
-      "events": [
-        "cap.ai.chat:event",
-        "tool-registered",
-        "workspace-changed"
-      ]
-    },
     "file-browser": {
       "capabilities": [
         "cap.config"
@@ -146,7 +114,7 @@
       "capabilities": [],
       "provides": [],
       "events": [
-        "cap.agent.loop:event",
+        "cap.ai.chat.runner:event",
         "cap.ai.chat:event",
         "user.prompt"
       ]
@@ -386,13 +354,11 @@
         "cap.kv",
         "cap.ai.chat",
         "cap.ai.chat.interrupt",
-        "cap.model.admin",
-        "cap.agent.loop"
+        "cap.model.admin"
       ],
       "provides": [],
       "events": [
-        "cap.ai.chat:event",
-        "cap.agent.loop:event"
+        "cap.ai.chat:event"
       ]
     },
     "starter-suggestions": {
@@ -406,7 +372,8 @@
       "events": [
         "tool-registered",
         "suggestions-changed",
-        "cap.ai.chat:event"
+        "cap.ai.chat:event",
+        "cap.ai.chat.runner:event"
       ]
     },
     "translate": {

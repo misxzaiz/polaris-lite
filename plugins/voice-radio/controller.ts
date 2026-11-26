@@ -548,16 +548,16 @@ export class RadioController {
   }
 
   /**
-   * 执行一次段生成。toolsMode=on 走 cap.agent.loop（AI 可先调工具查证再出稿），
-   * off 走 cap.ai.chat 直连。每段独立 sessionId 隔离；事件按 sessionId+messageId 防串台。
-   * 下降沿：message.done / loop.done / stream.error → 清洗入队。
+   * 执行一次段生成。toolsMode=on 走服务端 runner（AI 可先调工具查证再出稿，
+   * 服务端为唯一执行者），off 走 cap.ai.chat 直连。每段独立 sessionId 隔离；
+   * 事件按 sessionId+messageId 防串台。下降沿：message.done/loop.done/stream.error → 清洗入队。
    */
   private runSegment(prompt: string, systemPrompt: string, kind: SegmentKind): void {
     const api = this.api;
     if (!api) return;
     const sessionId = shortId('radio-s');
     const messageId = shortId('radio-m');
-    const useLoop = this.toolsMode;
+    const useRunner = this.toolsMode;
     let text = '';
     let settled = false;
     this.pendingSegment = true;
@@ -619,9 +619,7 @@ export class RadioController {
       this.afterSegmentFinished();
     };
 
-    const eventChannel = useLoop ? 'cap.agent.loop:event' : 'cap.ai.chat:event';
-    const off = api.listen(eventChannel, (raw) => {
-      const ev = (raw ?? {}) as ChatEventEnvelope;
+    const onEnvelope = (ev: ChatEventEnvelope): void => {
       const inner = (ev.payload ?? {}) as { sessionId?: string; messageId?: string; delta?: string; message?: string; interrupted?: boolean };
       // 防串台：只消费本段轮次的事件
       if (inner.sessionId && inner.sessionId !== sessionId) return;
@@ -629,36 +627,60 @@ export class RadioController {
       if (ev.kind === 'message.delta' && inner.delta) {
         text += inner.delta;
       } else if (ev.kind === 'message.reasoning' || ev.kind === 'tool.card' || ev.kind === 'tool.result') {
-        // 思考流/工具卡不进正文；工具卡事件由对话流自行渲染（电台字幕只显示正文）
+        // 思考流/工具卡不进正文（电台字幕只显示正文）
       } else if (ev.kind === 'loop.done' || ev.kind === 'message.done') {
-        if (inner.interrupted) {
-          settleFail('已中断');
-          return;
-        }
+        if (inner.interrupted) { settleFail('已中断'); return; }
         finishOk();
       } else if (ev.kind === 'stream.error') {
         settleFail(inner.message ?? '流式请求失败');
       }
-    });
-    this.offStream = off;
-
-    this.segmentCancel = () => {
-      void api.dispatch({
-        target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat.interrupt',
-        action: 'interrupt',
-        payload: { sessionId, messageId },
-      }).catch(() => undefined);
-      off();
     };
 
+    if (useRunner) {
+      // 工具查证模式：服务端 runner 为唯一执行者（POST start + SSE 订阅，断联不中断）。
+      let es: EventSource | null = null;
+      const cleanup = (): void => { try { es?.close(); } catch { /* */ } es = null; };
+      this.offStream = cleanup;
+      this.segmentCancel = () => {
+        cleanup();
+        void fetch('/api/agent/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sessionId }) }).catch(() => undefined);
+      };
+      void fetch('/api/agent/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({
+          sessionId, messageId, prompt,
+          history: [{ role: 'system', content: systemPrompt }],
+          ...(this.providerId ? { providerId: this.providerId } : {}),
+          ...(this.modelId ? { modelId: this.modelId } : {}),
+        }),
+      }).then(async (resp) => {
+        if (!resp.ok) { settleFail('播报请求未受理'); return; }
+        const data = (await resp.json().catch(() => null)) as { ok?: boolean; runId?: string } | null;
+        if (!data?.ok || !data.runId) { settleFail('播报请求未受理'); return; }
+        es = new EventSource(`/api/agent/events?runId=${encodeURIComponent(data.runId)}`);
+        es.addEventListener('agent', (raw) => {
+          try {
+            const d = JSON.parse((raw as MessageEvent).data) as { kind: string; payload?: Record<string, unknown> };
+            onEnvelope({ kind: d.kind, payload: d.payload, source: 'agent-runner' });
+          } catch { /* 非 JSON 忽略 */ }
+        });
+        es.addEventListener('run-ended', () => cleanup());
+      }).catch((e: unknown) => settleFail(e instanceof Error ? e.message : String(e)));
+      return;
+    }
+
+    const off = api.listen('cap.ai.chat:event', (raw) => onEnvelope((raw ?? {}) as ChatEventEnvelope));
+    this.offStream = off;
+    this.segmentCancel = () => {
+      void api.dispatch({ target: 'cap.ai.chat.interrupt', action: 'interrupt', payload: { sessionId, messageId } }).catch(() => undefined);
+      off();
+    };
     void api
       .dispatch({
-        target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
-        action: 'start',
+        target: 'cap.ai.chat', action: 'start',
         payload: {
-          sessionId,
-          messageId,
-          // 首条 system 消息带方向模板（+工具纪律附录）；real-engine/agent-loop 均支持 system role
+          sessionId, messageId,
+          // 首条 system 消息带方向模板（+工具纪律附录）；引擎支持 system role
           history: [{ role: 'system', content: systemPrompt }],
           prompt,
           ...(this.providerId ? { providerId: this.providerId } : {}),

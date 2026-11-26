@@ -25,12 +25,19 @@ aiEngine: {
   modelSource: 'app' | 'builtin' | 'hybrid' | 'none';
   models?: { id: string; label?: string }[];  // 静态目录；动态目录优先
   features?: {
-    supportsTools?: boolean;  // false 时消费方跳过 agent-loop / 服务端 runner
+    supportsTools?: boolean;  // true 时编排走服务端 agent-runner；false 走引擎直连
     slashSkills?: boolean;    // false 时不做 /slash 技能展开
   };
   default?: boolean;          // 未指定 engineId 时的默认引擎，至多一个
 }
 ```
+
+`features.supportsTools` 的分派语义（2026-11-26 后端编排化后）：
+
+- `true` → chat-lite 发消息优先走服务端 agent-runner（断联续跑：执行在服务端，
+  页面只订阅 SSE）；runner 拒发（并发满 / 引擎无服务端适配器 / 无可用模型）时
+  回落引擎直连通道，由引擎给出用户可见错误。
+- `false` → 直接走引擎直连（cap.ai.chat.<id>），不进服务端编排。
 
 `modelSource` 决定 UI 控件：
 
@@ -67,10 +74,39 @@ aiEngine: {
 契约只约束**入站 payload + 出站事件流**，不约束引擎内部如何产生事件：
 
 - `inproc`：直接实现 `StreamCapabilityHandler`（real / mock）。
-- `server-proxy`：引擎前端壳 fetch 自己 server 半边的私有端点、解析 SSE、emit 同构事件（codebuddy CLI）。
+- `server-proxy`：引擎前端壳 fetch 自己 server 半边的私有端点、解析 SSE、emit 同构事件（codebuddy CLI 的直连兜底通道）。
 - `external`：未来 MCP/A2A/CLI Agent 可只写 server 半边 + 通用前端代理，协议不进总线。
 
 SSE 读、重连、中断映射、usage 方言、tool_calls 聚合沉淀在 `engine-kit`，各引擎复用；消费方不得为某一家重写。
+
+### 5.1 服务端引擎适配器（agent-runner 执行域）
+
+`features.supportsTools: true` 的引擎还需在 server 半边注册**服务端适配器**，
+供 agent-runner 的编排循环调用（与前端 `cap.ai.chat.<id>` 分派对称）：
+
+```ts
+registry.registerEngine({
+  id: 'real' | 'codebuddy' | ...,
+  kind: 'chat' | 'agent',
+  default?: boolean,
+  systemHint?: string,            // runner 追加进 system prompt 的引擎提示（可选）
+  resolveModel(modelRef): { provider, activeModel } | null,
+  contextWindow(model): number,
+  runTurn({ model, messages, tools, signal, onDelta, onReasoning, onRetry })
+    → { text, toolCalls, finishReason, partialToolCalls, usage, lastUsage },
+  complete?({ model, system, user, maxTokens, signal })  // 压缩摘要用（chat 型）
+});
+```
+
+- `kind: 'chat'`（real）：runner 驱动每一步工具循环，`runTurn` 只跑一轮模型调用，
+  返回的 `toolCalls` 由 runner 审批/执行。
+- `kind: 'agent'`（codebuddy）：引擎自带工具循环，`runTurn` 内部跑完整轮
+  （spawn CLI 到收敛），返回的 `toolCalls` 带 `result` 字段（已在引擎内执行完），
+  runner 直接采用不再审批/派发；runner 对 agent 型引擎不注入宿主工具表
+  （工具语义由适配器的 `systemHint` 声明）。
+- `modelRef.option`（自带目录引擎的模型）随 start payload 透传给 `resolveModel`。
+- runner 零引擎知识：只按 `engineId` 查 `server/adapter-registry.mjs` 通用注册表；
+  `server/` 宿主仍不认识任何具体引擎 id。
 
 ## 6. 会话模型
 

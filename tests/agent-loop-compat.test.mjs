@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeToolCall } from '../plugins/agent-loop/tool-summary.ts';
+import { summarizeToolCall } from '../plugins/shared/tool-summary.ts';
 
 /** 与 plugins/agent-loop/index.ts discoverTools 内的归并规则保持一致（A1） */
 function mergeDescriptors(responses) {

@@ -110,9 +110,12 @@ export function createProdServer({ dist = resolve(process.cwd(), 'dist'), dataDi
 
 // 直接运行时才监听（被 import 时不副作用启动）。
 // 兼容 PM2 fork 容器：ProcessContainerFork.js 动态 import 本文件且不设 argv[1]，
-// 故以 process.env.PM2_HOME 判定「由 PM2 托管」时也视为需要监听（测试 import 不带该 env，不受影响）。
-const isMain = (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)))
-  || !!process.env.PM2_HOME;
+// 故以 process.env.PM2_HOME 判定「由 PM2 托管」时也视为需要监听。
+// 例外：node --test 的子进程会带 NODE_TEST_CONTEXT——即便在 PM2 托管 shell 里跑测试，
+// import 本文件也不得抢占端口（否则整份测试被环境变量毒化）。
+const inTest = !!process.env.NODE_TEST_CONTEXT;
+const isMain = !inTest && ((process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)))
+  || !!process.env.PM2_HOME);
 if (isMain) {
   const port = Number(process.env.PORT ?? 9825);
   // 进程级异常留痕（默认行为也是崩，这里只是把死因写进 stdout 日志便于排查——

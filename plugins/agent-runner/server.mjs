@@ -25,24 +25,25 @@
  *   在审批通过后携带，服务端二次校验语义不变）；
  * - 事件日志按 run 落盘，run 结束保留（UI 重放需要），由 GC 按 TTL 清理。
  */
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, renameSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, renameSync, readdirSync, rmSync, statSync, openSync, writeSync, closeSync } from 'node:fs';
+import { once } from 'node:events';
 import { resolve, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { Agent, fetch as undiciFetch } from 'undici';
 // 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
 // 零 DOM/零副作用：UsageAccumulator/estimateTokens/compactShadow 均可服务端复用。
 import { UsageAccumulator, estimateTokens, compactShadow } from '../shared/context-compact.ts';
 import { buildUsagePayload } from '../shared/usage.ts';
+import { summarizeToolCall } from '../shared/tool-summary.ts';
+// 工具适配器：工具在服务端执行域的「插件化声明」（descriptor + invoke），runner 按名查表派发。
+import { registerBuiltinTools } from './tool-adapters.mjs';
 // pocket-ledger 计算内核（纯 CJS vendor；与面板/MCP server 共用同一权威实现）。
+// 由本文件（server 半边）加载后注入适配器，避免 tool-adapters.mjs 依赖 node:*。
 const require = createRequire(import.meta.url);
 const ledgerCore = require('../pocket-ledger/ledger-core.cjs');
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const RUNS_DIR = 'agent-runs';
-/** 上游模型流超时（对齐 relay-core：推理模型长思考期间上游不发字节） */
-const UPSTREAM_TIMEOUT_MS = 30 * 60 * 1000;
-const upstreamAgent = new Agent({ headersTimeout: UPSTREAM_TIMEOUT_MS, bodyTimeout: UPSTREAM_TIMEOUT_MS });
 /** SSE 保活 ping 间隔 */
 const SSE_PING_MS = 15_000;
 /** 审批挂起超时（无人值守自动拒绝；对齐前端 agent-loop APPROVAL_TIMEOUT_MS） */
@@ -58,8 +59,12 @@ const RUN_LOG_MAX_BYTES = 32 * 1024 * 1024;
 const RUN_LOG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 并发 run 上限（单 owner 场景） */
 const MAX_CONCURRENT_RUNS = 3;
-/** 断流自动重试上限（对齐 real-engine MAX_STREAM_RETRIES） */
-const MAX_STREAM_RETRIES = 10;
+/** SSE delta 合批窗口（毫秒）：逐 token 不逐条 write/落盘，降事件循环压力 */
+const DELTA_FLUSH_MS = 16;
+/** sessionShadows 上限（LRU）：跨 run 只保留最近 N 个会话的 shadow，防常驻泄漏 */
+const MAX_SESSION_SHADOWS = 24;
+/** 单个 run buffer 上限（超出丢弃最旧——syncTurnToSession 只需未同步段） */
+const MAX_RUN_BUFFER = 4096;
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
@@ -67,9 +72,6 @@ export function createServerPart(options = {}) {
   const runsDir = resolve(dataDir, RUNS_DIR);
   const auditFile = resolve(dataDir, 'agent-runner-audit.log');
   const hardOff = process.env.PLITE_AGENT_RUNNER === '0';
-
-  // ---- 供应商存取（与 relay-core 同源：store.get 拿明文 key，不出服务端） ----
-  const providerStore = options.store;
 
   // ---- 系统级临时凭证（工具 server 半边的 Bearer 门禁；仅 loopback） ----
   // tempTokens 是「token → {expiresAt, owner}」Map（auth-session 注入），verifyTempToken
@@ -114,6 +116,9 @@ export function createServerPart(options = {}) {
   const runsBySession = new Map();
   /** sessionId → 上一 run 的 shadow（多轮会话跨 run 延续；进程内存态） */
   const sessionShadows = new Map();
+  /** `sessionId::assistantId` → 已结束 run 的可续写快照（「继续」按钮服务端恢复；LRU 上限） */
+  const resumableRuns = new Map();
+  const MAX_RESUMABLE_RUNS = 16;
 
   function runLogPath(runId) { return join(runsDir, `${runId}.events.jsonl`); }
   function runStatePath(runId) { return join(runsDir, `${runId}.state.json`); }
@@ -276,27 +281,87 @@ export function createServerPart(options = {}) {
     }], { mergeBlocks: true });
   }
 
-  /** 事件先落盘再扇出。返回全局递增 seq（=Last-Event-Id 续传游标）。 */
+  /** 单条 SSE 写出：respect 背压，write()===false 时排队到 drain，避免慢客户端在 Node 缓冲无界增长。 */
+  function writeFrame(res, frame) {
+    try {
+      if (res._agentPaused) {
+        (res._agentQueue ??= []).push(frame);
+        if (res._agentQueue.length > 2048) { res.destroy(); return; }
+        return;
+      }
+      if (res.write(frame) === false) {
+        res._agentPaused = true;
+        once(res, 'drain', () => {
+          res._agentPaused = false;
+          const q = res._agentQueue ?? [];
+          res._agentQueue = [];
+          for (const f of q) writeFrame(res, f);
+        });
+      }
+    } catch { /* 断开由 close 回收 */ }
+  }
+
+  /** 冲刷 delta 合批缓冲（保序：把待发的 delta 帧合并后一次性扇出）。 */
+  function flushFrames(run) {
+    if (run.frameTimer) { clearTimeout(run.frameTimer); run.frameTimer = null; }
+    const frames = run.pendingFrames;
+    if (!frames || frames.length === 0) return;
+    run.pendingFrames = [];
+    const combined = frames.join('');
+    for (const res of [...run.subs]) writeFrame(res, combined);
+  }
+
+  /** 事件先落盘再扇出。返回全局递增 seq（=Last-Event-Id 续传游标）。
+   *  性能：常开 fd 追加（去掉逐事件 statSync/open）、序列化只做一次；
+   *  message.delta/reasoning 按 ~16ms 合批扇出，非 delta 事件冲刷后即刻发出。 */
   function emitEvent(run, kind, payload) {
     run.seq += 1;
     const ev = { seq: run.seq, kind, payload, at: Date.now() };
     run.buffer.push(ev);
-    // 落盘（append-only JSONL；损坏不影响内存流）
+    // buffer 裁剪：只保留 > 已同步游标的事件 + 上限（syncTurnToSession 只吃未同步段）
+    if (run.buffer.length > MAX_RUN_BUFFER) {
+      const seen = run.syncedSeq ?? 0;
+      while (run.buffer.length > MAX_RUN_BUFFER && run.buffer[0] && run.buffer[0].seq <= seen) run.buffer.shift();
+      if (run.buffer.length > MAX_RUN_BUFFER) run.buffer.splice(0, run.buffer.length - MAX_RUN_BUFFER);
+    }
+    // 落盘：常开 fd + 内存 size 计数，去掉逐事件 statSync/open；单次序列化复用给 SSE
+    const data = JSON.stringify(ev);
     try {
-      mkdirSync(runsDir, { recursive: true });
-      const line = `${JSON.stringify(ev)}\n`;
-      const st = statSync(runLogPath(run.id), { throwIfNoEntry: false });
-      if (!st || st.size < RUN_LOG_MAX_BYTES) appendFileSync(runLogPath(run.id), line);
+      if (run.logFd == null) {
+        mkdirSync(runsDir, { recursive: true });
+        const p = runLogPath(run.id);
+        run.logFd = openSync(p, 'a');
+        const st = statSync(p, { throwIfNoEntry: false });
+        run.logSize = st?.size ?? 0;
+      }
+      const bytes = Buffer.byteLength(data) + 1; // +1 = '\n'
+      if (run.logSize + bytes <= RUN_LOG_MAX_BYTES) {
+        writeSync(run.logFd, `${data}\n`);
+        run.logSize += bytes;
+      }
     } catch { /* 日志失败不阻断执行 */ }
-    // 扇出给 SSE 订阅者
-    const frame = `id: ${ev.seq}\nevent: agent\ndata: ${JSON.stringify(ev)}\n\n`;
-    for (const res of [...run.subs]) {
-      try { res.write(frame); } catch { run.subs.delete(res); }
+    // 扇出：delta/reasoning 合批，其余先冲刷再发（保序）
+    const frame = `id: ${ev.seq}\nevent: agent\ndata: ${data}\n\n`;
+    if (kind === 'message.delta' || kind === 'message.reasoning') {
+      (run.pendingFrames ??= []).push(frame);
+      if (!run.frameTimer) run.frameTimer = setTimeout(() => flushFrames(run), DELTA_FLUSH_MS);
+    } else {
+      flushFrames(run);
+      for (const res of [...run.subs]) writeFrame(res, frame);
     }
     return ev;
   }
 
-  /** 读取 run 事件日志（重放用）；fromSeq 之后的返回 */
+  /** 续传重放：活跃 run 直接从内存 buffer 取（去掉整文件 read+parse）；buffer 已被裁到边界时回退磁盘。 */
+  function eventsForReplay(run, fromSeq) {
+    const buf = run.buffer;
+    if (buf.length > 0 && buf[0].seq <= fromSeq + 1) return buf.filter((e) => e.seq > fromSeq);
+    return readRunEvents(run.id, fromSeq);
+  }
+
+  /** 读取 run 事件日志（重放回退）；fromSeq 之后的返回。
+   *  增量读：行首即 `"seq":N`（emitEvent 序列化顺序固定），先用前缀轻解析跳过
+   *  已覆盖行——避免大日志重连时对每一行做完整 JSON.parse（O(N) parse → 只解析尾部）。 */
   function readRunEvents(runId, fromSeq = 0) {
     const file = runLogPath(runId);
     if (!existsSync(file)) return [];
@@ -304,7 +369,10 @@ export function createServerPart(options = {}) {
     try {
       const text = readFileSync(file, 'utf8');
       for (const line of text.split('\n')) {
-        if (!line.trim()) continue;
+        if (line.length < 12) continue;
+        // 轻量前缀判定：{"seq":N  的 N 与 fromSeq 比较，无需 parse 整行
+        const m = /^\{"seq":(\d+)/.exec(line);
+        if (m && Number(m[1]) <= fromSeq) continue;
         try {
           const ev = JSON.parse(line);
           if (ev.seq > fromSeq) out.push(ev);
@@ -315,123 +383,24 @@ export function createServerPart(options = {}) {
   }
 
   // ------------------------------------------------------------------
-  // 模型调用（服务端直连；与 relay-core 同款 undici + 超时 + 断流帧语义）
+  // 引擎调用（服务端）：runner 零引擎知识，只按 engineId 查通用注册表调用适配器。
+  // resolveModel / runTurn / complete / contextWindow 全在引擎插件的 server 半边。
   // ------------------------------------------------------------------
-  function resolveProvider(providerId, modelId) {
-    const list = providerStore?.list?.() ?? [];
-    let provider = providerId ? list.find((c) => c.id === providerId) : null;
-    if (!provider) provider = providerStore?.getActive?.() ?? null;
-    if (!provider || provider.enabled === false || !provider.apiKey) return null;
-    const activeModel = modelId && (provider.models ?? []).some((m) => m.id === modelId)
-      ? modelId
-      : (provider.activeModel || provider.models?.[0]?.id || '');
-    return { provider, activeModel };
+  const registry = options.registry;
+
+  // 注册内建工具适配器（descriptor + invoke 由适配器声明；runner 只查表派发）。
+  // 所有 helper 均为函数声明（提升），此处调用安全；重复注册由 registry fail-fast。
+  if (registry) {
+    registerBuiltinTools(registry, {
+      callToolEndpoint, fsGet, emitEvent, askInteractive,
+      readKvSync, writeKvSync, kvKeys,
+      selfPort: Number(process.env.PORT ?? 5000),
+      ledgerCore,
+    });
   }
 
-  function buildCapabilityParams(provider) {
-    const caps = (provider.models ?? []).find((m) => m.id === provider.activeModel)?.capabilities
-      ?? provider.models?.[0]?.capabilities;
-    const out = {};
-    out.max_tokens = caps && caps.maxOutputTokens > 0 ? caps.maxOutputTokens : 8192;
-    if (caps?.effort) out.reasoning_effort = caps.effort;
-    return out;
-  }
-
-  /**
-   * 引擎流一轮（服务端版 engineTurn）：调 relay 同款上游流式接口，聚合
-   * delta/reasoning/tool_calls，产出 { text, toolCalls, finishReason, partialToolCalls }。
-   * 断流自动续写（prefill）语义与 real-engine 对齐。
-   */
-  async function engineTurn(run, { messages, tools, onDelta, onReasoning, onRetry, signal }) {
-    const { provider, activeModel } = run.model;
-    let carriedText = '';
-    let wireUsage = null;
-    for (let attempt = 1; attempt <= MAX_STREAM_RETRIES; attempt += 1) {
-      const attemptMessages = carriedText ? [...messages, { role: 'assistant', content: carriedText }] : messages;
-      const body = {
-        model: activeModel,
-        stream: true,
-        messages: attemptMessages,
-        ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
-        ...buildCapabilityParams(provider),
-        stream_options: { include_usage: true },
-      };
-      const resp = await undiciFetch(`${provider.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-        body: JSON.stringify(body),
-        redirect: 'manual',
-        signal,
-        dispatcher: upstreamAgent,
-      });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        let msg = `HTTP ${resp.status}`;
-        try { const j = JSON.parse(text); msg = j.error?.message ?? j.message ?? j.error ?? msg; } catch { /* 保留状态描述 */ }
-        throw new Error(String(msg));
-      }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      const toolAcc = new Map();
-      let finishReason = '';
-      let sawDone = false;
-      let broke = false;
-      let attemptText = '';
-      let sawUsage = false;
-      pump: for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() ?? '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const data = trimmed.slice(5).trim();
-          if (!data) continue;
-          if (data === '[DONE]') { sawDone = true; continue; }
-          let json;
-          try { json = JSON.parse(data); } catch { continue; }
-          if (json?.error?.code === 'UPSTREAM_DISCONNECTED') { broke = true; break pump; }
-          if (json.usage && typeof json.usage === 'object') { wireUsage = json.usage; sawUsage = true; }
-          const choice = json.choices?.[0];
-          const reasoning = choice?.delta?.reasoning_content;
-          if (reasoning) onReasoning?.(reasoning);
-          const delta = choice?.delta?.content;
-          if (delta) { attemptText += delta; onDelta?.(delta); }
-          // tool_calls 分片聚合（OpenAI 规范 index 维度）
-          if (Array.isArray(choice?.delta?.tool_calls)) {
-            for (const tc of choice.delta.tool_calls) {
-              const idx = Number(tc?.index ?? 0);
-              const slot = toolAcc.get(idx) ?? { id: '', name: '', arguments: '' };
-              if (tc.id) slot.id = slot.id || String(tc.id);
-              if (tc.function?.name) slot.name += String(tc.function.name);
-              if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
-              toolAcc.set(idx, slot);
-            }
-          }
-          if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDone = true; }
-        }
-      }
-      if (!sawDone) broke = true;
-      if (!broke) {
-        const toolCalls = finishReason === 'tool_calls' && toolAcc.size > 0
-          ? [...toolAcc.entries()].sort(([a], [b]) => a - b).map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }))
-          : [];
-        const partialToolCalls = finishReason && finishReason !== 'tool_calls' ? toolAcc.size : 0;
-        run.lastUsage = wireUsage && sawUsage ? wireUsage : run.lastUsage;
-        return { text: attemptText, toolCalls, finishReason, partialToolCalls, usage: (wireUsage && sawUsage ? wireUsage : null) };
-      }
-      carriedText += attemptText;
-      if (attempt >= MAX_STREAM_RETRIES) {
-        throw new Error(`上游连接反复中断（已自动重试 ${MAX_STREAM_RETRIES} 次，共生成 ${carriedText.length} 字）`);
-      }
-      onRetry?.(attempt, MAX_STREAM_RETRIES);
-      await new Promise((r) => setTimeout(r, Math.min(500 * attempt, 4500)));
-      if (signal?.aborted) throw new Error('INTERRUPTED');
-    }
-    throw new Error('unreachable');
+  function engineTurn(run, args) {
+    return run.engine.runTurn({ model: run.model, ...args });
   }
 
   // ------------------------------------------------------------------
@@ -470,6 +439,12 @@ export function createServerPart(options = {}) {
     return { status: resp.status, ok: resp.ok, json };
   }
 
+  /** 服务端生命周期钩子（原 agent-loop 的 onSessionStart/PreToolUse/PostToolUse/onTurnEnd）。
+   *  走 hook-bridge 的 /api/hooks/*，系统 Bearer 与工具同通道；钩子失败不影响编排。 */
+  function fireHook(endpoint, body) {
+    void callToolEndpoint(`/api/hooks/${endpoint}`, body).catch(() => undefined);
+  }
+
   /** files 只读（GET /api/fs/list|read|roots） */
   async function fsGet(path, signal) {
     const headers = {};
@@ -481,279 +456,63 @@ export function createServerPart(options = {}) {
   }
 
   // ------------------------------------------------------------------
-  // ledger（记账）服务端实现：数据在 kv-store（cap.kv → /api/kv/*），
-  // 计算复用 pocket-ledger/ledger-core.cjs 单一权威内核（与面板/AI 旧通道同源）。
-  // ------------------------------------------------------------------
-  const LEDGER_NS = 'pocket-ledger';
-  const ledgerSettings = () => {
-    const s = readKvSync(LEDGER_NS, 'settings');
-    return { ...ledgerCore.DEFAULT_SETTINGS, ...(s && typeof s === 'object' ? s : {}) };
-  };
   // kv 读写直连 kv-store 的 sqlite（表 items，id=`${namespace}.${key}`，与插件同构）。
-  // 数据目录无库/表时按空处理（首次记账自动建）。
+  // 单例连接（P0：去掉每次 read/write 的 new Database + PRAGMA + close）。
+  // ledger 适配器复用这些 helper；ledger-core.cjs 仍是计算单一权威。
+  // ------------------------------------------------------------------
+  let _kvDb = null;
   function kvDb() {
+    if (_kvDb) return _kvDb;
     const dbFile = resolve(dataDir, 'stores', 'kv-store.db');
     mkdirSync(resolve(dataDir, 'stores'), { recursive: true });
     const Database = require('node:sqlite').DatabaseSync;
-    const db = new Database(dbFile);
-    db.exec('PRAGMA journal_mode = WAL;');
-    db.exec('CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)');
-    return db;
+    _kvDb = new Database(dbFile);
+    _kvDb.exec('PRAGMA journal_mode = WAL;');
+    _kvDb.exec('CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    return _kvDb;
   }
   function readKvSync(ns, key) {
     try {
-      const db = kvDb();
-      const row = db.prepare('SELECT data FROM items WHERE id = ?').get(`${ns}.${key}`);
-      db.close();
+      const row = kvDb().prepare('SELECT data FROM items WHERE id = ?').get(`${ns}.${key}`);
       return row ? JSON.parse(row.data) : null;
     } catch { return null; }
   }
   function writeKvSync(ns, key, value) {
     try {
-      const db = kvDb();
-      db.prepare('INSERT INTO items (id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+      kvDb().prepare('INSERT INTO items (id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
         .run(`${ns}.${key}`, JSON.stringify(value ?? null), Date.now());
-      db.close();
     } catch { /* 写失败按业务错误返回 */ }
   }
-  function ledgerDayKeys() {
+  /** 返回匹配前缀的 key（去掉 `ns.` 前缀），供 ledger 适配器枚举账目。 */
+  function kvKeys(ns, prefix) {
     const keys = [];
     try {
-      const db = kvDb();
-      const rows = db.prepare('SELECT id FROM items WHERE id LIKE ?').all(`${LEDGER_NS}.ledger.day.%`);
-      db.close();
-      for (const r of rows) keys.push(String(r.id).slice(`${LEDGER_NS}.`.length));
+      const rows = kvDb().prepare('SELECT id FROM items WHERE id LIKE ?').all(`${ns}.${prefix}%`);
+      for (const r of rows) keys.push(String(r.id).slice(`${ns}.`.length));
     } catch { /* 忽略 */ }
     return keys.sort();
   }
 
-  async function execLedger(run, args, signal) {
-    const settings = ledgerSettings();
-    const valid = [...new Set([...(settings.categories ?? []), ...(settings.incomeCategories ?? [])])];
-    const action = String(args.action ?? '');
-    if (action === 'add') {
-      let ts;
-      if (Number(args.ts) > 0) ts = Number(args.ts);
-      else {
-        const resolved = ledgerCore.resolveBillTime({ date: args.date, time: args.time, timeOfDay: args.timeOfDay, hint: args.note }, Date.now());
-        if (resolved.error) return { ok: false, error: resolved.error };
-        ts = resolved.ts;
-      }
-      const norm = ledgerCore.normalizeBill({ amount: Number(args.amount), type: args.type === 'income' ? 'income' : 'expense', category: args.category, note: args.note, ts, source: 'ai' }, valid);
-      if (norm.error || !norm.bill) return { ok: false, error: norm.error ?? '账单不合法' };
-      const bill = norm.bill;
-      const dk = ledgerCore.K.day(ledgerCore.dayKeyOf(bill.ts));
-      const existing = readKvSync(LEDGER_NS, dk) ?? [];
-      const merged = ledgerCore.appendBills(Array.isArray(existing) ? existing : [], [bill]);
-      writeKvSync(LEDGER_NS, dk, merged);
-      return { ok: true, stdout: JSON.stringify({ ok: true, bill, total: merged.length }) };
-    }
-    if (action === 'query' || action === 'stats') {
-      const month = args.month === 'last' ? ledgerCore.shiftMonth(ledgerCore.currentMonth(), -1)
-        : args.month && args.month !== 'this' ? String(args.month) : ledgerCore.currentMonth();
-      const prefix = `ledger.day.${month}-`;
-      let bills = [];
-      for (const dk of ledgerDayKeys()) {
-        if (!dk.startsWith(prefix)) continue;
-        const arr = readKvSync(LEDGER_NS, dk);
-        if (Array.isArray(arr)) bills.push(...arr);
-      }
-      bills = ledgerCore.filterBills(bills, { category: args.category, type: args.type === 'income' ? 'income' : args.type === 'expense' ? 'expense' : undefined, keyword: args.keyword });
-      if (action === 'stats') {
-        const stats = ledgerCore.computeStats(bills, settings, month);
-        const hint = ledgerCore.budgetHint(stats);
-        return { ok: true, stdout: JSON.stringify({ month, stats, ...(hint ? { hint } : {}) }).slice(0, FEEDBACK_CAP) };
-      }
-      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100);
-      const slim = bills.slice(-limit).reverse().map((b) => ({ id: b.id, amount: b.amount, type: b.type, category: b.category, note: b.note, time: new Date(b.ts).toLocaleString('zh-CN', { hour12: false }) }));
-      return { ok: true, stdout: JSON.stringify({ month, count: bills.length, bills: slim }).slice(0, FEEDBACK_CAP) };
-    }
-    if (action === 'delete' || action === 'update') {
-      const id = String(args.id ?? '');
-      if (!id) return { ok: false, error: 'id required（先用 query 拿 id）' };
-      for (const dk of ledgerDayKeys()) {
-        const arr = readKvSync(LEDGER_NS, dk);
-        if (!Array.isArray(arr)) continue;
-        if (action === 'delete') {
-          const { arr: next, removed } = ledgerCore.removeBill(arr, id);
-          if (removed) { writeKvSync(LEDGER_NS, dk, next); return { ok: true, stdout: JSON.stringify({ ok: true, deleted: id }) }; }
-        } else {
-          const patch = args.patch ?? {};
-          let ts;
-          if (patch.date !== undefined || patch.time !== undefined || patch.timeOfDay !== undefined) {
-            const resolved = ledgerCore.resolveBillTime({ date: patch.date, time: patch.time, timeOfDay: patch.timeOfDay, hint: patch.note }, Date.now());
-            if (!resolved.error) ts = resolved.ts;
-          }
-          const next = { ...args };
-          const { arr: updated, found, bill } = ledgerCore.updateBill(arr, id, { amount: patch.amount !== undefined ? Number(patch.amount) : undefined, category: patch.category, note: patch.note, type: patch.type, ts });
-          if (found) { writeKvSync(LEDGER_NS, dk, updated); return { ok: true, stdout: JSON.stringify({ ok: true, bill }) }; }
-        }
-      }
-      return action === 'delete'
-        ? { ok: false, error: `未找到账单 ${id}（先用 query 拿 id）` }
-        : { ok: false, error: `未找到账单 ${id}（先用 query 拿 id）` };
-    }
-    if (action === 'categories') {
-      const op = String(args.op ?? 'list');
-      if (op === 'list') return { ok: true, stdout: JSON.stringify({ categories: settings.categories, incomeCategories: settings.incomeCategories, budgets: settings.budgets }).slice(0, FEEDBACK_CAP) };
-      if (op === 'add') {
-        const name = String(args.name ?? '').trim();
-        const kind = args.kind === 'income' ? 'incomeCategories' : 'categories';
-        if (!name) return { ok: false, error: 'name required' };
-        if (settings[kind].includes(name)) return { ok: true, stdout: JSON.stringify({ ok: true, already: true }) };
-        settings[kind].push(name);
-        writeKvSync(LEDGER_NS, 'settings', settings);
-        return { ok: true, stdout: JSON.stringify({ ok: true, categories: settings[kind] }) };
-      }
-      if (op === 'remove') {
-        const name = String(args.name ?? '').trim();
-        const kind = args.kind === 'income' ? 'incomeCategories' : 'categories';
-        settings[kind] = (settings[kind] ?? []).filter((c) => c !== name);
-        delete settings.budgets[name];
-        writeKvSync(LEDGER_NS, 'settings', settings);
-        return { ok: true, stdout: JSON.stringify({ ok: true, removed: true }) };
-      }
-      return { ok: false, error: `unknown op: ${op}` };
-    }
-    return { ok: false, error: `unknown action: ${action}（可用：add/query/stats/delete/update/categories）` };
-  }
-
-  /** 执行单个工具调用（按工具家族分发；返回 {feedback, status, stdout, stderr, exitCode}） */
+  /**
+   * 执行单个工具调用：按工具名查通用注册表（适配器由工具插件注册），runner 零工具知识。
+   * 返回 { ok, stdout, stderr, exitCode, durationMs, truncated, denied }。
+   */
   async function execTool(run, call, signal) {
-    const args = parseArgs(call.arguments);
     const name = call.name;
-    const sessionId = run.sessionId;
-    const base = { sessionId, approved: true };
+    const args = parseArgs(call.arguments);
+    const adapter = registry?.getTool?.(name);
+    if (!adapter) return { ok: false, stdout: '', stderr: `工具 ${name} 未注册` };
     try {
-      if (name === 'bash') {
-        const r = await callToolEndpoint('/api/tool/exec', { ...base, command: String(args.command ?? ''), timeoutMs: args.timeoutMs ? Number(args.timeoutMs) : undefined, cwd: run.execCwd }, signal);
-        const j = r.json ?? {};
-        return { ok: !!j.ok || r.ok, exitCode: j.exitCode, stdout: j.stdout ?? '', stderr: j.stderr ?? j.error ?? '', durationMs: j.durationMs, truncated: j.truncated, denied: j.denied };
-      }
-      if (name === 'files_write') {
-        const payload = { ...args, ...(args.rootId ? {} : { rootId: run.boundRootId }), ...base };
-        const r = await callToolEndpoint('/api/files-write/exec', payload, signal);
-        const j = r.json ?? {};
-        return { ok: r.ok && j.ok !== false, exitCode: j.exitCode ?? (r.ok ? 0 : 1), stdout: j.stdout ?? JSON.stringify(j).slice(0, 2000), stderr: j.error ?? '', durationMs: j.durationMs, denied: j.denied };
-      }
-      if (name === 'files') {
-        const action = String(args.action ?? '');
-        if (action === 'roots') {
-          const r = await fsGet('/api/fs/roots', signal);
-          const roots = r.json?.roots ?? [];
-          const summary = roots.length ? `roots=${roots.length}: ${roots.map((x) => `${x.label}（id=${x.id}, path=${x.path}${x.builtin ? ', builtin' : ''}）`).join('; ')}` : '（无登记根）';
-          return { ok: r.ok, stdout: `[files 完成] ${summary}`, stderr: r.ok ? '' : `HTTP ${r.status}` };
-        }
-        if (action === 'list') {
-          let rootId = args.rootId ?? run.boundRootId;
-          if (!rootId) {
-            const rr = await fsGet('/api/fs/roots', signal);
-            const builtin = (rr.json?.roots ?? []).find((x) => x.builtin) ?? rr.json?.roots?.[0];
-            rootId = builtin?.id;
-          }
-          if (!rootId) return { ok: false, stdout: '', stderr: 'rootId required（且无可用默认根）' };
-          const q = new URLSearchParams({ rootId, path: String(args.path ?? '') });
-          const r = await fsGet(`/api/fs/list?${q}`, signal);
-          const j = r.json ?? {};
-          const summary = r.ok ? `list ok（${(j.entries ?? []).length} 项，rootId=${rootId}，path=${args.path ?? ''}）` : `list 失败：${j.error ?? `HTTP ${r.status}`}`;
-          return { ok: r.ok, stdout: r.ok ? `[files 完成] ${summary}` : '', stderr: r.ok ? '' : `[files 工具执行失败] ${summary}` };
-        }
-        if (action === 'read') {
-          let rootId = args.rootId ?? run.boundRootId;
-          if (!rootId) {
-            const rr = await fsGet('/api/fs/roots', signal);
-            const builtin = (rr.json?.roots ?? []).find((x) => x.builtin) ?? rr.json?.roots?.[0];
-            rootId = builtin?.id;
-          }
-          if (!rootId) return { ok: false, stdout: '', stderr: 'rootId required（且无可用默认根）' };
-          const q = new URLSearchParams({ rootId, path: String(args.path ?? '') });
-          if (args.head) q.set('head', String(args.head));
-          if (args.tail) q.set('tail', String(args.tail));
-          const r = await fsGet(`/api/fs/read?${q}`, signal);
-          const j = r.json ?? {};
-          if (!r.ok) return { ok: false, stdout: '', stderr: `[files 工具执行失败] read 失败：${j.error ?? `HTTP ${r.status}`}` };
-          if (j.tooLarge) return { ok: false, stdout: '', stderr: `[files 工具执行失败] ${j.hint ?? '文件过大'}` };
-          if (j.isText === false) return { ok: false, stdout: '', stderr: '[files 工具执行失败] 二进制文件不支持文本读取' };
-          return { ok: true, stdout: `[files 完成] read ok（${j.size ?? '?'}B，path=${args.path ?? ''}）：\n${capText(String(j.text ?? ''), 2000)}`, stderr: '' };
-        }
-        return { ok: false, stdout: '', stderr: `unknown fs action: ${action}（可用：roots/list/read）` };
-      }
-      if (name === 'render') {
-        const r = await callToolEndpoint('/api/preview/render', { html: args.html, title: args.title, basePreviewId: args.basePreviewId, sessionId }, signal);
-        const j = r.json ?? {};
-        const ok = r.ok && j.ok !== false;
-        const feedback = ok
-          ? `[预览已生成] previewId=${j.previewId} 版本=${j.versionLabel ?? '?'} 标题=${j.title ?? '?'}。用户可在对话卡片与「预览」面板中查看运行。`
-          : `[预览生成失败] ${j.error ?? `HTTP ${r.status}`}`;
-        // 通用产物事件（对齐 html-preview 前端半边 emit 的 artifact.created）：
-        // chat-lite 据此在对话里落 artifact 块（rendererType=html-preview → PreviewCard）。
-        // callId 用工具调用 callId——artifact 归位到本工具卡之后（而非沉到消息尾）。
-        if (ok) {
-          emitEvent(run, 'artifact.created', {
-            sessionId: run.sessionId,
-            messageId: run.assistantId,
-            callId: call.id,
-            rendererType: 'html-preview',
-            title: String(j.title ?? args.title ?? '交互面板'),
-            data: { previewId: j.previewId, url: j.url, versionLabel: j.versionLabel },
-          });
-        }
-        return { ok, stdout: ok ? feedback : '', stderr: ok ? '' : feedback };
-      }
-      if (name === 'browser') {
-        const r = await callToolEndpoint('/api/browser/dispatch', { ...args, sessionId, callId: call.id }, signal);
-        const j = r.json ?? {};
-        const ok = r.ok && (j.ok !== false);
-        const feedback = ok ? `[浏览器操作完成] ${JSON.stringify(j).slice(0, FEEDBACK_CAP)}` : `[浏览器操作失败] ${j.error ?? `HTTP ${r.status}`}`;
-        return { ok, stdout: ok ? feedback : '', stderr: ok ? '' : feedback };
-      }
-      if (name === 'read_skill') {
-        const r = await fsGet(`/api/skills/read?name=${encodeURIComponent(String(args.name ?? ''))}`, signal);
-        const j = r.json ?? {};
-        const ok = r.ok && j.ok !== false;
-        return { ok, stdout: ok ? (j.content ?? '') : '', stderr: ok ? '' : (j.error ?? `HTTP ${r.status}`) };
-      }
-      if (name.startsWith('mcp_')) {
-        // MCP 管理三连（mcp_server_add/remove/list）与 MCP 工具调用都走 /api/mcp/*
-        if (name === 'mcp_server_list') {
-          const r = await fsGet('/api/mcp/servers', signal);
-          return { ok: r.ok, stdout: JSON.stringify(r.json ?? {}).slice(0, FEEDBACK_CAP), stderr: r.ok ? '' : `HTTP ${r.status}` };
-        }
-        if (name === 'mcp_server_add' || name === 'mcp_server_remove') {
-          const r = await callToolEndpoint(name === 'mcp_server_add' ? '/api/mcp/servers' : '/api/mcp/servers/remove', args, signal);
-          return { ok: r.ok, stdout: JSON.stringify(r.json ?? {}).slice(0, FEEDBACK_CAP), stderr: r.ok ? '' : `HTTP ${r.status}` };
-        }
-        // MCP 聚合工具：/api/mcp/call {name, arguments}
-        const r = await callToolEndpoint('/api/mcp/call', { name, arguments: args }, signal);
-        const j = r.json ?? {};
-        const ok = r.ok && j.ok !== false;
-        return { ok, stdout: ok ? String(j.stdout ?? JSON.stringify(j).slice(0, FEEDBACK_CAP)) : '', stderr: ok ? '' : String(j.error ?? `HTTP ${r.status}`) };
-      }
-      if (name === 'ledger') {
-        const r = await execLedger(run, args, signal);
-        return { ok: !!r.ok, stdout: r.stdout, stderr: r.ok ? '' : (r.error ?? 'ledger 执行失败') };
-      }
-      if (name === 'translate') {
-        const text = String(args.text ?? '').trim();
-        if (!text) return { ok: false, stdout: '', stderr: 'text 不能为空' };
-        const to = args.to ? String(args.to) : (/[一-鿿]/.test(text) ? 'en' : 'zh');
-        const r = await callToolEndpoint('/api/translate/translate', { text, to }, signal);
-        const j = r.json ?? {};
-        const ok = r.ok && j.ok !== false;
-        return { ok, stdout: ok ? String(j.text ?? j.translated ?? JSON.stringify(j).slice(0, 2000)) : '', stderr: ok ? '' : String(j.error ?? `HTTP ${r.status}`) };
-      }
-      if (name === 'interactive') {
-        // 交互卡：服务端不持 UI——把交互需求作为事件广播，等待任一设备回填。
-        const decision = await askInteractive(run, call, args, signal);
-        return { ok: true, stdout: decision, stderr: '' };
-      }
-      // 未知工具
-      return { ok: false, stdout: '', stderr: `工具 ${name} 未注册` };
+      return await adapter.invoke({
+        name, args, run, call, signal,
+        capText,
+      });
     } catch (err) {
       if (signal?.aborted) throw new Error('INTERRUPTED');
       return { ok: false, stdout: '', stderr: err instanceof Error ? err.message : String(err) };
     }
   }
+
 
   // ------------------------------------------------------------------
   // 审批（服务端挂起；任意在线设备回填，先到先得；120s 超时自动拒绝）
@@ -800,52 +559,19 @@ export function createServerPart(options = {}) {
   // ------------------------------------------------------------------
   // 上下文压缩（服务端版；对齐前端 agent-loop §5.2 语义）
   // ------------------------------------------------------------------
-  const DEFAULT_CONTEXT_WINDOW = 200_000;
 
-  /** 窗口解析：优先 start payload 显式窗口 → 供应商能力表 maxInputTokens → 默认 200k */
+  /** 窗口解析：优先 start payload 显式窗口 → 引擎适配器 contextWindow → 默认 */
   function resolveCtxWindow(run) {
     if (run.ctxWindow > 0) return run.ctxWindow;
-    try {
-      const caps = run.model?.provider?.models?.find((m) => m.id === run.model.activeModel)?.capabilities
-        ?? run.model?.provider?.models?.[0]?.capabilities;
-      const win = Number(caps?.maxInputTokens ?? 0);
-      if (Number.isFinite(win) && win > 0) { run.ctxWindow = win; return win; }
-    } catch { /* 能力表缺失：回默认 */ }
-    run.ctxWindow = DEFAULT_CONTEXT_WINDOW;
-    return DEFAULT_CONTEXT_WINDOW;
+    const win = Number(run.engine?.contextWindow?.(run.model) ?? 0);
+    if (Number.isFinite(win) && win > 0) { run.ctxWindow = win; return win; }
+    run.ctxWindow = 200_000;
+    return 200_000;
   }
 
-  /** 非流式补全（压缩摘要专用；走同款上游、key 在服务端、显式 max_tokens、不进 shadow） */
-  async function compactComplete(run, { system, user, maxTokens }) {
-    const { provider, activeModel } = run.model;
-    const body = {
-      model: activeModel,
-      stream: false,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      max_tokens: maxTokens,
-    };
-    const resp = await undiciFetch(`${provider.baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify(body),
-      dispatcher: upstreamAgent,
-    });
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      throw new Error(`compact HTTP ${resp.status}: ${text.slice(0, 160)}`);
-    }
-    const json = await resp.json().catch(() => null);
-    const choice = json?.choices?.[0];
-    let text = '';
-    const content = choice?.message?.content;
-    if (typeof content === 'string') text = content;
-    else if (Array.isArray(content)) text = content.map((p) => p?.text ?? '').join('');
-    const truncated = choice?.finish_reason === 'length'
-      || (!text.trim() && (choice?.message?.reasoning !== undefined || choice?.message?.reasoning_content !== undefined));
-    return { text, truncated };
+  /** 非流式补全（压缩摘要专用）：委托引擎适配器 complete，runner 不认识上游协议。 */
+  function compactComplete(run, req) {
+    return run.engine.complete({ model: run.model, ...req });
   }
 
   /**
@@ -901,10 +627,11 @@ export function createServerPart(options = {}) {
   async function runLoop(run) {
     const { sessionId, assistantId } = run;
     const signal = run.controller.signal;
+    let turn = 0; // try 块外声明：catch/finally 的 syncTurnToSession 也要引用
     try {
+      fireHook('session-start', { sessionId });
       // 工具表：start 时已装配 run.toolDefs（静态表 + MCP 聚合补入）；此处兜底重建
       const toolDefs = run.toolDefs?.length ? run.toolDefs : buildServerToolDefs(run);
-      let turn = 0;
       let totalToolCalls = 0;
       const toolFailStreak = new Map();
       let toolOnlyStreak = 0;
@@ -995,25 +722,67 @@ export function createServerPart(options = {}) {
         });
 
         // 逐个执行：审批 → 工具直调 → 结果卡 + shadow
-        for (const call of result.toolCalls) {
+        // 性能（P2）：无依赖工具并行执行。分两类处理：
+        //  - 「已执行」（agent 型引擎带回 result）与 noApproval 工具：互不依赖，
+        //    Promise.all 并行跑，多工具延迟从累加变取最大；
+        //  - 需审批的工具：逐个挂起（审批语义要求按序裁决），通过后立即执行。
+        // 事件与 shadow 仍按 tool_calls 原始顺序落（收集后按序回放），协议成对不变。
+        const prepared = result.toolCalls.map((call, i) => {
           totalToolCalls += 1;
           const callId = call.id || `call-${turn}-${totalToolCalls}`;
           const display = summarizeCall(call);
           emitEvent(run, 'tool.card', { sessionId, messageId: assistantId, callId, name: call.name, command: display, argsJson: call.arguments });
+          const adapter = registry?.getTool?.(call.name);
+          return {
+            idx: i, call, callId, display, adapter,
+            preExecuted: call.result !== undefined,
+            freePass: call.result !== undefined || !!adapter?.noApproval,
+          };
+        });
 
-          // 交互卡：不走审批（问用户本身就是审批）
-          if (call.name === 'interactive') {
-            const r = await execTool(run, call, signal);
-            emitEvent(run, 'tool.result', { sessionId, messageId: assistantId, callId, status: r.ok ? 'done' : 'error', command: display, stdout: r.stdout, stderr: r.stderr });
-            run.shadow.push({ role: 'tool', content: r.ok ? r.stdout : `[交互卡失败] ${r.stderr}`, tool_call_id: call.id, name: call.name });
-            continue;
+        // 并行段：已执行 + 免审批工具同时跑（各事件先收集，回放段按序落）
+        const parallel = prepared.filter((p) => p.freePass);
+        const parallelResults = await Promise.all(parallel.map(async (p) => {
+          const { call, callId, display } = p;
+          if (p.preExecuted) {
+            const okExec = call.success !== false;
+            return {
+              idx: p.idx, ok: okExec, denied: false, exitCode: undefined, durationMs: undefined,
+              resultEvent: { sessionId, messageId: assistantId, callId, status: okExec ? 'done' : 'error', command: display, stdout: capText(String(call.result ?? '')) },
+              feedback: okExec
+                ? `[${call.name} 执行完成]\nSTDOUT:\n${capText(String(call.result ?? '') || '(空)')}`
+                : `[工具执行失败] ${capText(String(call.result ?? ''))}`,
+              hookInput: parseArgs(call.arguments), hookFire: false,
+            };
           }
+          const toolInput = parseArgs(call.arguments);
+          fireHook('pre-tool-use', { sessionId, toolName: call.name, toolInput });
+          const r = await execTool(run, call, signal);
+          return {
+            idx: p.idx, ok: r.ok, denied: !!r.denied, exitCode: r.exitCode, durationMs: r.durationMs,
+            resultEvent: { sessionId, messageId: assistantId, callId, status: r.ok ? 'done' : 'error', command: display, stdout: r.stdout, stderr: r.stderr },
+            feedback: r.ok ? r.stdout : `[工具失败] ${r.stderr}`,
+            hookInput: toolInput, hookFire: true,
+          };
+        }));
+        for (const pr of parallelResults) {
+          const { call, callId } = prepared[pr.idx];
+          if (pr.hookFire) fireHook('post-tool-use', { sessionId, toolName: call.name, toolInput: pr.hookInput, success: pr.ok });
+          emitEvent(run, 'tool.result', pr.resultEvent);
+          run.shadow.push({ role: 'tool', content: pr.feedback, tool_call_id: call.id, name: call.name });
+        }
+        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
 
+        // 串行段：需审批的工具逐个挂起（先到先得；shadow 按调用顺序续接并行段之后）
+        for (const p of prepared.filter((x) => !x.freePass)) {
+          const { call, callId, display } = p;
+          const toolInput = parseArgs(call.arguments);
+          fireHook('pre-tool-use', { sessionId, toolName: call.name, toolInput });
           // 审批：confirm/allowlist 模式由服务端挂起；yolo 直接放行（与 agent-bash 裁决一致）。
           // 会话级白名单：always=按 approvalKey 前缀；trust=按工具名（run 内内存态）。
           const mode = readToolMode();
           const approvalKey = approvalKeyOf(call);
-          const allowlisted = mode.allowPrefixes.some((p) => approvalKey === p || approvalKey.startsWith(`${p} `))
+          const allowlisted = mode.allowPrefixes.some((pre) => approvalKey === pre || approvalKey.startsWith(`${pre} `))
             || (run.sessionAllow?.has(approvalKey) ?? false)
             || (run.sessionAllow?.has(`tool:${call.name}`) ?? false);
           const needApproval = (mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted)) && !allowlisted;
@@ -1037,6 +806,7 @@ export function createServerPart(options = {}) {
           }
 
           const r = await execTool(run, call, signal);
+          fireHook('post-tool-use', { sessionId, toolName: call.name, toolInput, success: r.ok && (r.exitCode === undefined || r.exitCode === 0) });
           if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
           const status = r.ok && (r.exitCode === undefined || r.exitCode === 0) ? 'done' : r.denied ? 'denied' : 'error';
           emitEvent(run, 'tool.result', {
@@ -1089,13 +859,33 @@ export function createServerPart(options = {}) {
     if (run.finished) return;
     run.finished = true;
     run.phase = 'done';
+    fireHook('turn-end', { sessionId: run.sessionId });
     run.controller.abort(); // 兜底：中断残余上游流
     for (const [, a] of run.approvals) a.resolve?.('deny');
     run.approvals.clear();
     for (const [, i] of run.interactives) i.resolve?.(JSON.stringify({ __timeout: true }));
     run.interactives.clear();
+    // 续写快照：保留 shadow + 引擎/模型/策略，供「继续」按钮在服务端接续（不重放旧轮次）
+    if (run.shadow?.length) {
+      const key = `${run.sessionId}::${run.assistantId}`;
+      resumableRuns.delete(key);
+      resumableRuns.set(key, {
+        shadow: run.shadow, engine: run.engine, engineId: run.engineId, model: run.model,
+        ctxWindow: run.ctxWindow, ctxPolicy: run.ctxPolicy, acc: run.acc,
+        extraToolDefs: run.extraToolDefs, shellHint: run.shellHint,
+        boundRootId: run.boundRootId, execCwd: run.execCwd,
+      });
+      while (resumableRuns.size > MAX_RESUMABLE_RUNS) {
+        const oldest = resumableRuns.keys().next().value;
+        if (oldest === undefined) break;
+        resumableRuns.delete(oldest);
+      }
+    }
     runsBySession.delete(run.sessionId);
     runs.delete(run.id); // runs 表同步回收（否则并发上限被历史 run 占满 → TOO_MANY_RUNS）
+    // 冲刷残余 delta 合批 + 关闭常开 fd（防止 fd 泄漏；事件日志已落盘供续传）
+    flushFrames(run);
+    if (run.logFd != null) { try { closeSync(run.logFd); } catch { /* */ } run.logFd = null; }
     audit({ op: 'run-done', runId: run.id, sessionId: run.sessionId, seq: run.seq });
     // 最终事件已全部落盘；SSE 订阅者发一帧 done-note 后由前端自行关闭
     for (const res of [...run.subs]) {
@@ -1108,181 +898,13 @@ export function createServerPart(options = {}) {
   // ------------------------------------------------------------------
   // 服务端工具表（静态装配；与前端 describe 协议同形状）
   // ------------------------------------------------------------------
+  /** 工具表：从通用注册表读所有已注册工具的 descriptor（runner 零工具知识）。
+   *  MCP 动态工具由 ensureMcpTools 异步补入。 */
   function buildServerToolDefs(run) {
-    const defs = [];
-    const shell = run.shellHint === 'cmd' ? 'cmd' : 'bash';
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'bash',
-        description: '执行 shell 命令。' + (shell === 'cmd'
-          ? '当前宿主为 Windows cmd：不支持 2>/dev/null、; 分隔与 $VAR——请用 cmd 等价写法（2>nul、& 分隔）。'
-          : '当前宿主经 Git Bash 执行：写 POSIX bash 语法（2>/dev/null、管道、&&/; 分隔、$VAR 均可用）。') +
-          ' 可用于读写文件、运行脚本、安装依赖、调用任意 CLI。限制：cwd 锁定工作区目录；单条超时默认 30s（最长 300s）；输出上限 64KB（超长截断）；命令串行执行，并发自动排队。写文件优先用 files_write 工具。危险命令（rm -rf、curl|sh、改配置存储等）会被无条件拒绝。',
-        parameters: {
-          type: 'object',
-          properties: {
-            command: { type: 'string', description: '要执行的命令（完整一行）' },
-            timeoutMs: { type: 'number', description: '超时毫秒，默认 30000，上限 300000' },
-          },
-          required: ['command'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'files',
-        description: '浏览与读取文件（只读）。动作：roots=列出可用工作区根；list=列目录（rootId+path）；read=读文件（rootId+path，支持 head/tail）。path 传相对工作区根的相对路径；读其它项目目录先 roots 拿根 id。',
-        parameters: {
-          type: 'object',
-          properties: {
-            action: { type: 'string', enum: ['roots', 'list', 'read'], description: '要执行的动作' },
-            rootId: { type: 'string', description: '工作区根 id（roots 返回）' },
-            path: { type: 'string', description: '相对工作区根的路径' },
-            head: { type: 'number', description: '只读前 N 字节' },
-            tail: { type: 'number', description: '只读后 N 字节' },
-          },
-          required: ['action'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'files_write',
-        description: '结构化写入与编辑工作区文件（写面；读用 files 工具）。动作：write=写整文件（path+content）；edit=精确替换（path+old_string+new_string）；patch=多文件补丁。路径支持绝对路径或相对工作区根；只能写工作区内；二进制拒写。',
-        parameters: {
-          type: 'object',
-          properties: {
-            action: { type: 'string', enum: ['write', 'edit', 'patch'], description: '要执行的动作' },
-            path: { type: 'string', description: 'write/edit：目标文件路径' },
-            content: { type: 'string', description: 'write：完整内容' },
-            old_string: { type: 'string', description: 'edit：被替换的精确原文' },
-            new_string: { type: 'string', description: 'edit：替换后的文本' },
-            expected_replacements: { type: 'number', description: 'edit：预期出现次数' },
-            patch: { type: 'string', description: 'patch：完整补丁信封' },
-            rootId: { type: 'string', description: '可选：工作区根 id' },
-          },
-          required: ['action'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'render',
-        description: '生成自包含 HTML 交互面板（小游戏/原型/图表/教具），在对话卡片与「预览」面板中运行。HTML 必须自包含：内联 CSS/JS、不引 CDN、不 fetch、模型与贴图用 base64；改动旧面板传 basePreviewId。',
-        parameters: {
-          type: 'object',
-          properties: {
-            html: { type: 'string', description: '完整 HTML 文档' },
-            title: { type: 'string', description: '面板标题' },
-            basePreviewId: { type: 'string', description: '可选：基于旧版本迭代' },
-          },
-          required: ['html'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'browser',
-        description: '驱动系统 Chrome 搜索/阅读/操作网页：search 搜索、read 读正文、navigate/click/fill 交互、screenshot 截图、tabs 标签管理。会话操作路由到本会话绑定标签；优先结构化动作而非 evaluate。',
-        parameters: {
-          type: 'object',
-          properties: {
-            action: { type: 'string', description: '动作：search/read/navigate/click/fill/press/scroll/screenshot/tabs/close等' },
-            url: { type: 'string', description: '目标 URL' },
-            query: { type: 'string', description: '搜索词' },
-            label: { type: 'string', description: '元素可见文本' },
-            selector: { type: 'string', description: 'CSS 选择器' },
-            value: { type: 'string', description: '输入值' },
-            limit: { type: 'number', description: '结果数上限' },
-          },
-          required: ['action'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'read_skill',
-        description: '读取技能全文（SKILL.md）。先用系统提示附录里的技能索引选名字，再用本工具读全文。',
-        parameters: {
-          type: 'object',
-          properties: { name: { type: 'string', description: '技能名' } },
-          required: ['name'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'interactive',
-        description: '向用户发起结构化交互并等待作答（question 多选 / form 表单 / confirm 确认）。缺少必要信息时用本工具直接问，不要靠开放式文本猜。用户可跳过；超时返回 {"__timeout":true}，应改用已有信息继续。',
-        parameters: {
-          type: 'object',
-          properties: {
-            kind: { type: 'string', enum: ['question', 'form', 'confirm'], description: '交互形态' },
-            title: { type: 'string', description: '标题' },
-            options: { type: 'array', items: { type: 'string' }, description: 'question 的候选选项' },
-            fields: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, label: { type: 'string' } } }, description: 'form 的字段列表' },
-          },
-          required: ['kind', 'title'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'ledger',
-        description: '日常记账。用户说「午饭 35」「打车 48」这类消费/收入时调用 add 记账：amount=金额（正数），type 缺省 expense（收入才传 income），category 从对话语境选（餐饮/交通/购物/居住/娱乐/医疗/学习/人情/其他；收入用 工资/理财/红包/退款/其他收入），note 写简短备注（含菜品/事由，会用于时段推导），时间不明就传 date（today/yesterday/YYYY-MM-DD），不传 time/timeOfDay（按备注触发词或当前时刻就近归档）。用户问「花了多少/这个月怎么样」用 stats/query；改账先 query 拿 id 再 update/delete。入账响应自带预算提醒。',
-        parameters: {
-          type: 'object',
-          properties: {
-            action: { type: 'string', enum: ['add', 'query', 'stats', 'delete', 'update', 'categories'], description: '要执行的动作' },
-            amount: { type: 'number', description: '金额（正数；add 必填）' },
-            type: { type: 'string', description: 'expense（默认）| income' },
-            category: { type: 'string', description: '分类；不传由 AI 按语境选' },
-            note: { type: 'string', description: '备注（简短）' },
-            date: { type: 'string', description: 'today | yesterday | YYYY-MM-DD' },
-            time: { type: 'string', description: 'HH:MM（24h）' },
-            timeOfDay: { type: 'string', description: '时段档位或中文（凌晨/早上/中午/下午/傍晚/晚上）' },
-            id: { type: 'string', description: '账单 id（delete/update 必填；从 query 结果取）' },
-            month: { type: 'string', description: 'this | last | YYYY-MM（query/stats）' },
-            keyword: { type: 'string', description: '备注/分类关键词（query 过滤）' },
-            limit: { type: 'number', description: 'query 返回条数上限（默认 20）' },
-            op: { type: 'string', description: 'categories 动作：list | add | remove' },
-            name: { type: 'string', description: 'categories add/remove 的分类名' },
-            kind: { type: 'string', description: 'categories 分类性质：expense | income' },
-            patch: { type: 'object', description: 'update 的字段 { amount?, category?, note?, date?, time?, timeOfDay? }' },
-          },
-          required: ['action'],
-        },
-      },
-    });
-    defs.push({
-      type: 'function',
-      function: {
-        name: 'translate',
-        description: '把文本翻译成目标语言（from=auto 自动检测源语言）。to 从 zh(中文)/en(英语)/jp(日语)/kor(韩语)/fra(法语)/de(德语)/ru(俄语)/spa(西班牙语)/wyw(文言文) 里选；不传 to 时自动判断：含中文译英语，否则译中文。文本 ≤6000 字。',
-        parameters: {
-          type: 'object',
-          properties: {
-            text: { type: 'string', description: '要翻译的文本（≤6000 字）' },
-            to: { type: 'string', description: '目标语言代码：zh|en|jp|kor|fra|de|ru|spa|wyw；省略时自动判断' },
-          },
-          required: ['text'],
-        },
-      },
-    });
-    // MCP 工具（服务端 /api/mcp/tools 聚合描述；未配置时省略）
-    try {
-      // 同步读不可行（server 端点是异步）；MCP 工具在 start 时经 ensureMcpTools 异步补入
-    } catch { /* 忽略 */ }
+    const defs = registry?.listTools?.().map((t) => t.descriptor).filter(Boolean) ?? [];
     return defs;
   }
+
 
   /** start 时异步补入 MCP 聚合工具描述（有 server 配置才注入） */
   async function ensureMcpTools(run) {
@@ -1371,6 +993,8 @@ export function createServerPart(options = {}) {
       (run.readonlyHint ?? ''),
     );
     sysParts.push(' 用 files 工具读文件时：path 传相对工作区根的相对路径；要读其它项目目录（如仓库根）的文件，先调 roots 拿到对应根的 id，再用该 rootId+相对路径，不要把绝对路径当 path 传。');
+    // agent 型引擎（自带工具循环）的提示追加段由引擎适配器声明，runner 零引擎知识
+    if (run.engine?.systemHint) sysParts.push(` ${run.engine.systemHint}`);
     const shadow = [{ role: 'system', content: sysParts.join('') }];
     // 多轮会话 shadow 延续：同会话上一 run 的 shadow 仍在（服务端常驻），优先续用——
     // 它包含完整工具调用过程（前端 history 只有可见文本，工具结果会丢）。
@@ -1396,8 +1020,14 @@ export function createServerPart(options = {}) {
       shadow.push({ role: 'user', content: prompt });
     }
     run.shadow = shadow;
-    // 留档供下一 run 延续（同会话 shadow 跨 run 不断档）
+    // 留档供下一 run 延续（同会话 shadow 跨 run 不断档）；LRU 上限防常驻泄漏
+    sessionShadows.delete(run.sessionId);
     sessionShadows.set(run.sessionId, shadow);
+    while (sessionShadows.size > MAX_SESSION_SHADOWS) {
+      const oldest = sessionShadows.keys().next().value;
+      if (oldest === undefined) break;
+      sessionShadows.delete(oldest);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1416,26 +1046,14 @@ export function createServerPart(options = {}) {
     return { mode: 'confirm', allowPrefixes: [], enabled: true };
   }
 
+  /** 工具卡单行摘要 + 审批白名单键：复用 @shared 通用规则（按工具名+参数推导，零硬编码）。 */
   function summarizeCall(call) {
-    const args = parseArgs(call.arguments);
-    const s = (v) => (v === undefined || v === null ? '' : String(v));
-    if (call.name === 'bash') return s(args.command).slice(0, 120);
-    if (call.name === 'files' || call.name === 'files_write') return `${call.name} ${s(args.action)} ${s(args.path)}`.trim().slice(0, 120);
-    if (call.name === 'browser') return `browser ${s(args.action)}${args.url ? ` ${s(args.url)}` : ''}${args.query ? ` "${s(args.query)}"` : ''}`.slice(0, 120);
-    if (call.name === 'render') return `render ${s(args.title)}`.trim().slice(0, 120);
-    if (call.name === 'read_skill') return `read_skill ${s(args.name)}`.slice(0, 120);
-    if (call.name === 'interactive') return `interactive ${s(args.kind)} ${s(args.title)}`.trim().slice(0, 120);
-    if (call.name.startsWith('mcp_')) return `${call.name} ${JSON.stringify(args).slice(0, 100)}`;
-    return `${call.name} ${JSON.stringify(args).slice(0, 100)}`;
+    return summarizeToolCall(call.name, call.arguments ?? '{}').display;
+  }
+  function approvalKeyOf(call) {
+    return summarizeToolCall(call.name, call.arguments ?? '{}').approvalKey;
   }
 
-  function approvalKeyOf(call) {
-    const args = parseArgs(call.arguments);
-    if (call.name === 'bash') return String(args.command ?? '');
-    if (call.name === 'browser') return `browser ${String(args.action ?? '')}`;
-    if (call.name.startsWith('mcp_')) return call.name;
-    return `${call.name} ${String(args.action ?? '')}`.trim();
-  }
 
   // ------------------------------------------------------------------
   // GC：过期 run 日志清理（懒触发）
@@ -1502,6 +1120,15 @@ export function createServerPart(options = {}) {
       if (runs.size >= MAX_CONCURRENT_RUNS) {
         return send(res, 429, { error: 'too many concurrent runs', code: 'TOO_MANY_RUNS' });
       }
+      // 引擎按 engineId 从通用注册表查适配器；缺省走 manifest 标 default 的引擎。
+      // runner 不认识任何具体引擎 id / 厂商——只调用适配器的 resolveModel/runTurn/complete。
+      const engineId = String(body.engineId ?? '') || registry?.defaultEngineId?.() || '';
+      const engine = engineId ? registry?.getEngine?.(engineId) : null;
+      if (!engine) {
+        return send(res, 400, { error: `AI 引擎 ${engineId || '(未指定)'} 未注册服务端适配器`, code: 'ENGINE_NOT_FOUND' });
+      }
+      // option 是「自带目录引擎」的模型选择（如 CLI 模型）——平台只搬运，引擎自行解释
+      const model = engine.resolveModel?.({ providerId: body.providerId, modelId: body.modelId, option: body.option }) ?? null;
       const runId = `r-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
       const run = {
         id: runId,
@@ -1511,6 +1138,11 @@ export function createServerPart(options = {}) {
         startedAt: Date.now(),
         seq: 0,
         buffer: [],
+        syncedSeq: 0,
+        logFd: null,
+        logSize: 0,
+        pendingFrames: [],
+        frameTimer: null,
         subs: new Set(),
         approvals: new Map(),
         interactives: new Map(),
@@ -1518,7 +1150,9 @@ export function createServerPart(options = {}) {
         shadow: [],
         finished: false,
         extraToolDefs: [],
-        model: resolveProvider(body.providerId, body.modelId),
+        engine,
+        engineId,
+        model,
         execCwd: body.execCwd,
         boundRootId: body.rootId,
         shellHint: body.shellHint,
@@ -1543,7 +1177,9 @@ export function createServerPart(options = {}) {
       ensureMcpTools(run)
         .then(() => prepareWorkspace(run, body))
         .then(async () => {
-          run.toolDefs = [...buildServerToolDefs(run), ...run.extraToolDefs];
+          // agent 型引擎（kind:'agent'，自带工具循环）不注入宿主工具表——
+          // 适配器的 systemHint 已声明工具语义，喂宿主工具定义只会诱导模型调用不存在的工具
+          run.toolDefs = run.engine?.kind === 'agent' ? [] : [...buildServerToolDefs(run), ...run.extraToolDefs];
           await seedShadow(run, body, prompt);
           // 用户消息即刻落服务端会话档（幂等）：发起端随后被杀也不丢这条对话
           syncUserMessage(run, prompt, body?.createdAt);
@@ -1557,12 +1193,50 @@ export function createServerPart(options = {}) {
       return send(res, 200, { ok: true, runId, existing: false });
     }
 
+    // ---- POST /api/agent/resume：截断「继续」——服务端接续上一 run 的 shadow ----
+    if (pathname === '/api/agent/resume' && req.method === 'POST') {
+      let body;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(res, 400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+      const sessionId = String(body.sessionId ?? '');
+      const assistantId = String(body.messageId ?? '');
+      const snap = resumableRuns.get(`${sessionId}::${assistantId}`);
+      if (!snap || !snap.engine) return send(res, 404, { error: '无可续写的 run（已过期或未完成）', code: 'RESUME_NOT_FOUND' });
+      const existing = runsBySession.get(sessionId);
+      if (existing && !existing.finished) return send(res, 200, { ok: true, runId: existing.id, existing: true });
+      if (runs.size >= MAX_CONCURRENT_RUNS) return send(res, 429, { error: 'too many concurrent runs', code: 'TOO_MANY_RUNS' });
+      resumableRuns.delete(`${sessionId}::${assistantId}`);
+      const runId = `r-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+      const run = {
+        id: runId, sessionId, assistantId, phase: 'running', startedAt: Date.now(),
+        seq: 0, buffer: [], syncedSeq: 0, logFd: null, logSize: 0, pendingFrames: [], frameTimer: null,
+        subs: new Set(), approvals: new Map(), interactives: new Map(), controller: new AbortController(),
+        finished: false, extraToolDefs: snap.extraToolDefs ?? [], engine: snap.engine, engineId: snap.engineId,
+        model: snap.model, execCwd: snap.execCwd, boundRootId: snap.boundRootId, shellHint: snap.shellHint,
+        acc: snap.acc ?? new UsageAccumulator(), ctxWindow: snap.ctxWindow ?? 0, ctxPolicy: snap.ctxPolicy ?? { autoCompact: true, threshold: 0.75, keepRecent: 6 },
+        shadow: [...snap.shadow], compacting: false,
+      };
+      // 半截 prefill：shadow 尾是 assistant 半截，续写时下方 runLoop 会自然接续；
+      // 追加续写提示（对齐前端 resume 不带 prompt 的语义：直接续，不注入用户问句）。
+      runs.set(runId, run);
+      runsBySession.set(sessionId, run);
+      void runLoop(run).catch((e) => {
+        audit({ op: 'resume-fatal', runId, error: String(e?.message ?? e) });
+        emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: String(e?.message ?? e).slice(0, 300) });
+        finishRun(run);
+      });
+      return send(res, 200, { ok: true, runId, existing: false });
+    }
+
     // ---- GET /api/agent/events?sessionId=&runId=&lastEventId=：SSE 订阅 ----
     if (pathname === '/api/agent/events' && req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
       const sessionId = url.searchParams.get('sessionId') ?? '';
       const runId = url.searchParams.get('runId') ?? '';
-      const lastEventId = Number(url.searchParams.get('lastEventId') ?? 0) || 0;
+      // 原生 Last-Event-Id 头优先（EventSource 重连自动带），query 仅作兜底；
+      // 服务端从当前 seq 决定续传点，不再由前端固化 query 游标导致全量重放。
+      const headerSeq = Number(req.headers['last-event-id'] ?? 0) || 0;
+      const querySeq = Number(url.searchParams.get('lastEventId') ?? 0) || 0;
+      const lastEventId = Math.max(headerSeq, querySeq);
       const run = (runId && runs.get(runId)) || (sessionId && runsBySession.get(sessionId)) || null;
       if (!run) return send(res, 404, { error: 'run not found (already finished?)', code: 'RUN_NOT_FOUND' });
       res.writeHead(200, {
@@ -1572,17 +1246,17 @@ export function createServerPart(options = {}) {
         'X-Accel-Buffering': 'no',
       });
       res.flushHeaders();
-      // 续传：先补发 lastEventId 之后的历史事件（从落盘日志读，进程重启也不丢）
-      for (const ev of readRunEvents(run.id, lastEventId)) {
-        try { res.write(`id: ${ev.seq}\nevent: agent\ndata: ${JSON.stringify(ev)}\n\n`); } catch { /* 断开由 close 回收 */ }
+      // 续传：先补发 lastEventId 之后的历史事件（活跃 run 从内存 buffer 取，省去整文件读）
+      for (const ev of eventsForReplay(run, lastEventId)) {
+        writeFrame(res, `id: ${ev.seq}\nevent: agent\ndata: ${JSON.stringify(ev)}\n\n`);
       }
       if (run.finished) {
-        res.write(`event: run-ended\ndata: ${JSON.stringify({ runId: run.id, sessionId: run.sessionId })}\n\n`);
+        writeFrame(res, `event: run-ended\ndata: ${JSON.stringify({ runId: run.id, sessionId: run.sessionId })}\n\n`);
         return res.end();
       }
       run.subs.add(res);
       const ping = setInterval(() => {
-        try { res.write(`event: ping\ndata: ${JSON.stringify({ at: Date.now(), seq: run.seq })}\n\n`); } catch { /* 断开由 close 回收 */ }
+        writeFrame(res, `event: ping\ndata: ${JSON.stringify({ at: Date.now(), seq: run.seq })}\n\n`);
       }, SSE_PING_MS);
       req.on('close', () => {
         clearInterval(ping);

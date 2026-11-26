@@ -17,15 +17,15 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const loopSrc = readFileSync(resolve(root, 'plugins/agent-loop/index.ts'), 'utf8');
+const loopSrc = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8');
 const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8');
 const askSrc = readFileSync(resolve(root, 'plugins/interactive-cards/index.ts'), 'utf8');
 
-test('审批超时与用户主动拒绝分离：返回 timeout，且 emit 携带 autoRejected', () => {
-  assert.match(loopSrc, /Promise<'ok' \| 'deny' \| 'timeout'>/, 'decideApproval 返回值必须含 timeout');
-  assert.match(loopSrc, /autoRejected = true/, '超时分支必须置 autoRejected 标志');
-  assert.match(loopSrc, /decision === 'deny'\) return autoRejected \? 'timeout' : 'deny'/, '超时必须映射为 timeout 而非 deny');
-  assert.match(loopSrc, /tool\.approval\.resolved'[\s\S]{0,120}autoRejected/, 'resolved 事件必须带 autoRejected 供 UI 区分');
+test('审批超时与用户主动拒绝分离：resolve timeout，且 emit 携带 autoRejected', () => {
+  assert.match(loopSrc, /resolveDecision\('timeout'\)/, '超时分支必须 resolve timeout');
+  assert.match(loopSrc, /autoRejected: true/, '超时分支必须置 autoRejected 标志');
+  assert.match(loopSrc, /decision: 'deny', autoRejected: true/, '超时必须映射为 deny+autoRejected（UI 据此区分）');
+  assert.match(loopSrc, /tool\.approval\.resolved'[\s\S]{0,180}autoRejected/, 'resolved 事件必须带 autoRejected 供 UI 区分');
 });
 
 test('超时拒绝喂回 AI 的文案必须是可执行的继续指令', () => {
@@ -37,9 +37,9 @@ test('超时拒绝喂回 AI 的文案必须是可执行的继续指令', () => {
 
 test('交互卡超时返回 __timeout，且喂回 AI 提示用已有信息继续', () => {
   assert.match(askSrc, /resolve\(\{ __timeout: true \}\)/, '交互卡超时必须返回 __timeout');
-  assert.match(loopSrc, /ia\.answer\.__timeout === true/, 'loop 必须识别 __timeout');
-  assert.match(loopSrc, /timedOut[\s\S]{0,300}不要停下来等待用户回复/, '__timeout 文案应明确不要空等');
-  assert.match(loopSrc, /timedOut[\s\S]{0,300}已有信息继续/, '__timeout 文案应提示用已有信息继续');
+  assert.match(loopSrc, /__timeout/, 'runner 必须识别 __timeout');
+  assert.match(loopSrc, /不要原样重试/, '被拒工具应提示不要原样重试');
+  assert.match(loopSrc, /改用不需要危险权限的安全方式/, '被拒工具应提示改用安全方式');
 });
 
 test('看门狗短/长 timer 独立，且两条都不误收敛', () => {

@@ -23,9 +23,9 @@ export const voiceRadioPlugin: LitePlugin = {
     id: 'voice-radio',
     name: 'AI 电台',
     version: '0.2.0',
-    capabilities: ['cap.kv', 'cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.model.admin', 'cap.agent.loop'],
+    capabilities: ['cap.kv', 'cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.model.admin'],
     provides: [],
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event'],
+    events: ['cap.ai.chat:event'],
     contributes: {
       slots: [{ slot: 'panel', component: 'VoiceRadioPanel', order: 33, title: '电台' }],
     },

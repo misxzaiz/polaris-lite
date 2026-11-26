@@ -16,6 +16,7 @@ import { createProvidersApi } from './providers-api.mjs';
 import { createRelayMiddleware } from './relay-core.mjs';
 import { createHostPolicy } from './upstream-policy.mjs';
 import { loadServerParts } from '../plugins/server-registry.mjs';
+import { createServerAdapterRegistry } from './adapter-registry.mjs';
 
 /** 工厂清单在模块加载期解析一次；每个 createHost 用真实 options 调工厂取独立中间件实例 */
 const SERVER_PARTS = await loadServerParts();
@@ -27,9 +28,13 @@ export function createHost({ dataDir = '.polaris-lite', secureCookies = false, p
   const providers = createProvidersApi({ store, policy, getSession: auth.getSession });
   const relay = createRelayMiddleware({ store, policy, getSession: auth.getSession });
 
+  // 服务端适配器注册表（引擎/工具插件在各自 createServerPart 里注册；agent-runner 查表调用）。
+  // 宿主只持有这个通用容器，不认识任何具体引擎/工具 id。
+  const registry = createServerAdapterRegistry();
+
   // 领域中间件全部来自插件注册表的 server 半边；宿主按清单顺序装配，不认识任何领域语义。
   const pluginMiddlewares = SERVER_PARTS.map(({ id, createServerPart }) => {
-    const mw = createServerPart({ dataDir, getSession: auth.getSession, store, policy, verifyTempToken: auth.verifyTempToken, tempTokens: auth.tempTokens });
+    const mw = createServerPart({ dataDir, getSession: auth.getSession, store, policy, registry, verifyTempToken: auth.verifyTempToken, tempTokens: auth.tempTokens });
     if (typeof mw !== 'function') throw new Error(`服务端插件 ${id} 的 createServerPart 未返回中间件函数`);
     return mw;
   });

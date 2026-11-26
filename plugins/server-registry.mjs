@@ -32,6 +32,8 @@ const RAW_SERVER_PLUGINS = [
   { id: 'agent-runner', entry: './agent-runner/server.mjs' },
   { id: 'phone-agent', entry: './phone-agent/server.mjs' },
   { id: 'codebuddy-engine', entry: './codebuddy-engine/server.mjs' },
+  // real-engine：服务端适配器（resolveModel/runTurn/complete/contextWindow），注册进通用 registry
+  { id: 'real-engine', entry: './real-engine/server.mjs' },
   { id: 'skill-loader', entry: './skill-loader/server.mjs' },
   { id: 'hook-bridge', entry: './hook-bridge/server.mjs' },
   { id: 'mcp-bridge', entry: './mcp-bridge/server.mjs' },

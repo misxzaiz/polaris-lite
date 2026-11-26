@@ -75,6 +75,15 @@ context.snapshot/loop.done/message.done/stream.error）。
 
 ## 3. 已知边界 / 后续（M4 候选）
 
+> 2026-11-26 后端编排化收口后本节多数条目已解决：上下文压缩已迁服务端
+> （UsageAccumulator/compactShadow 在 runner + 引擎适配器 complete）；
+> 事件重放改原生 Last-Event-Id 头 + 内存 buffer + 行首 seq 前缀轻解析；
+> 前端 agent-loop 已整块删除（runnerBridge 唯一编排通道 + 引擎直连兜底，
+> 不兼容旧数据）；工具注册化（server/adapter-registry.mjs + 适配器声明式
+> descriptor/invoke，含 suggestions/transcript/phone/market_*）；无依赖工具
+> 并行执行（freePass 类 Promise.all）；CodeBuddy 接入服务端 runner（agent 型
+> 引擎适配器，断联续跑对全部 supportsTools 引擎成立）。
+
 - 上下文压缩（context-compact）尚未迁移到服务端（长会话仍在服务端 shadow 里
   无压缩水位管理）；下一里程碑把 UsageAccumulator/compactShadow 移入 runner。
 - 事件重放目前从 seq=0 全量（首屏重放完整任务过程）；可按需加「只重放结构块、
@@ -83,3 +92,5 @@ context.snapshot/loop.done/message.done/stream.error）。
   评估仅保留直通引擎路径。
 - 多设备审批「先到先得」已生效，UI 上未做「他端已决」的撤卡提示（卡片靠
   approval.resolved 事件收敛，行为正确）。
+- 会话档双写仍未收敛：chat-lite 仍有防抖 PUT（store sync），服务端 runner
+  也直写会话档；权威单一化（删前端 PUT、增量 patch 端点）是下一候选。

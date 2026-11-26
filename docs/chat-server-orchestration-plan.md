@@ -1,5 +1,13 @@
 # AI 对话长期方案：服务端编排 + 多端实时（spec v0.1，2026-11-20）
 
+> **实施状态（2026-11-26 更新）**：本方案已实施完成（P0–P5 全部落地）——
+> agent-runner 服务端编排、事件日志 + Last-Event-Id 续传、审批服务端挂起、
+> 工具注册化（`server/adapter-registry.mjs` 通用注册表 + 各插件适配器）、
+> 引擎服务端适配（real=chat 型逐步工具循环 / codebuddy=agent 型自带工具循环）、
+> 前端 agent-loop 插件整块删除（chat-lite 只留 runnerBridge 唯一编排通道 +
+> 引擎直连兜底）。实施细节见 `docs/agent-runner-implementation.md` 与
+> `docs/ai-engine-contract.md` §5.1。以下为原始 spec（保留作历史与决策依据）。
+
 > 目标：根治两个已确认的问题——①流式中的会话刷新即丢（在途消息 + 执行状态随页面死亡）；②多设备看不到执行中的实时情况。长期方向是**执行模型上服务端**（B1），页面退化为「发指令 + 订阅事件 + 渲染」。
 > 前置分析：刷新丢消息的根因链与多端不可实时的根因链已核实（见 §1）；chat-store 服务端会话存储已落地（`docs/chat-multi-device-sync-plan.md`）。
 > 原则：延续本仓「核心零业务、一切皆插件」；编排上服务端也走**插件 server 半边**（新增 agent-runner），不走 `server/` 宿主目录（`tests/server-boundary.test.mjs` 红线不破）。

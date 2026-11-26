@@ -1,5 +1,9 @@
 # Agent Loop + Bash 工具实施定案（agent-loop-plan）
 
+> **历史文档**：前端 agent-loop 插件已于 2026-11-26 后端编排化时整块删除——
+> 编排循环现由服务端 agent-runner 插件执行（spec 落地见
+> docs/agent-runner-implementation.md）。本文保留作设计依据与术语出处。
+
 > 前置分析：docs/agent-loop-analysis.md（上游 function calling 已实探可用）。
 > 本文档为**复审后的实施方案定案**，2026-11-19 起实施。
 

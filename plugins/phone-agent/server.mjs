@@ -57,6 +57,7 @@ function clampResult(data) {
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const hardOff = process.env.PLITE_PHONE_AGENT === '0';
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
@@ -118,8 +119,12 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/phone/')) return next?.();
 
+    // 门禁：会话 cookie 或本地回环 Bearer 临时凭证（agent-runner 的 phone 工具
+    // loopback 调用走 Bearer，与 agent-bash/fs/preview 等工具端点同一纪律）
+    const bearer = String(req.headers.authorization ?? '');
+    const bearerOk = bearer.startsWith('Bearer ') && verifyTempToken(bearer.slice(7));
     const session = getSession?.(req);
-    if (!session) {
+    if (!session && !bearerOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }

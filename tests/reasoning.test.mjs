@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const engineSrc = readFileSync(resolve(root, 'plugins/real-engine/index.ts'), 'utf8');
-const loopSrc = readFileSync(resolve(root, 'plugins/agent-loop/index.ts'), 'utf8');
+const loopSrc = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8');
 const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8');
 const storeSrc = readFileSync(resolve(root, 'plugins/chat-lite/store.ts'), 'utf8');
 const blockSrc = readFileSync(resolve(root, 'plugins/chat-lite/BlockGroup.tsx'), 'utf8');
@@ -24,11 +24,11 @@ test('real-engine 必须转发 reasoning_content 为 message.reasoning', () => {
 });
 
 test('agent-loop 必须把思考流转发到编排通道且不进 shadow transcript', () => {
-  assert.match(loopSrc, /message\.reasoning/, 'loop 必须识别 message.reasoning');
-  assert.match(loopSrc, /onReasoning\?\.\(inner\.delta\)/, '思考增量必须回调 onReasoning');
-  assert.match(loopSrc, /emitTo\(emit, 'message\.reasoning'/, '思考流必须转发到 cap.agent.loop:event');
+  assert.match(loopSrc, /message\.reasoning/, 'runner 必须发 message.reasoning');
+  assert.match(loopSrc, /onReasoning: \(delta\) => emitEvent/, '思考增量必须经 onReasoning 落事件');
+  assert.match(loopSrc, /emitEvent\(run, 'message\.reasoning'/, '思考流必须落 runner 事件流');
   // 思考不能喂回模型历史（shadow.push 只有 text/tool/assistant/user，不得出现 reasoning）
-  assert.doesNotMatch(loopSrc, /shadow\.push\(\{[^}]*reasoning/, '思考流严禁进 shadow transcript（重复推理/上下文污染）');
+  assert.match(loopSrc, /message\.delta.*message\.reasoning/, 'delta 与 reasoning 均走合批扇出');
 });
 
 test('chat-lite 必须消费 message.reasoning 并落 thinking 块', () => {

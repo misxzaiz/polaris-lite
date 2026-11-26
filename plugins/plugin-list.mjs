@@ -17,7 +17,6 @@ export const PLUGIN_LIST = [
   // 默认引擎由 manifest.aiEngine.default 声明，核心分派器据此路由。
   { id: 'real-engine', config: 'real-engine/vite.config.ts', dist: 'real-engine/dist', order: 4 },
   { id: 'agent-bash', config: 'agent-bash/vite.config.ts', dist: 'agent-bash/dist', order: 5 },
-  { id: 'agent-loop', config: 'agent-loop/vite.config.ts', dist: 'agent-loop/dist', order: 6 },
   { id: 'agent-files', config: 'agent-files/vite.config.ts', dist: 'agent-files/dist', order: 7 },
   { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 8 },
   { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 9 },

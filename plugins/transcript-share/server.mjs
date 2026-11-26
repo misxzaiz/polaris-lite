@@ -95,6 +95,7 @@ const TOKENS_FILE_CAP = 4 * 1024 * 1024;
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const chatStoreDir = resolve(dataDir, 'chat-store');
   const shareDir = resolve(dataDir, 'transcript-share');
@@ -272,10 +273,14 @@ export function createServerPart(options = {}) {
     };
 
     try {
-      // ---- 管理面 /api/share/*（会话门禁） ----
+      // ---- 管理面 /api/share/*（会话门禁；本地回环 Bearer 临时凭证同权——
+      // agent-runner 的 transcript 工具 loopback 调用走 Bearer，与
+      // agent-bash/fs/preview 等工具端点同一纪律） ----
       if (pathname.startsWith('/api/share/')) {
+        const bearer = String(req.headers.authorization ?? '');
+        const bearerOk = bearer.startsWith('Bearer ') && verifyTempToken(bearer.slice(7));
         const session = getSession?.(req);
-        if (!session) return sendJson(401, { error: 'unauthorized', code: 'SESSION_REQUIRED' });
+        if (!session && !bearerOk) return sendJson(401, { error: 'unauthorized', code: 'SESSION_REQUIRED' });
 
         // ---- API 调用轨迹批量上报（前端 traceTap；每会话 JSONL 追加） ----
         if (pathname === '/api/share/trace' && req.method === 'POST') {

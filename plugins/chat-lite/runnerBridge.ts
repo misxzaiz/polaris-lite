@@ -4,16 +4,14 @@
  * 服务端编排（B1，spec：docs/chat-server-orchestration-plan.md）下，页面退化为
  * 「发指令 + 订阅事件 + 渲染」：
  * - start：POST /api/agent/start（服务端起 run；同会话单飞）；
- * - 事件：GET /api/agent/events SSE（Last-Event-Id 续传；事件形状与
- *   cap.agent.loop:event 完全一致，chat-lite 渲染层零改动）；
+ * - 事件：GET /api/agent/events SSE（Last-Event-Id 续传；事件形状与渲染层一致）；
  * - 审批/交互回填：POST /api/agent/approve|interactive（任意在线设备先到先得）；
- * - 中断：POST /api/agent/interrupt；
+ * - 中断：POST /api/agent/interrupt；续写：POST /api/agent/resume；
  * - 刷新恢复：run 进行中刷新页面 → 重新订阅 + Last-Event-Id 之后的增量 + 从
  *   事件日志重放 tool 卡/delta，UI 无缝追平（服务端继续执行不受影响）。
  *
- * 与旧通道（cap.agent.loop）的关系：runnerBridge 可用（服务端探活成功）时优先；
- * 失败自动回落旧通道（standalone 独立档/旧版服务端）。降级开关：localStorage
- * plite.runner=off 强制走旧通道。
+ * 服务端是唯一执行者：支持工具编排的引擎一律走本桥；不支持的引擎与 standalone
+ * 独立档（无服务端）走引擎直达 cap.ai.chat。探活仅用于判定服务端是否可达。
  */
 import type { StreamEnvelope } from './runnerTypes';
 
@@ -51,13 +49,8 @@ export function setRunnerEndedHook(fn: ((sessionId: string) => void) | null): vo
   onRunEnded = fn;
 }
 
-function runnerDisabledByUser(): boolean {
-  try { return localStorage.getItem('plite.runner') === 'off'; } catch { return false; }
-}
-
-/** 服务端 runner 探活：GET /api/agent/state（带 cookie；404/401/501 都算不可用） */
+/** 服务端 runner 探活：GET /api/agent/state（带 cookie；404/401/403 都算不可用） */
 export async function probeRunner(): Promise<boolean> {
-  if (runnerDisabledByUser()) return false;
   if (runnerAvailable !== null) return runnerAvailable;
   try {
     const resp = await fetch('/api/agent/state?sessionId=__probe__', { credentials: 'include' });
@@ -83,8 +76,12 @@ export async function startRunnerRun(payload: {
   prompt: string;
   history: { role: string; content: unknown }[];
   system?: string;
+  /** 引擎 id：服务端据此查通用引擎注册表（resolveModel/runTurn），缺省走 default 引擎 */
+  engineId?: string;
   providerId?: string;
   modelId?: string;
+  /** 自带目录引擎的模型选择（如 CLI 模型）；服务端适配器自行解释 */
+  option?: string;
   /** 会话绑定工作区根 id（服务端据此解析 bash cwd / files 默认根 / system prompt） */
   workspaceId?: string;
   /** 关联只读目录 ids（files 可读、bash 不可达） */
@@ -192,6 +189,25 @@ export async function answerRunnerInteractive(sessionId: string, callId: string,
     });
     return resp.ok;
   } catch { return false; }
+}
+
+/** 截断「继续」：服务端接续上一 run 的 shadow（返回 runId 供 SSE 订阅；事件流与原 run 同构） */
+export async function resumeRunnerRun(sessionId: string, messageId: string): Promise<string | null> {
+  try {
+    const resp = await fetch('/api/agent/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ sessionId, messageId }),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json().catch(() => null)) as { ok?: boolean; runId?: string } | null;
+    if (!data?.ok || !data.runId) return null;
+    const handle: RunHandle = { runId: data.runId, sessionId, assistantId: messageId, es: null, lastSeq: 0 };
+    active.set(sessionId, handle);
+    subscribe(handle);
+    return data.runId;
+  } catch { return null; }
 }
 
 /** 中断服务端 run */

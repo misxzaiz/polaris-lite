@@ -619,7 +619,18 @@ function preflight() {
       // 引擎的 namespaced cap 由核心通用分派器在运行时按 engineId 动态消费，
       // 不会出现在任何插件的 capabilities 静态声明里——这是设计而非死能力。
       const consumedByCoreRouter = /^cap\.ai\.chat\.[^.]+(\.(interrupt|models))?$/.test(cap);
-      if (consumers.length === 0 && !looksLikePanelCap && !consumedByCoreRouter) {
+      // AI 工具 cap（cap.tool.*）：消费方是服务端 agent-runner（经通用适配器注册表
+      // 按工具名派发，不 import 插件、不在 capabilities 里点名）。前端半边的
+      // describe/tool-registered 通道是遗留兼容面，工具真正进模型工具表靠注册表。
+      // cap.interactive（交互卡）与 cap.skill.appendix（技能附录）同理：runner 经
+      // 服务端端点消费（askInteractive → /api/agent/interactive；附录 → /api/skills/appendix）。
+      // cap.market.tool：market_list/install/uninstall 适配器经 /api/market/* 端点消费。
+      // cap.app.updater：宿主壳（mobile-companion 的刷新引导）与更新面板消费，
+      // 属用户经 UI 触发的面板/壳类能力。
+      const consumedByServerRunner = /^cap\.tool\./.test(cap)
+        || cap === 'cap.interactive' || cap === 'cap.skill.appendix' || cap === 'cap.market.tool'
+        || cap === 'cap.app.updater';
+      if (consumers.length === 0 && !looksLikePanelCap && !consumedByCoreRouter && !consumedByServerRunner) {
         deadCaps.push(`${p.id} provides ${cap}：无任何插件消费（也非面板/管理类），疑似死能力`);
       }
     }

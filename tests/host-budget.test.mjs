@@ -21,6 +21,10 @@
  *   监听）+ P2-10 边缘滑动手势进 SlotLayout.tsx（+57 行）、shell-drawer-head 关闭栏与
  *   --plite-kb-lift 消费进 styles.css（+39 行）。壳层视口/抽屉手势属核心职责，插件化
  *   需新增容器契约反而更重。CORE_BUDGET 4800 → 4880。
+ *   2026-11-26 · 服务端执行域注册化（引擎/工具皆插件）：宿主持有通用适配器注册表
+ *   server/adapter-registry.mjs（按 id 注册/查找，零引擎/工具知识），引擎与工具插件在
+ *   各自 server 半边注册、agent-runner 只查表调用；另 prod-server 增加 NODE_TEST_CONTEXT
+ *   守卫（PM2 托管 shell 里跑测试不再抢端口）。CORE_BUDGET 5180 → 5260。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +45,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  约定与 manifest 元数据，不认识任何具体引擎/厂商；引擎实现全在插件里。
  *  不放进插件的原因：总线单注册位 + assertAllowed 精确匹配，插件路由器要么撕开单注册
  *  语义、要么开 cap.ai.chat.* 通配授权，反而扩大特权面。 */
-const CORE_BUDGET = 5180;
+const CORE_BUDGET = 5260;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

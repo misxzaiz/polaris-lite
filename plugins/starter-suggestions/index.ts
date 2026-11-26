@@ -208,7 +208,7 @@ export const starterSuggestionsPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: ['cap.kv', 'cap.ai.chat'],
     provides: ['cap.tool.suggestions'],
-    events: ['tool-registered', 'suggestions-changed', 'cap.ai.chat:event'],
+    events: ['tool-registered', 'suggestions-changed', 'cap.ai.chat:event', 'cap.ai.chat.runner:event'],
     contributes: {
       // title ≤4 字：panel tab 等分宽约 74px，长名会截断
       slots: [{ slot: 'panel', component: 'StarterSuggestionsPanel', order: 17, title: '开场白' }],
@@ -220,6 +220,15 @@ export const starterSuggestionsPlugin: LitePlugin = {
     a.registerCapability.register('cap.tool.suggestions', createSuggestionsHandler());
     // 迟到广播兜底（loop 晚于本插件装配时也能发现工具）
     a.emit('tool-registered', { cap: 'cap.tool.suggestions', name: 'suggestions' });
+    // 服务端 runner 的 suggestions 工具改池后经 SSE 发 suggestions-changed（envelope）；
+    // 转发成本插件原生事件 + DOM 事件，面板（window 监听）即时刷新。
+    a.listen('cap.ai.chat.runner:event', (envelope: unknown) => {
+      const e = envelope as { kind?: string };
+      if (e?.kind === 'suggestions-changed') {
+        api?.emit('suggestions-changed', { from: 'runner' });
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('suggestions-changed'));
+      }
+    });
   },
 };
 

@@ -30,14 +30,19 @@ export const aiEventsPlugin: LitePlugin = {
     capabilities: [],
     provides: [],
     // listen 是 fail-closed：每个事件名必须同时出现在 manifest 与 grants.json
-    events: ['cap.agent.loop:event', 'cap.ai.chat:event', 'user.prompt'],
+    // cap.ai.chat.runner:event = 服务端 runner 流式事件（chat-lite 转发；形状同流式 envelope）
+    events: ['cap.ai.chat.runner:event', 'cap.ai.chat:event', 'user.prompt'],
     contributes: {
       // panel 的 order 2/3/6 已被模型/Bash/文件占用；4 字以内否则 tab 会截断
       slots: [{ slot: 'panel', component: 'TimelinePanel', order: 7, title: '取证' }],
     },
   },
   setup(api) {
-    api.listen('cap.agent.loop:event', ingest);
+    // 服务端 runner 编排事件（chat-lite 从 SSE 桥转发的 envelope，形状含顶层 kind/source）
+    api.listen('cap.ai.chat.runner:event', (raw) => {
+      const wrap = raw as { payload?: unknown };
+      ingest(wrap.payload ?? raw);
+    });
     api.listen('cap.ai.chat:event', ingest);
     // 用户输入原文（chat-lite 发送时广播），按 messageId 归到同一轮次。
     // emit 通道的 envelope 是 {source, payload}（无 kind），而流式事件是 {source, kind, payload}；

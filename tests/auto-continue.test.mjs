@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const read = (p) => readFileSync(p, 'utf8');
-const loopSrc = read('plugins/agent-loop/index.ts');
+const loopSrc = read('plugins/agent-runner/server.mjs');
 const engineSrc = read('plugins/real-engine/index.ts');
 const chatSrc = read('plugins/chat-lite/index.ts');
 const blockSrc = read('plugins/chat-lite/BlockGroup.tsx');
@@ -45,8 +45,8 @@ test('real-engine：400 限值自愈（输出回填重试 / 输入回填不重�
   assert.match(engineSrc, /上下文超限（输入超过该模型上限/, '输入超限必须给可读错误（不盲目重试）');
 });
 
-test('agent-loop：自动续写 burst 限次 + 三路径 nudge', () => {
-  assert.match(loopSrc, /MAX_AUTO_CONTINUE = 3/);
+test('agent-runner（服务端编排）：自动续写 burst 限次 + 三路径 nudge', () => {
+  assert.match(loopSrc, /autoContinueLeft = 3/);
   assert.match(loopSrc, /message\.continued/, '每次自动续写必须发进度事件');
   assert.match(loopSrc, /个工具调用时被单次输出上限截断/, '半截工具调用必须引导重新调用');
   assert.match(loopSrc, /reasoning-exhausted/);
@@ -54,21 +54,19 @@ test('agent-loop：自动续写 burst 限次 + 三路径 nudge', () => {
   assert.match(loopSrc, /message\.truncated/, 'burst 耗尽后仍落可见截断块（兜底 UI 的数据源）');
 });
 
-test('agent-loop：resume 动作（无 prompt 直续 prefill + 直通模式拒入）', () => {
-  assert.match(loopSrc, /action !== 'start' && action !== 'resume'/);
-  assert.match(loopSrc, /if \(action === 'resume'\) return; \/\/ 直通模式无 shadow 续写语义/);
-  assert.match(loopSrc, /if \(prompt\) shadow\.push/, 'resume 不带 prompt：shadow 尾已是 assistant prefill');
+test('agent-runner：resume 端点（无 prompt 直续 shadow + 并发单飞）', () => {
+  assert.match(loopSrc, /\/api\/agent\/resume/, '服务端必须提供 resume 端点');
+  assert.match(loopSrc, /shadow: \[\.\.\.snap\.shadow\]/, 'resume 复用上一 run 的 shadow 直接接续');
+  assert.match(loopSrc, /resumableRuns/, 'resume 快照需有界缓存');
 });
 
 test('chat-lite：truncated 块 + 「继续」按钮 + resumed 无 prompt', () => {
   assert.match(typesSrc, /\{ type: 'truncated'; text: string \}/, '块类型联合必须含 truncated(契约层)');
   assert.match(blockSrc, /tc-resume-btn/);
   assert.match(chatSrc, /resumeTruncated/);
-  // resume dispatch 只带 sessionId/messageId，不注入 prompt（prefill 续写语义）
-  const i = chatSrc.indexOf("action: 'resume'");
-  assert.ok(i > 0, 'chat-lite 必须有 resume dispatch');
-  const seg = chatSrc.slice(Math.max(0, i - 200), i + 200);
-  assert.doesNotMatch(seg, /prompt/, 'resume payload 不得携带 prompt');
+  // resume 经服务端端点：只带 sessionId/messageId，不注入 prompt（prefill 续写语义）
+  assert.match(chatSrc, /resumeRunnerRun/, 'chat-lite 必须经服务端 resume');
+  assert.match(chatSrc, /resumeTruncated/, 'chat-lite 必须有续写入口');
 });
 
 test('chat-lite：message.continued 落轻提示块', () => {

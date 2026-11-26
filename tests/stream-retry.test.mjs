@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const relaySrc = readFileSync(resolve(root, 'server/relay-core.mjs'), 'utf8');
 const engineSrc = readFileSync(resolve(root, 'plugins/real-engine/index.ts'), 'utf8');
-const loopSrc = readFileSync(resolve(root, 'plugins/agent-loop/index.ts'), 'utf8');
+const loopSrc = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8');
 const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8');
 const streamSrc = readFileSync(resolve(root, 'plugins/chat-lite/MessageStream.tsx'), 'utf8');
 const cssSrc = readFileSync(resolve(root, 'plugins/chat-lite/chat.css'), 'utf8');
@@ -43,8 +43,8 @@ test('real-engine：断流必须自动重试且上限 10 次，重试时 carry �
 });
 
 test('agent-loop：必须把 stream.retry 转发到编排通道（loop 会话 UI 才可见）', () => {
-  assert.match(loopSrc, /ev\.kind === 'stream\.retry'/, 'loop 必须识别引擎的 stream.retry');
-  assert.match(loopSrc, /emitTo\(emit, 'stream\.retry'/, 'stream.retry 必须转发到 cap.agent.loop:event');
+  assert.match(loopSrc, /'stream\.retry'/, 'runner 必须发 stream.retry');
+  assert.match(loopSrc, /onRetry: \(attempt, maxAttempts\) => emitEvent/, 'stream.retry 必须经 onRetry 落事件');
   assert.match(loopSrc, /message\.truncated/, 'finish_reason=length 必须发可见截断提示');
 });
 

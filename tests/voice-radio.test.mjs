@@ -185,9 +185,10 @@ test('voice-radio：插话/补充/工具模式契约', async (t) => {
   assert.ok(controller.includes('abortSegment'), '补充路径必须有 abortSegment（中断在途段）');
   // 插话半双工：请求时暂停、回复到达恢复
   assert.ok(controller.includes('interjectActive'), '插话回复到达必须恢复播放且不计轮次');
-  // 工具查证双模：off=cap.ai.chat 直连；on=cap.agent.loop 编排（AI 可调工具）
-  assert.ok(controller.includes('cap.agent.loop:event'), '工具模式必须监听 loop 事件通道');
-  assert.ok(controller.includes("useLoop ? 'cap.agent.loop' : 'cap.ai.chat'"), 'AI 通道必须按 toolsMode 切换');
+  // 工具查证双模：off=cap.ai.chat 直连；on=服务端 runner 编排（AI 可调工具，服务端为唯一执行者）
+  assert.ok(controller.includes('/api/agent/start'), '工具模式必须走服务端 runner');
+  assert.ok(controller.includes('/api/agent/events'), '工具模式必须订阅服务端 SSE');
+  assert.ok(controller.includes('useRunner'), 'AI 通道必须按 toolsMode 切换');
   assert.ok(core.includes('TOOL_MODE_SYSTEM_SUFFIX'), '工具模式必须有 system 纪律附录');
   // Panel：插话输入 + 立即中断补充按钮 + 开关
   assert.ok(panel.includes('handleInterject'), 'Panel 必须有插话入口');

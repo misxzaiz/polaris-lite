@@ -1,5 +1,9 @@
 # Agent 对话 UX 修复整合方案 v2（工具卡排序 + 审批卡可见性 + 完全信任开关）
 
+> **历史文档**：文中 agent-loop 相关实现已随 2026-11-26 后端编排化迁移到服务端
+> agent-runner（工具卡/审批卡事件形状不变，渲染层零改动）。现状见
+> docs/agent-runner-implementation.md。
+
 > 前置：docs/tool-block-ordering-analysis.md（排序根因 + Polaris 折叠设计，已实读源码）。
 > 本文档整合三组用户反馈为一次改造包，全部纯插件实现（chat-lite + agent-loop），宿主零改动。整理定稿待确认后实施。
 

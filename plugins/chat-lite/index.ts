@@ -18,7 +18,7 @@ import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
 import { notifyRootsChanged } from './workspace-prefs';
-import { setRunnerConsumer, setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner } from './runnerBridge';
+import { setRunnerConsumer, setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner, resumeRunnerRun } from './runnerBridge';
 import { bindEngineCatalog, loadEngines, supportsSlashSkills, supportsTools } from './engineCatalog';
 export type { StreamEnvelope } from './runnerTypes';
 import type { StreamEnvelope } from './runnerTypes';
@@ -111,7 +111,7 @@ export const chatLitePlugin: LitePlugin = {
     id: 'chat-lite',
     name: '对话',
     version: '0.3.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.ai.engine', 'cap.agent.loop', 'cap.meta', 'cap.hook.bridge'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.ai.engine', 'cap.meta', 'cap.hook.bridge'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
@@ -119,7 +119,7 @@ export const chatLitePlugin: LitePlugin = {
     // workspace-renamed：file-browser 改名广播，输入区目录名据此即时同步（不再停留在旧名）
     // mode-changed：standalone-mode 的运行模式广播（独立档切换本地会话镜像，docs/mobile-app-plan.md §10）
     // auth-changed：登录成功立即对账（否则新设备首登要等 30s 轮询才有会话列表）
-    events: ['cap.ai.chat:event', 'cap.agent.loop:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed', 'auth-changed'],
+    events: ['cap.ai.chat:event', 'cap.ai.chat.runner:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed', 'auth-changed'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -269,9 +269,8 @@ export const chatLitePlugin: LitePlugin = {
       }
     };
     // ai.usage：引擎流末发出（输入/输出 token、缓存命中、耗时、速率分母）
+    // context.*：服务端 runner 编排事件（水位快照 / 压缩生命周期）——同一通道。
     api.listen('cap.ai.chat:event', onCtxEvent);
-    // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
-    api.listen('cap.agent.loop:event', onCtxEvent);
     // runner 通道的全局消费者：ai.usage / context.* 水位透视（不随会话切换，
     // 与上面 cap 总线的 onCtxEvent 同一处理函数——双源合一）。
     setRunnerGlobalConsumer(onCtxEvent);
@@ -288,23 +287,6 @@ export const chatLitePlugin: LitePlugin = {
     }, 3000);
   },
 };
-
-/** agent-loop 可用性缓存（每次发送时经 cap.meta 刷新，避免装配顺序竞态） */
-let loopAvailable: boolean | null = null;
-
-async function detectLoop(): Promise<boolean> {
-  if (!hostApi) return false;
-  if (loopAvailable !== null) return loopAvailable;
-  try {
-    const res = await hostApi.dispatch<{ capabilities?: string[] }>({ target: 'cap.meta', action: 'list' });
-    loopAvailable = (res.data?.capabilities ?? []).includes('cap.agent.loop');
-    console.log('[chat-lite] detectLoop:', loopAvailable, 'caps:', (res.data?.capabilities ?? []).join(','));
-  } catch (e) {
-    console.log('[chat-lite] detectLoop error:', String(e).slice(0, 100));
-    loopAvailable = false;
-  }
-  return loopAvailable;
-}
 
 // StreamEnvelope 已上移 plugins/chat-lite/runnerTypes.ts（runnerBridge 与本文件共用同一形状；
 // 服务端 agent-runner 的 SSE 事件同构，渲染层零改动）。
@@ -514,12 +496,11 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     streaming: true,
   } as unknown as ChatMessage);
 
-  // loop 模式探测：cap.agent.loop 存在且当前引擎声明支持工具编排才走编排通道。
-  // 能力开关来自引擎插件声明（features.supportsTools），不是写死的引擎 id。
+  // 编排能力开关来自引擎插件声明（features.supportsTools），不是写死的引擎 id。
+  // 支持工具编排的引擎一律走服务端 runner（唯一执行者）；不支持的走引擎直达。
   const sendingSession = useSessionStore.getState().sessions.find((s) => s.id === sid);
   const engineId = sendingSession?.modelRef?.engineId;
   const toolCapable = supportsTools(engineId);
-  const useLoop = toolCapable && (await detectLoop());
 
   // ---- delta 按帧合并（写入 assistant 末尾 text 块；content 镜像由 store 同步） ----
   let buf = '';
@@ -751,14 +732,11 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     }
   };
 
-  // 双通道订阅：普通模式收 cap.ai.chat:event（引擎直达）；
-  // loop 模式收 cap.agent.loop:event（loop 转发）。loop 的内部轮次 messageId 不同，不会串台。
-  // runner 通道（服务端编排）：事件形状一致，经 runnerBridge 的 SSE 消费者进入同一 handleEnvelope。
+  // 引擎直达事件仍走 cap.ai.chat:event；服务端 runner 编排事件经 runnerBridge 的
+  // SSE 消费者进入同一 handleEnvelope（事件形状一致，渲染层零改动）。
   const off = api.listen('cap.ai.chat:event', handleEnvelope);
-  const offLoop = useLoop ? api.listen('cap.agent.loop:event', handleEnvelope) : null;
   unbind = () => {
     off();
-    offLoop?.();
     setRunnerConsumer(null); // 本轮流结束：摘除 runner 消费者（下一轮流再挂）
   };
   setRunnerConsumer((envelope) => {
@@ -766,6 +744,8 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     const inner = envelope.payload ?? {};
     if (inner.sessionId && inner.sessionId !== sid) return;
     if (inner.messageId && inner.messageId !== assistantId) return;
+    // 旁听层（ai-events 取证）：把服务端事件投到专用总线通道，形状保持 envelope 原样
+    try { api.emit('cap.ai.chat.runner:event', envelope); } catch { /* 旁听失败不影响渲染 */ }
     handleEnvelope(envelope);
   });
   armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
@@ -781,19 +761,24 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       messageId: assistantId,
       prompt: effectiveText,
       history: history ?? [],
+      engineId,
       providerId: modelRef?.providerId,
       modelId: modelRef?.modelId,
+      // 自带目录引擎的模型选择（如 CLI 模型）——平台只搬运，服务端适配器自行解释
+      option: modelRef?.option,
       // 会话绑定工作区 + 关联只读目录（服务端据此解析 bash cwd / files 默认根 / system prompt）
       workspaceId: session?.workspaceId,
       linkedWorkspaceIds: session?.linkedWorkspaceIds,
-      ctxPolicy: useLoop ? ctxPolicyOf(sid) : undefined,
+      ctxPolicy: ctxPolicyOf(sid),
       ...(hasAttachments && attachments ? { attachments } : {}),
     });
     if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
+    // runner 拒发（并发满/引擎无服务端适配器/无供应商）：回落引擎直连通道，
+    // 由引擎自身给出用户可见的错误或降级对话——不静默丢消息。
   }
 
   await api.dispatch({
-    target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
+    target: 'cap.ai.chat',
     action: 'start',
     payload: {
       sessionId: sid,
@@ -809,8 +794,6 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       ...(session?.workspaceId ? { workspaceId: session.workspaceId } : {}),
       // 关联只读目录：files 工具可读、bash 不在此执行（服务端仍按登记根白名单校验）
       ...((session?.linkedWorkspaceIds?.length ?? 0) > 0 ? { linkedWorkspaceIds: session!.linkedWorkspaceIds } : {}),
-      // 会话级上下文压缩策略（agent-loop 据此触发自动压缩；spec §4.3）
-      ...(useLoop ? { ctxPolicy: ctxPolicyOf(sid) } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   });
@@ -846,16 +829,10 @@ export function resendMessage(sessionId: string, msgId: string): void {
   void sendUserMessage(msg.content);
 }
 
-/** 截断重答共用路径：shadow 复位（loop 模式）→ 截断 msgId 及其后全部 → 按同一提示词重新提交。
- *  用户消息以新 id 重新入列（user.prompt 广播/钩子语义与手打重发完全一致）；代价：shadow 复位
- *  丢弃压缩摘要，上下文按可见历史重播——与刷新页面同代价，仅截断路径发生。 */
+/** 截断重答共用路径：截断 msgId 及其后全部 → 按同一提示词重新提交。
+ *  服务端 runner 每次 start 以可见历史重建 shadow，无需复位；新消息以新 id 入列
+ *  （user.prompt 广播/钩子语义与手打重发完全一致）。 */
 async function resubmitFrom(sid: string, userMsgId: string, prompt: string): Promise<void> {
-  const useLoop = await detectLoop();
-  if (useLoop && hostApi) {
-    try {
-      await hostApi.dispatch({ target: 'cap.agent.loop', action: 'reset', payload: { sessionId: sid } });
-    } catch { /* loop 不可用：直通模式无 shadow，无需复位 */ }
-  }
   const store = useSessionStore.getState();
   store.expirePendingApprovals(sid);
   store.truncateMessagesBefore(sid, userMsgId);
@@ -903,17 +880,9 @@ export function interruptChat(): void {
   const messageId = streamingMsg?.id;
 
   const doInterrupt = async (): Promise<{ ok: boolean; data?: { found?: boolean } }> => {
-    // 服务端编排通道：中断 run（服务端 abort 上游流 + 挂起审批 deny 收敛 + 树杀在途 exec）
+    // 服务端编排通道：中断 run（服务端 abort 上游流 + 挂起审批 deny 收敛）
     if (await interruptRunnerRun(sessionId)) return { ok: true, data: { found: true } };
-    if (await detectLoop()) {
-      const res = await api.dispatch<{ found?: boolean }>({
-        target: 'cap.agent.loop',
-        action: 'interrupt',
-        payload: { sessionId, ...(messageId ? { messageId } : {}) },
-      });
-      // loop 没有在途轮次（found=false）时回落打断引擎直通流
-      if (res.ok && res.data?.found !== false) return res;
-    }
+    // 无服务端 run：直接打断引擎直通流（standalone/非工具引擎）
     const engineId = useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.modelRef?.engineId;
     return api.dispatch<{ found?: boolean }>({
       target: 'cap.ai.chat.interrupt',
@@ -949,8 +918,6 @@ const RESUME_TIMEOUT_MS = 300_000;
  * 不带 sendUserMessage 的完整看门狗机制（超时软兜底复位 streaming）。
  */
 export function resumeTruncated(sessionId: string, messageId: string): void {
-  const api = hostApi;
-  if (!api) return;
   const st = useSessionStore.getState();
   const msg = st.sessions.find((s) => s.id === sessionId)?.messages.find((m) => m.id === messageId);
   if (!msg || isToolCard(msg) || msg.streaming) return; // 幂等：流式中不重复触发
@@ -959,59 +926,42 @@ export function resumeTruncated(sessionId: string, messageId: string): void {
   const finish = (): void => {
     useSessionStore.getState().updateMessage(sessionId, messageId, { streaming: false });
   };
-  const timer = setTimeout(() => {
-    cleanup();
-    finish();
-  }, RESUME_TIMEOUT_MS);
-  const off = api.listen('cap.agent.loop:event', (payload: unknown) => {
-    const envelope = payload as StreamEnvelope;
-    if (!envelope.source) return;
+  const timer = setTimeout(finish, RESUME_TIMEOUT_MS);
+  const cleanup = (): void => { clearTimeout(timer); setRunnerConsumer(null); };
+  // 服务端 runner 接续：事件经 SSE → 同一 handleEnvelope 渲染层（形状与常规流一致）。
+  // 临时 consumer 只处理本条续写消息，message.done/error 时收敛。
+  setRunnerConsumer((envelope) => {
     const inner = envelope.payload ?? {};
     if (inner.sessionId && inner.sessionId !== sessionId) return;
     if (inner.messageId && inner.messageId !== messageId) return;
-    if (envelope.kind === 'message.delta' && inner.delta) {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: inner.delta });
-    } else if (envelope.kind === 'message.reasoning' && inner.delta) {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'thinking', text: inner.delta });
-    } else if (envelope.kind === 'message.continued') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'notice', text: `[已自动续写 ${inner.attempt ?? '?'}/${inner.max ?? 3}]` });
-    } else if (envelope.kind === 'message.truncated') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'truncated', text: inner.text ?? '回复因达到输出上限被截断' });
-    } else if (envelope.kind === 'message.done') {
+    const kind = envelope.kind ?? '';
+    if (kind === 'message.delta' && inner.delta) {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: String(inner.delta) });
+    } else if (kind === 'message.reasoning' && inner.delta) {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'thinking', text: String(inner.delta) });
+    } else if (kind === 'message.continued') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'notice', text: `[已自动续写 ${String(inner.attempt ?? '?')}/${String(inner.max ?? 3)}]` });
+    } else if (kind === 'message.truncated') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'truncated', text: String(inner.text ?? '回复因达到输出上限被截断') });
+    } else if (kind === 'message.done') {
       cleanup();
       finish();
-    } else if (envelope.kind === 'stream.error') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: inner.message ?? '流式请求失败' });
+    } else if (kind === 'stream.error') {
+      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: String(inner.message ?? '流式请求失败') });
       cleanup();
       finish();
     }
   });
-  const cleanup = (): void => {
-    off();
-    clearTimeout(timer);
-  };
-  void api.dispatch({
-    target: 'cap.agent.loop',
-    action: 'resume',
-    payload: { sessionId, messageId },
-  }).catch(() => {
-    cleanup();
-    finish();
-  });
+  void resumeRunnerRun(sessionId, messageId).then((runId) => {
+    if (!runId) { cleanup(); finish(); }
+  }).catch(() => { cleanup(); finish(); });
 }
 
-/** 审批决策回填（ToolCard 按钮调用；仅 loop 模式会出现审批卡） */
+/** 审批决策回填（ToolCard 按钮调用；服务端编排挂起审批，任意在线设备先到先得） */
 export function resolveApproval(callId: string, decision: 'once' | 'always' | 'trust' | 'deny'): void {
-  const api = hostApi;
   const sessionId = useSessionStore.getState().activeId;
-  if (!api || !sessionId || !callId) return;
-  // 服务端编排通道：审批挂起在服务端（任意在线设备先到先得）；通道不可用回落旧 loop
-  void resolveRunnerApproval(sessionId, callId, decision).then((handled) => {
-    if (handled) return;
-    return api
-      .dispatch({ target: 'cap.agent.loop', action: 'resolveApproval', payload: { sessionId, callId, decision } })
-      .catch(() => undefined);
-  });
+  if (!sessionId || !callId) return;
+  void resolveRunnerApproval(sessionId, callId, decision).catch(() => undefined);
 }
 
 // ===== 待发送队列（流式预输入）：流结束后自动逐条发送，附件随队列项完整保留 =====

@@ -43,3 +43,24 @@ nonexistent-dir-for-test/
 .tmp-*
 .polaris-liteworkspace*
 .claude/hook-log.jsonl
+
+# 发版/打包产物（apk、便携包、手工备份）——不入库
+/polaris-lite-*.apk
+/plite-*-release.apk
+/polaris-lite-portable/
+/polaris-lite-portable.zip
+/backup-*-manual/
+# 误落在仓库内的同名残留副本（只剩 plugins/ 的旧拷贝）
+/polaris-lite/
+
+# GUI 冒烟截图与运行日志（每轮验证都会新增，不属于交付）
+/gui-test-screenshots/
+/logs/
+# 探针脚本导出的登录凭据，绝不入库
+/dev-cookies.tmp.txt
+
+# 测试目录内误建的嵌套目录
+/tests/tests/
+
+# 脚本备份
+/*.bak

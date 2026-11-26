@@ -167,7 +167,9 @@ export const codebuddyEnginePlugin: LitePlugin = {
       displayName: 'CodeBuddy CLI',
       kind: 'agent',
       modelSource: 'builtin',
-      features: { supportsTools: false, slashSkills: false },
+      // supportsTools:true——CLI 在服务端适配器（runTurn）里跑自持工具循环，
+      // 编排走 agent-runner（断联续跑）；直连通道降级为 CLI 缺失环境兜底与独立档。
+      features: { supportsTools: true, slashSkills: false },
     },
     events: [],
     contributes: { slots: [] },
