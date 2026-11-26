@@ -38,6 +38,12 @@ function finalize(): void {
   } catch {
     /* 未显示时 hidePopover 抛 InvalidStateError——幂等容错 */
   }
+  // 关键：摘除 popover 属性。hidePopover 只收层，属性残留会让 UA 对 [popover]
+  // 关闭态的默认样式（position:fixed + inset:0 + fit-content）继续命中——
+  // 而其中本应让它隐身的 display:none 会被插件作者样式 .hp-card{display:flex}
+  // 反杀（UA 源永远输作者源），结果卡片以「悬浮面板」形态漂在视口上（实测坑）。
+  // 摘属性后 UA 规则整体不命中，元素干净回到文档流原位。removeAttribute 幂等。
+  activeEl.removeAttribute('popover');
   activeEl = null;
   notify();
 }
