@@ -206,6 +206,74 @@ test('DELETE 软删除：GET 404、索引带墓碑、其他设备据此移除', 
   assert.equal(del2.status, 200);
 });
 
+// ---------------------------------------------------------------- 单一权威化：/messages 与 /meta
+
+test('POST /messages replace：同对象重推幂等不涨版本，内容变更涨版本且不叠块', async (t) => {
+  const c = await login(t, tempRoot());
+  const m1 = { id: 'm1', role: 'assistant', content: '你好！第一版', createdAt: 1700000000100, blocks: [{ type: 'text', text: '你好！第一版' }] };
+
+  const first = await c.send('/api/chat/sessions/s-msg/messages', { method: 'POST', body: { messages: [m1] } });
+  assert.equal(first.status, 200);
+  assert.equal(first.json.ok, true);
+  assert.equal(first.json.version, 1, '建壳后首推版本从 1 起');
+  assert.ok(!first.json.noChange);
+
+  // 同一对象（连 createdAt 都相同）重推：不得空转版本号
+  const again = await c.send('/api/chat/sessions/s-msg/messages', { method: 'POST', body: { messages: [m1] } });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.noChange, true);
+  assert.equal(again.json.version, 1);
+
+  // 内容变更（replace 语义，不要求 mergeBlocks）：必须涨版本并整条替换
+  const m1b = { ...m1, content: '你好！！第二版', blocks: [{ type: 'text', text: '你好！！第二版' }] };
+  const changed = await c.send('/api/chat/sessions/s-msg/messages', { method: 'POST', body: { messages: [m1b] } });
+  assert.equal(changed.status, 200);
+  assert.equal(changed.json.version, 2);
+  assert.ok(!changed.json.noChange);
+
+  const got = await c.send('/api/chat/sessions/s-msg');
+  assert.equal(got.status, 200);
+  const session = got.json.session ?? got.json;
+  assert.equal(session.messages.length, 1, 'replace 不得叠加重复消息');
+  assert.equal(session.messages[0].content, '你好！！第二版');
+  assert.equal(session.messages[0].blocks.length, 1, 'replace 是整条覆盖，块不追加');
+});
+
+test('POST /messages append：同 id 多轮块追加，content 取最长，不新增消息', async (t) => {
+  const c = await login(t, tempRoot());
+  const r1 = await c.send('/api/chat/sessions/s-app/messages', {
+    method: 'POST',
+    body: { mode: 'append', messages: [{ id: 'a1', role: 'assistant', content: '第一块', blocks: [{ type: 'text', text: '第一块' }], createdAt: 1700000000200 }] },
+  });
+  assert.equal(r1.status, 200);
+  const r2 = await c.send('/api/chat/sessions/s-app/messages', {
+    method: 'POST',
+    body: { mode: 'append', messages: [{ id: 'a1', role: 'assistant', content: '第一块+第二块', blocks: [{ type: 'text', text: '第二块' }], createdAt: 1700000000201 }] },
+  });
+  assert.equal(r2.status, 200);
+  assert.ok(r2.json.version > r1.json.version);
+
+  const got = await c.send('/api/chat/sessions/s-app');
+  const session = got.json.session ?? got.json;
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.messages[0].blocks.length, 2, 'append 合并块');
+  assert.equal(session.messages[0].content, '第一块+第二块', 'content 取累计最长');
+});
+
+test('POST /meta：建壳 + 幂等 + 只接受元字段（messages 不许从 meta 进）', async (t) => {
+  const c = await login(t, tempRoot());
+  const mk = await c.send('/api/chat/sessions/s-meta/meta', { method: 'POST', body: { patch: { title: '改名', pinned: true } } });
+  assert.equal(mk.status, 200);
+  assert.equal(mk.json.version, 1);
+
+  const same = await c.send('/api/chat/sessions/s-meta/meta', { method: 'POST', body: { patch: { title: '改名', pinned: true } } });
+  assert.equal(same.json.noChange, true);
+  assert.equal(same.json.version, 1);
+
+  const bad = await c.send('/api/chat/sessions/s-meta/meta', { method: 'POST', body: { patch: { messages: [] } } });
+  assert.equal(bad.status, 400, 'meta 不得写入 messages');
+});
+
 // ---------------------------------------------------------------- 校验与安全
 
 test('session.id 与 URL 不一致 / 缺 messages / 畸形 baseVersion → 400', async (t) => {

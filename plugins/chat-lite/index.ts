@@ -11,7 +11,7 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import { CHANNEL_FILE_BROWSER_COMPOSE, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, CARD_STORE_CAP, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, CARD_STORE_CAP, markRunnerOwned, unmarkRunnerOwned, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
@@ -573,6 +573,9 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       endedAt: Date.now(),
     });
     unbind?.();
+    // 会话档单一权威化：runner 编排结束——解除占用；服务端已写完本轮产物，
+    // 本端恢复未占用态（此后 pull 对账按服务端档案刷新本地镜像）。
+    unmarkRunnerOwned(sid);
     sendNextPending(); // 流结束：自动派发队列下一条（若有）
   };
 
@@ -773,7 +776,12 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       ctxPolicy: ctxPolicyOf(sid),
       ...(hasAttachments && attachments ? { attachments } : {}),
     });
-    if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
+    if (runnerStarted) {
+      // 会话档单一权威化：编排接入服务端后，该会话的消息权威=服务端 runner
+      //（直写 chat-store）；本端只订阅 SSE 渲染，消息变更不推服务端。
+      markRunnerOwned(sid);
+      return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
+    }
     // runner 拒发（并发满/引擎无服务端适配器/无供应商）：回落引擎直连通道，
     // 由引擎自身给出用户可见的错误或降级对话——不静默丢消息。
   }

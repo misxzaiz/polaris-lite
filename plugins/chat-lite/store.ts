@@ -16,7 +16,7 @@ import { loadWorkspacePrefs } from './workspace-prefs';
 import { loadSessionDefaults } from './session-defaults';
 import { openLiveIfNeeded } from './liveOverlay';
 import {
-  createSync, cacheGetAll, cachePutAll, cacheDelete, pullSession, pushSession, deleteSessionRemote,
+  createSync, cacheGetAll, cachePutAll, cacheDelete, pullSession, pushSession, pushMessages, pushMeta, deleteSessionRemote,
   type SyncHandle, type SessionSnapshot, type SyncStatus, type ConflictInfo, type LoopRunState,
 } from './sync';
 
@@ -158,9 +158,13 @@ interface SessionState {
 }
 
 /** ---- 服务端同步（多设备共享；spec docs/chat-multi-device-sync-plan.md） ----
- * 写模型：动作方法只改内存并标记 dirty → 防抖窗口到期整会话 PUT（带 baseVersion）；
- * 读模型：启动时 IndexedDB 缓存秒开 → 服务端索引对账（新会话/版本升高拉全文）；
- * localStorage 旧库（chat-lite.sessions.v1）只读一次做「检测到旧数据」提示，不再写入、不迁移。
+ * 写模型（会话档单一权威化，2026-11-26）：
+ * - 消息：服务端是唯一权威。runner 编排的会话由 agent-runner 直写（前端只读拉取）；
+ *   直连引擎通道（不支持工具的引擎/独立档）的消息经 /messages 增量端点落档
+ *   （键=消息 id 幂等，settle 后防抖全量推一次，replace 语义重推不叠块）。
+ * - 元操作（改名/置顶/绑定工作区/模型引用/新建）：经 /meta 增量端点浅覆盖。
+ * - 整会话 PUT 仅存于旧版冲突兜底（force 覆盖），常规路径不再使用。
+ * 读模型：启动时 IndexedDB 缓存秒开 → 服务端索引对账（新会话/版本升高拉全文）。
  */
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -168,6 +172,29 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const versions: Record<string, number> = {};
 const dirty = new Set<string>();
 let syncHandle: SyncHandle | null = null;
+
+/** 独立档开关（standalone-mode 经 setOfflineMode 驱动；true=宿主不可达只写本地镜像） */
+let offlineMode = false;
+
+/** runner 编排占用的会话（内存态）：消息权威在服务端 agent-runner（直写 chat-store），
+ *  本端只订阅 SSE 渲染——这些会话的消息变更不推服务端（推了也是重复写+版本空转）。
+ *  startRunnerRun 成功即标记，message.done/中断/settle 即清除。 */
+const runnerOwned = new Set<string>();
+
+/** 已推送到服务端的消息 id（键 `${sessionId}::${msgId}`；增量推的依据）。
+ *  服务端快照到达（applyServerSnapshot/pull）也回填——避免把服务端已有的再推一遍。 */
+const pushedMsgIds = new Set<string>();
+function markPushed(sessionId: string, messages: { id?: string }[] | undefined): void {
+  for (const m of messages ?? []) {
+    if (m?.id) pushedMsgIds.add(`${sessionId}::${m.id}`);
+  }
+}
+function clearPushed(sessionId: string): void {
+  const prefix = `${sessionId}::`;
+  for (const k of [...pushedMsgIds]) {
+    if (k.startsWith(prefix)) pushedMsgIds.delete(k);
+  }
+}
 
 function scheduleSync(): void {
   if (syncTimer) clearTimeout(syncTimer);
@@ -177,8 +204,62 @@ function scheduleSync(): void {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** 防抖到期 / pagehide：把 dirty 会话推到服务端（sync.ts 编排） */
-const flushDirty = (): Promise<void> => (syncHandle ? syncHandle.pushDirty() : Promise.resolve());
+/**
+ * 防抖到期 / pagehide：按会话类型分派增量推送。
+ * - runnerOwned：跳过（服务端 runner 直写，前端只读）；
+ * - 其余：把「未推过」的消息经 /messages 全量推（settle 后调用；流式中不推——
+ *   sync.isStreaming 兜底），推成功记入 pushedMsgIds。meta 字段变更走 markMetaDirty
+ *   （立即单发 /meta），不经此路径。
+ */
+const flushDirty = async (): Promise<void> => {
+  const st = useSessionStore.getState();
+  for (const id of [...dirty]) {
+    // 独立档（宿主不可达）：脏会话写本地 IndexedDB 镜像（保持 dirty，
+    // 回到连接档后由 setOfflineMode(false) 的补偿 flushDirty 增量上传）
+    if (offlineMode) {
+      const session = st.sessions.find((s) => s.id === id);
+      if (session) await cachePutAll([{ session, version: versions[id] ?? 0, updatedAt: Date.now() }]);
+      continue;
+    }
+    dirty.delete(id);
+    if (runnerOwned.has(id)) continue; // 服务端权威：不推
+    const session = st.sessions.find((s) => s.id === id);
+    if (!session) continue;
+    // 本端在途流：等 settle 后的下一轮防抖（半截态不落档）
+    const streaming = session.messages.some((m) => !isToolCard(m) && m.streaming);
+    if (streaming) { dirty.add(id); continue; }
+    const fresh = session.messages.filter((m) => !pushedMsgIds.has(`${id}::${m.id}`));
+    if (fresh.length === 0) continue;
+    const res = await pushMessages(id, fresh);
+    if (res.ok) {
+      markPushed(id, fresh);
+      versions[id] = res.data.version;
+      // 推成功同步本地镜像（秒开缓存与档案一致）
+      void cachePutAll([{ session, version: res.data.version, updatedAt: res.data.updatedAt }]).catch(() => undefined);
+    } else if (res.status === 0) {
+      dirty.add(id); // 网络不可达：保 dirty，下轮重试
+    } else if (res.status === 404) {
+      // 会话被删（本端未感知）：清本地（与墓碑语义一致）
+      applyTombstone(id);
+    } else {
+      dirty.add(id); // 其它失败：保 dirty 重试
+    }
+  }
+};
+
+/** 元操作直发（低频动作不等防抖）：失败时降级回 dirty（下轮 flushDirty 重试消息面，
+ *  meta 丢失由服务端快照对账兜底——冲突以服务端为准）。 */
+let metaInFlight = new Map<string, Promise<void>>();
+function pushMetaNow(id: string, patch: Parameters<typeof pushMeta>[1]): void {
+  const prev = metaInFlight.get(id) ?? Promise.resolve();
+  const next = prev.then(async () => {
+    const res = await pushMeta(id, patch);
+    if (res.ok) versions[id] = res.data.version;
+    else if (res.status !== 0) dirty.add(id); // 非「网络不可达」：交给对账
+  }).catch(() => { dirty.add(id); });
+  metaInFlight.set(id, next);
+  void next.finally(() => { if (metaInFlight.get(id) === next) metaInFlight.delete(id); });
+}
 
 /** 供 sync.ts 回调：读当前会话/版本/脏集合 */
 function syncState() {
@@ -200,6 +281,10 @@ function applyServerSnapshot(snap: SessionSnapshot): void {
     messages: (incoming.messages ?? []).map((m) => ({ ...m, streaming: false })),
   };
   versions[incoming.id] = snap.version;
+  // 服务端已有消息回填「已推」表：这些不需要（也不能）再从本端推——
+  // 拉取对账后本端的 pushedMsgIds 与服务端消息集对齐，增量推只送真正的新消息
+  clearPushed(incoming.id);
+  markPushed(incoming.id, clean.messages);
   useSessionStore.setState(st => {
     const sessions = sortSessions(st.sessions.some(s => s.id === incoming.id)
       ? st.sessions.map(s => (s.id === incoming.id ? clean : s))
@@ -306,8 +391,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((st) => ({ sessions: sortSessions([session, ...st.sessions]), activeId: id }));
     saveActiveHint(id);
     versions[id] = versions[id] ?? 0;
-    dirty.add(id);
-    scheduleSync();
+    // 新建会话落档：meta 端点建壳（服务端 upsert）；消息此后走 /messages 增量
+    pushMetaNow(id, { title: session.title, ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}), ...(session.modelRef ? { modelRef: session.modelRef } : {}) });
     return id;
   },
 
@@ -321,14 +406,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   renameSession: (id, title) => {
     set((st) => ({ sessions: sortSessions(st.sessions.map((s) => (s.id === id ? touch({ ...s, title }) : s))) }));
-    dirty.add(id);
-    scheduleSync();
+    pushMetaNow(id, { title });
   },
 
   togglePinSession: (id) => {
     set((st) => ({ sessions: sortSessions(st.sessions.map((s) => (s.id === id ? touch({ ...s, pinned: !s.pinned }) : s))) }));
-    dirty.add(id);
-    scheduleSync();
+    const pinned = get().sessions.find((s) => s.id === id)?.pinned;
+    if (pinned !== undefined) pushMetaNow(id, { pinned });
   },
 
   setSessionWorkspace: (id, workspaceId) => {
@@ -344,16 +428,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
       })),
     }));
-    dirty.add(id);
-    scheduleSync();
+    pushMetaNow(id, { workspaceId });
   },
 
   setSessionLinkedWorkspaces: (id, linked) => {
     set((st) => ({
       sessions: sortSessions(st.sessions.map((s) => (s.id === id ? touch({ ...s, linkedWorkspaceIds: linked }) : s))),
     }));
-    dirty.add(id);
-    scheduleSync();
+    pushMetaNow(id, { linkedWorkspaceIds: linked });
   },
 
   setSessionModelRef: (id, patch) => {
@@ -370,8 +452,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return touch({ ...s, ...(Object.keys(ref).length ? { modelRef: ref } : { modelRef: undefined }) });
       })),
     }));
-    dirty.add(id);
-    scheduleSync();
+    // meta 增量推（全量 modelRef 覆盖；清空后推空对象=服务端建壳/浅覆盖语义下的「清空」）
+    const ref = get().sessions.find((s) => s.id === id)?.modelRef;
+    pushMetaNow(id, { modelRef: ref ?? {} });
   },
 
   deleteSession: (id) => {
@@ -611,6 +694,29 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/** ---- runner 编排占用标记（会话档单一权威化，2026-11-26） ----
+ *  startRunnerRun 成功（编排接入服务端）即 markRunnerOwned：此后本端对该会话的
+ *  消息变更只渲染不落档（服务端 agent-runner 直写 chat-store，是唯一权威）。
+ *  message.done / stream.error / 中断时 unmarkRunnerOwned——settled 后服务端已写完
+ *  本轮产物，本端恢复「未占用」态；残留的 dirty（流式期间累积的镜像块标记）会被
+ *  下一轮 flushDirty 跳过吗？不会——unmark 后 flushDirty 会把这些消息当「新消息」推。
+ *  所以 unmark 同时清掉该会话的 dirty 与 pushedMsgIds 对齐（以服务端档案为准，
+ *  下一次 pull 对账回填）。
+ */
+export function markRunnerOwned(sessionId: string): void {
+  runnerOwned.add(sessionId);
+}
+
+export function unmarkRunnerOwned(sessionId: string): void {
+  if (!runnerOwned.delete(sessionId)) return;
+  // 本端在编排期间累积的镜像块不推服务端（服务端 runner 已写）：
+  // 清 dirty + 对齐 pushedMsgIds（以服务端档案为准，等 pull 对账）
+  dirty.delete(sessionId);
+  const st = useSessionStore.getState();
+  const session = st.sessions.find((s) => s.id === sessionId);
+  if (session) markPushed(sessionId, session.messages);
+}
+
 /**
  * 冲突决策：用户选「覆盖服务端」后调用——以本地当前会话强制 PUT（force=true）。
  * 服务端版本被本地取代，冲突提示清除。
@@ -658,13 +764,17 @@ export async function refreshNow(): Promise<boolean> {
   return true;
 }
 
-/**
- * 独立档开关（standalone-mode 插件经 mode-changed 驱动；spec docs/mobile-app-plan.md §10.4）：
- * on=true（宿主不可达）：暂停服务端同步，会话变更只写 IndexedDB 本地镜像——手机独立使用不丢；
- * on=false（恢复连接）：立即对账并补偿上传独立期间积攒的脏会话。
+/** 独立档开关（standalone-mode 插件经 mode-changed 驱动；spec docs/mobile-app-plan.md §10.4）：
+ * on=true（宿主不可达）：暂停服务端同步——flushDirty 把脏会话写 IndexedDB 本地镜像，
+ * 手机独立使用不丢；on=false（恢复连接）：立即对账并补偿上传独立期间积攒的脏会话。
  */
 export function setOfflineMode(on: boolean): void {
+  offlineMode = on;
   syncHandle?.setOfflineMode(on);
+  if (!on) {
+    // 回到连接档：补偿上传独立期间积攒的 dirty（增量推，见 flushDirty）
+    void flushDirty();
+  }
 }
 
 /** 启动：IndexedDB 缓存秒开（含 activeId 恢复）→ 服务端对账。旧 localStorage 只提示不迁移（R5）。 */

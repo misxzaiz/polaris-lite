@@ -144,9 +144,16 @@ export function createChatStoreAccess({ dataDir, onAudit = () => {}, onIndexChan
    * mergeBlocks=true 时对已存在的 assistant 消息做块级合并（同一 assistantId
    * 跨多轮增量落档）。返回是否实际写入（无可新增内容时 false，不空转版本号）。
    *
+   * - mergeBlocks=false（默认）：只补缺失消息，已存在的不动。
+   * - mergeMode='append'（agent-runner 用，需 mergeBlocks=true）：块追加、
+   *   content 取最长——服务端 runner 每轮增量落块的语义。
+   * - mergeMode='replace'（前端直连通道 settle 用，**不要求 mergeBlocks**）：
+   *   整条消息按 id 替换（blocks/content/endedAt 全量覆盖）——幂等重推
+   *   同一条消息不会叠加重复块。
+   *
    * 读改写全程同步（Node 单线程内无交错），与 HTTP PUT 的 lock 语义等价。
    */
-  function mergeMessages(sessionId, title, messages, { createdAt, mergeBlocks = false } = {}) {
+  function mergeMessages(sessionId, title, messages, { createdAt, mergeBlocks = false, mergeMode = 'append' } = {}) {
     if (!sessionId || !ID_RE.test(sessionId) || !messages?.length) return false;
     try {
       const rec = readRecord(sessionId);
@@ -164,8 +171,19 @@ export function createChatStoreAccess({ dataDir, onAudit = () => {}, onIndexChan
         if (!m?.id) continue;
         const exist = known.get(m.id);
         if (!exist) { fresh.push(m); known.set(m.id, m); continue; }
+        // replace 与 mergeBlocks 无关（HTTP /messages 的 replace 模式传的是
+        // mergeBlocks=false）：必须先于「只补缺失」的短路判断，否则替换分支永不执行
+        // ——2026-11-26 实证：内容变更被误判成 noChange，会话档停在旧值。
+        if (mergeMode === 'replace') {
+          // 整条替换：内容不同才算变更（幂等重推不空转版本号）
+          if (JSON.stringify(exist) !== JSON.stringify(m)) {
+            session.messages[session.messages.indexOf(exist)] = m;
+            changed = true;
+          }
+          continue;
+        }
         if (!mergeBlocks) continue;
-        // 块级合并：同一 assistant 消息的后续轮次产出追加（工具卡/正文/思考保序），
+        // append：块级合并——同一 assistant 消息的后续轮次产出追加（工具卡/正文/思考保序），
         // content 镜像取累计最长文本；endedAt 以最后一次为准。
         const before = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
         exist.blocks = [...(exist.blocks ?? []), ...(m.blocks ?? [])];
@@ -212,7 +230,7 @@ export function createServerPart(options = {}) {
   // 存储访问器：本插件 HTTP 半边与其它插件（agent-runner/transcript-share）共用同一实现。
   // 消费方经 server/adapter-registry 的 service 注册表取用，不认识 <dataDir>/chat-store 布局。
   const access = createChatStoreAccess({ dataDir, onAudit: audit, onIndexChange: (id) => notifyIndex(id) });
-  const { readRecord, writeRecord, listRecords, sweepTombstones, lock } = access;
+  const { readRecord, writeRecord, listRecords, sweepTombstones, mergeMessages, lock } = access;
   options.registry?.registerService?.('chat-store', access);
 
   // ---- loop 运行态（内存表；见文件头「loop 运行态与实时推流」注释） ----
@@ -364,6 +382,91 @@ export function createServerPart(options = {}) {
         return; // SSE 长连接由 res 持有
       }
 
+      // ---- 消息增量合并（POST /:id/messages）----
+      // 会话档单一权威化（2026-11-26）：前端直连通道（非服务端 runner 编排）的
+      // 消息经此增量落档，不再整会话 PUT。语义与 agent-runner 直写同源
+      //（access.mergeMessages，键=消息 id 幂等）：
+      // - mode='replace'（默认）：已存在的消息整条替换（settle 后全量推一次，
+      //   重推幂等不叠块）——前端直连引擎流的落档模式；
+      // - mode='append'：块级追加（服务端 runner 每轮增量）。
+      // 服务端 runner 编排的会话不经此端点（runner 直写），前端对那些会话只读。
+      // 注意：必须在 :id 精确匹配之前路由（子路径不命中 :id 的 ^...$ 正则）。
+      const mMsgs = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/messages$/);
+      if (mMsgs && req.method === 'POST') {
+        const id = mMsgs[1];
+        const { body: raw, tooLarge } = await readBody();
+        if (tooLarge) return sendJson(413, { error: `payload too large (> ${MAX_SESSION_BYTES} bytes)`, code: 'PAYLOAD_TOO_LARGE' });
+        let body;
+        try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+        const messages = Array.isArray(body?.messages) ? body.messages : null;
+        if (!messages || messages.length === 0) return sendJson(400, { error: 'messages must be a non-empty array', code: 'BAD_REQUEST' });
+        if (messages.length > 200) return sendJson(413, { error: 'messages batch too large (max 200)', code: 'PAYLOAD_TOO_LARGE' });
+        // 白名单校验：消息必须是带 id 的对象（防畸形数据进档）
+        for (const m of messages) {
+          if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !m.id) {
+            return sendJson(400, { error: 'each message must have a non-empty string id', code: 'BAD_REQUEST' });
+          }
+        }
+        const mode = body.mode === 'append' ? 'append' : 'replace';
+        const mergeBlocks = body.mergeBlocks === true || mode === 'append';
+        const result = await lock(id, () => {
+          const cur = readRecord(id);
+          if (cur?.deletedAt) return { status: 404, body: { error: 'session deleted', code: 'SESSION_NOT_FOUND' } };
+          const wrote = mergeMessages(id, body.title, messages, {
+            createdAt: body.createdAt,
+            mergeBlocks,
+            mergeMode: mode,
+          });
+          if (!wrote) return { status: 200, body: { ok: true, version: cur?.version ?? 0, noChange: true } };
+          const after = readRecord(id);
+          return { status: 200, body: { ok: true, version: after.version, updatedAt: after.updatedAt } };
+        });
+        return sendJson(result.status, result.body);
+      }
+
+      // ---- 元数据补丁（POST /:id/meta）----
+      // 改名/置顶/绑定工作区/模型引用等元操作：浅覆盖提供的字段（undefined 字段
+      // 不动）；会话不存在时建壳（新建会话的落档入口——此后消息走 /messages）。
+      const mMeta = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})\/meta$/);
+      if (mMeta && req.method === 'POST') {
+        const id = mMeta[1];
+        const { body: raw, tooLarge } = await readBody();
+        if (tooLarge) return sendJson(413, { error: 'payload too large', code: 'PAYLOAD_TOO_LARGE' });
+        let body;
+        try { body = JSON.parse(raw || '{}'); } catch { return sendJson(400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+        const patch = body?.patch;
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+          return sendJson(400, { error: 'patch must be an object', code: 'BAD_REQUEST' });
+        }
+        // 字段白名单：只接受会话元字段（title/pinned/workspaceId/linkedWorkspaceIds/
+        // modelRef/lastActiveAt）；messages 不许从这进（防止绕过 /messages 的校验）
+        const ALLOWED = ['title', 'pinned', 'workspaceId', 'linkedWorkspaceIds', 'modelRef', 'lastActiveAt'];
+        const clean = {};
+        for (const k of ALLOWED) {
+          if (patch[k] !== undefined) clean[k] = patch[k];
+        }
+        if (Object.keys(clean).length === 0) {
+          return sendJson(400, { error: `patch must contain at least one of: ${ALLOWED.join(', ')}`, code: 'BAD_REQUEST' });
+        }
+        const result = await lock(id, () => {
+          const cur = readRecord(id);
+          if (cur?.deletedAt) return { status: 404, body: { error: 'session deleted', code: 'SESSION_NOT_FOUND' } };
+          const session = cur?.session ?? { id, title: '新会话', messages: [], createdAt: Date.now() };
+          const before = JSON.stringify(session);
+          Object.assign(session, clean);
+          if (JSON.stringify(session) === before) {
+            return { status: 200, body: { ok: true, version: cur?.version ?? 0, noChange: true } };
+          }
+          const version = (cur?.version ?? 0) + 1;
+          const updatedAt = Date.now();
+          writeRecord(id, { version, updatedAt, session });
+          audit({ op: 'meta', sessionId: id, version, fields: Object.keys(clean) });
+          notifyIndex(id);
+          return { status: 200, body: { ok: true, version, updatedAt } };
+        });
+        return sendJson(result.status, result.body);
+      }
+
       // ---- 单会话（:id）----
       const m = pathname.match(/^\/api\/chat\/sessions\/([A-Za-z0-9_-]{1,64})$/);
       if (m) {
@@ -437,6 +540,7 @@ export function createServerPart(options = {}) {
           return sendJson(result.status, result.body);
         }
 
+        // 消息增量合并与元数据补丁已在 :id 精确匹配之前路由（子路径走 mMsgs/mMeta）
         return sendJson(405, { error: 'method not allowed' });
       }
 

@@ -106,6 +106,33 @@ export function pushSession(
   });
 }
 
+/** 消息增量合并（会话档单一权威化，2026-11-26）：直连通道（非服务端 runner）的
+ *  消息经此落档——键=消息 id 幂等，settle 后整条全量推一次（replace 语义，
+ *  重推不叠块）。服务端 runner 编排的会话不调此端点（runner 直写，前端只读）。 */
+export function pushMessages(
+  id: string,
+  messages: StoreMessage[],
+): Promise<{ ok: true; data: { version: number; updatedAt: number } } | { ok: false; status: number; code?: string }> {
+  return jsonFetch<{ version: number; updatedAt: number }>(`${BASE}/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, mode: 'replace' }),
+  });
+}
+
+/** 元数据补丁（改名/置顶/绑定工作区/模型引用；浅覆盖提供的字段）；
+ *  会话不存在时服务端建壳——新建会话的落档入口。 */
+export function pushMeta(
+  id: string,
+  patch: Partial<Pick<ChatSessionShape, 'title' | 'pinned' | 'workspaceId' | 'linkedWorkspaceIds' | 'modelRef' | 'lastActiveAt'>>,
+): Promise<{ ok: true; data: { version: number; updatedAt: number } } | { ok: false; status: number; code?: string }> {
+  return jsonFetch<{ version: number; updatedAt: number }>(`${BASE}/${encodeURIComponent(id)}/meta`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ patch }),
+  });
+}
+
 export function deleteSessionRemote(id: string): Promise<{ ok: boolean; status: number }> {
   return jsonFetch(`${BASE}/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) =>
     r.ok ? { ok: true, status: 200 } : { ok: false, status: r.status },
@@ -209,15 +236,15 @@ export interface SyncCallbacks {
 export interface SyncHandle {
   start: () => void;
   stop: () => void;
-  /** 把 dirty 会话推到服务端（防抖到期 / pagehide 由 store 调用） */
-  pushDirty: () => Promise<void>;
   /** 立即拉一次索引（visibilitychange / 发送后调用） */
   pullNow: () => Promise<void>;
   /**
    * 独立档开关（docs/mobile-app-plan.md §10.4，standalone-mode 插件经 cap.mode 驱动）：
-   * on=true：暂停服务端 pull/push（离线态下 30s 轮询只产出失败请求），dirty 会话
-   * 只写 IndexedDB 本地镜像——手机独立使用时会话不丢；off（回到连接档）：立即对账，
-   * 独立期间积攒的 dirty 由常规 pushDirty 补偿上传（R4 恢复后补偿语义）。
+   * on=true：暂停服务端 pull（离线态下 30s 轮询只产出失败请求）；消息推送与本地镜像
+   * 由 store.flushDirty 统一编排（offlineMode 时写 IndexedDB——独立期间会话不丢）。
+   * off（回到连接档）：立即对账；积攒的 dirty 由 store 的补偿 flushDirty 增量上传。
+   * 注：推送职责已上移 store.ts（会话档单一权威化，2026-11-26）——本层只管
+   * 「拉取对账 + 缓存镜像」，不再有整会话 pushDirty（旧 PUT 通道已删除）。
    */
   setOfflineMode: (on: boolean) => void;
 }
@@ -308,57 +335,7 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
     }
   };
 
-  /** 把脏会话推到服务端（防抖窗口到期 / pagehide 时调用）；offlineMode 下只写本地镜像 */
-  const pushDirty = async (): Promise<void> => {
-    const st = cb.getState();
-    const dirtyIds = [...st.dirty];
-    if (dirtyIds.length === 0) return;
-    // 独立档：服务端不可达——dirty 会话写本地 IndexedDB 镜像（保持 dirty，
-    // 回到连接档后由下一轮 pushDirty 补偿上传）
-    if (offlineMode) {
-      const st2 = cb.getState();
-      const entries = dirtyIds
-        .map((id) => {
-          const session = st2.sessions.find((s) => s.id === id);
-          return session ? { session, version: st2.versions[id] ?? 0, updatedAt: Date.now() } : null;
-        })
-        .filter((e): e is SessionSnapshot => !!e);
-      if (entries.length > 0) await cachePutAll(entries);
-      cb.setStatus('offline');
-      return;
-    }
-    cb.setStatus('syncing');
-    let anyFail = false;
-    const mirrored: (SessionSnapshot & { active?: boolean })[] = [];
-    for (const id of dirtyIds) {
-      const session = st.sessions.find((s) => s.id === id);
-      if (!session) { st.dirty.delete(id); continue; }
-      if (cb.isStreaming(id)) continue; // 流式中不推（settle 后的下一轮防抖会推）
-      const baseVersion = st.versions[id] ?? 0;
-      const res = await pushSession(id, session, baseVersion);
-      if (res.ok) {
-        st.dirty.delete(id);
-        st.versions[id] = res.data.version;
-        // 镜像写通（spec v0.2）：推成功即落本地镜像（version 与服务端一致）
-        mirrored.push({ session, version: res.data.version, updatedAt: res.data.updatedAt });
-      } else if (res.status === 409) {
-        // 服务端有更新：默认以服务端为准（拉取覆盖）；本地确有更多消息时交由 UI 决策
-        st.dirty.delete(id);
-        cb.onConflict({ sessionId: id, serverVersion: res.currentVersion ?? 0, serverUpdatedAt: Date.now() });
-        const snap = await pullSession(id);
-        if (snap.ok && !cb.isStreaming(id)) {
-          cb.applyServerSnapshot(snap.data);
-          mirrored.push(snap.data);
-        }
-      } else {
-        anyFail = true; // 网络失败：保留 dirty，下一轮重试
-      }
-    }
-    if (mirrored.length > 0) {
-      void cachePutAll(mirrored).catch(() => undefined);
-    }
-    cb.setStatus(anyFail ? 'offline' : 'idle');
-  };
+  // 推送职责已上移 store.flushDirty（会话档单一权威化）：本层只做「拉取对账 + 缓存镜像」。
 
   /** 索引 SSE 事件 → 对账（版本比对幂等；事件只当「有变更」的信号用） */
   const onIndexEvent = (): void => {
@@ -389,7 +366,6 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       started = true;
       timer = setInterval(() => { void pull(); }, POLL_MS);
       document.addEventListener('visibilitychange', onVis);
-      window.addEventListener('pagehide', onHide);
       openIndexEs(); // v0.2：推送为主、轮询兜底
       void pull();
     },
@@ -398,31 +374,28 @@ export function createSync(cb: SyncCallbacks): SyncHandle {
       closeIndexEs();
       if (typeof window !== 'undefined') {
         document.removeEventListener('visibilitychange', onVis);
-        window.removeEventListener('pagehide', onHide);
       }
       started = false;
     },
     pullNow: async () => { await pull(); },
-    pushDirty: async () => { await pushDirty(); },
     setOfflineMode: (on) => {
       if (offlineMode === on) return;
       offlineMode = on;
       cb.setStatus(on ? 'offline' : 'syncing');
       if (on) closeIndexEs(); // 独立档：宿主不可达，SSE 连接只会产出失败请求
-      else openIndexEs();
-      if (!on) {
-        // 回到连接档：立即对账 + 补偿上传独立期间积攒的 dirty（相遇升级语义）
+      else {
+        openIndexEs();
+        // 回到连接档：立即对账（积攒的 dirty 由 store.setOfflineMode 的补偿 flushDirty 上传）
         void pull();
-        void pushDirty();
       }
     },
   };
 
+  // 可见性变化只影响拉取对账：切后台拉取暂停（节流）；推送由 store.flushDirty 自主调度
+  // （防抖到期 / pagehide / settle），不绑 visibilitychange。
   const onVis = (): void => {
     if (document.visibilityState === 'visible') void pull();
-    else void pushDirty(); // 切后台前把脏会话推上去
   };
-  const onHide = (): void => { void pushDirty(); };
 
   return handle;
 }
