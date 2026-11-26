@@ -54,8 +54,9 @@ export function HtmlPreviewPanel() {
 
   const current = items.find((i) => i.previewId === selected) ?? items[0] ?? null;
 
-  // 全屏（面板侧，2026-11-26 重写）：伪全屏——面板根挂 data-plite-ufs，
-  // 宿主 CSS 让抽屉让位（:has 检测）+ 视口级 fixed 锚定，iframe 原元素零重载。
+  // 全屏（面板侧，2026-11-26 二次重写）：伪全屏——Popover top layer
+  // （el.popover='manual'+showPopover，DOM 原位零重载，提升到一切层叠上下文之上，
+  // .slot 隔离/transform 劫持/滚动穿透天然免疫，见 fullscreen.ts 方案演进史）。
   // 旧 reparent 方案废弃（只能盖 tabpanel，且回退路径分裂）；原生 requestFullscreen
   // 方案亦弃（Android WebView 退出触发焦点周期，某 ROM 重放沉浸态，见 fullscreen.ts）。
   useEffect(() => {

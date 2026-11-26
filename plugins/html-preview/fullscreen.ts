@@ -1,20 +1,24 @@
 /**
- * 伪全屏（CSS overlay，2026-11-26 重写）
+ * 伪全屏（Popover top layer，2026-11-26 二次重写）
  *
- * 背景（为什么放弃 requestFullscreen）：Android WebView 的 DOM 全屏走系统级
- * custom view，退出时移除 view 会触发窗口焦点周期，实测某 ROM 会把沉浸模式
- * 重放——表现为「点退出全屏后画面又变回全屏」。双击重入冷却、全屏中禁重入等
- * 页面层防御全部无效（重放不是页面发起的）。历史结论：该 ROM 的系统栏 hide
- * 同样会被焦点周期重置（MainActivity 注释），页面层与壳层均无解。
+ * 演进史（三个死掉的方案，给后来者省排查时间）：
+ * 1. requestFullscreen：Android WebView 退出触发窗口焦点周期，实测某 ROM 会把
+ *    沉浸模式重放（「退出后又变回全屏」），页面层/壳层均无解——弃。
+ * 2. data-plite-ufs + 宿主 fixed 锚定：撞层叠上下文陷阱（.slot 的 z-index:0 +
+ *    isolation:isolate 把全屏层关在槽内，顶栏/输入条压在上面，「盖不全 + 对话
+ *    还能滚」），另需 :has() 反解宿主抽屉的 transform 劫持——宿主侧塞了 44 行
+ *    还修不完，弃。
+ * 3. Popover top layer（本方案）：el.popover='manual' + showPopover()——元素
+ *    保持 DOM 原位（iframe 不重载、进度不丢），但被浏览器提升到所有层叠上下文
+ *    之上渲染。.slot 隔离 / transform 劫持 / 门禁禁 fixed / 触摸滚动穿透，
+ *    四个坑逐个天然免疫，宿主零改动。
  *
- * 根治 = 不触发：全屏层改为 data-plite-ufs 属性驱动的 fixed 覆盖层
- * （fixed 锚定由宿主 styles.css 持有——构建门禁禁插件 CSS 用 position:fixed），
- * 全程不调 requestFullscreen → 系统全屏层/焦点周期重放/强制转横屏（方向锁机制
- * 存在的唯一理由）一并消失。iframe 原元素原位不动，零重载。
+ * 兼容：popover 需 Chrome 114+（2023），2026 年 WebView 无虞；不支持时
+ * 特性检测直接拒绝进入（按钮态不翻转，不会出现「点了没反应还以为全屏了」）。
  *
  * 退出路径（三条全收口到本模块）：
  * 1. 「退出全屏」按钮 → exitPseudoFullscreen()
- * 2. Esc → 模块级 keydown 监听
+ * 2. Esc → 模块级 keydown 监听（popover='manual' 不自动收 Esc）
  * 3. Android 返回键 → 进入时 pushState 压栈，返回键先弹我们的 state，
  *    popstate 里 finalize（返回键「先退全屏再退页面」）。
  */
@@ -29,7 +33,11 @@ function notify(): void {
 /** 摘层收尾（popstate / 直接退出共用）。幂等。 */
 function finalize(): void {
   if (!activeEl) return;
-  activeEl.removeAttribute('data-plite-ufs');
+  try {
+    activeEl.hidePopover();
+  } catch {
+    /* 未显示时 hidePopover 抛 InvalidStateError——幂等容错 */
+  }
   activeEl = null;
   notify();
 }
@@ -37,7 +45,9 @@ function finalize(): void {
 /** 进入伪全屏。同一时刻只允许一个全屏层（activeEl 守卫）。 */
 export function enterPseudoFullscreen(el: HTMLElement | null): void {
   if (!el || activeEl) return;
-  el.setAttribute('data-plite-ufs', '');
+  if (typeof (el as unknown as { showPopover?: unknown }).showPopover !== 'function') return;
+  el.setAttribute('popover', 'manual');
+  el.showPopover();
   activeEl = el;
   history.pushState({ pliteUfs: true }, '');
   notify();
@@ -56,7 +66,7 @@ export function exitPseudoFullscreen(): void {
 }
 
 export function isPseudoFullscreen(el: HTMLElement | null): boolean {
-  return !!el && el.hasAttribute('data-plite-ufs');
+  return !!el && el.matches(':popover-open');
 }
 
 /** 订阅全屏层变化（进入/退出都通知；回调参数 = 当前的全屏元素或 null）。 */
@@ -69,7 +79,7 @@ export function onPseudoFullscreenChange(cb: (el: HTMLElement | null) => void): 
 
 // 模块级全局监听，挂一次：
 // - popstate：返回键/浏览器后退弹栈 → 非全屏 state 时收层；
-// - Esc：桌面键盘习惯退出。
+// - Esc：桌面键盘习惯退出（popover='manual' 语义不自动收）。
 if (typeof window !== 'undefined') {
   window.addEventListener('popstate', () => {
     const st = history.state as { pliteUfs?: boolean } | null;

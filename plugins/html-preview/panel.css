@@ -74,22 +74,34 @@
  * 全屏层内的尺寸由 :fullscreen 伪类接管（脱离原布局上下文，flex 纵向铺满）。
  * 旧方案（absolute inset:0 原地盖 stream 槽）已废弃：那只能盖住对话区。
  * 退出钮醒目化：hp-exit 主色反白，全屏场景它是唯一出口，弱化等于不可见。 */
-/* ===== 全屏态（伪全屏：class 驱动，宿主 [data-plite-ufs] 提供视口级 fixed 锚定）
- * 2026-11-26 重写：弃 requestFullscreen（Android WebView 退出触发焦点周期，
- * 某 ROM 重放沉浸模式 → 「退出后又变回全屏」，无页面层解法，见 fullscreen.ts）。
- * .hp-fullscreen/.hp-panel-fullscreen 与 data-plite-ufs 同挂（组件里成对出现），
- * 本段只负责内部布局：flex 纵向铺满 + safe-area 让位。 */
-.hp-card.hp-fullscreen {
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
+/* ===== 全屏态（伪全屏：Popover top layer，2026-11-26 二次重写）
+ * 弃 requestFullscreen（Android WebView 退出触发焦点周期，某 ROM 重放沉浸模式
+ * → 「退出后又变回全屏」，无页面层解法）；亦弃 CSS 覆盖层 + 宿主 fixed 锚定方案
+ * （.slot 的 z-index:0+isolation:isolate 层叠隔离困住全屏层，「盖不全 + 对话还能
+ * 滚」，详见 fullscreen.ts 头注释的方案演进史）。现用浏览器原生 Popover top layer：
+ * el.popover='manual'+showPopover()，DOM 原位零重载，被提升到一切层叠上下文之上。
+ * 本段职责：覆盖 UA 对 popover 的默认框样式（margin:auto / fit-content / 居中），
+ * 撑满视口 + safe-area 让位；锚定与层级全部交给 top layer，零 z-index。 */
+.hp-card:popover-open,
+.hp-panel:popover-open {
+  inset: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-.hp-card.hp-fullscreen .hp-body { height: auto; flex: 1; min-height: 0; }
+.hp-card.hp-fullscreen,
 .hp-panel.hp-panel-fullscreen {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
 }
+.hp-card.hp-fullscreen .hp-body { height: auto; flex: 1; min-height: 0; }
 .hp-panel.hp-panel-fullscreen .hp-panel-body { flex: 1; min-height: 0; }
 .hp-panel.hp-panel-fullscreen .hp-panel-run { min-height: 0; }
 .hp-panel.hp-panel-fullscreen .hp-panel-head { flex: 0 0 auto; }

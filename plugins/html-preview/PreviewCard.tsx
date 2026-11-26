@@ -5,15 +5,11 @@
  * 卡片结构：标题栏（AI 生成徽标 + 标题 + 版本 + 操作钮[全屏/展开]）+ 沙箱 iframe。
  * iframe 源是 /api/preview/:id/raw（服务端 CSP sandbox 头 + 本组件 sandbox 属性双保险）。
  *
- * 全屏方案（2026-11-26 重写）：**伪全屏**——容器挂 data-plite-ufs 属性，宿主
- * styles.css 提供 fixed inset:0 视口级锚定（构建门禁禁插件 CSS 用 position:fixed，
- * 锚定规则由宿主持有）。要点：
- * - 弃 requestFullscreen：Android WebView 退出原生全屏会触发窗口焦点周期，
- *   某 ROM 重放沉浸模式（「退出后又变回全屏」），页面层无解，根治 = 不触发；
- * - iframe 原元素原位不动：零 reparent、零重载（游戏进度不丢）；
- * - 不经系统全屏层 → 强制转横屏问题消失，方向锁机制整体退役；
- * - 退出三路径全收口：按钮 / Esc / Android 返回键（history 压栈 + popstate），
- *   见 fullscreen.ts。
+ * 全屏方案（2026-11-26 二次重写）：**伪全屏 = Popover top layer**——容器挂
+ * popover='manual' + showPopover()，被浏览器提升到所有层叠上下文之上渲染，
+ * DOM 原位不动（iframe 零重载，进度不丢）。布局由插件 panel.css 的
+ * :popover-open 段负责（撑满视口 + safe-area），锚定/层级交给 top layer。
+ * 三个死方案的原因见 fullscreen.ts 头注释（requestFullscreen / 宿主 fixed 层）。
  */
 import { useEffect, useRef, useState } from 'react';
 import { enterPseudoFullscreen, exitPseudoFullscreen, onPseudoFullscreenChange } from './fullscreen';

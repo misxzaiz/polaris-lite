@@ -56,8 +56,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  焦点周期、某 ROM 重放沉浸态（用户实测「退出后又变回全屏」，双击冷却防御无效），
  *  根治 = 弃 requestFullscreen 改 CSS 覆盖层。fixed 锚定必须宿主持有：构建门禁禁
  *  插件 CSS 用 position:fixed，宿主是唯一合法位置；抽屉让位需 :has() 选中宿主元素，
- *  插件侧同理被门禁禁止。属视口/抽屉壳层职责，非业务。 */
-const CORE_BUDGET = 5390;
+ *  插件侧同理被门禁禁止。属视口/抽屉壳层职责，非业务。
+ *  2026-11-26 下调 5390 → 5345：上条豁免的伪全屏机制整体退役——CSS 覆盖层撞层叠
+ *  上下文陷阱（.slot 的 z-index:0+isolation:isolate 困住全屏层，顶栏/输入条压顶，
+ *  「盖不全 + 对话还能滚」），方案改为浏览器原生 Popover top layer（el.showPopover
+ *  提升到一切层叠上下文之上，DOM 原位零重载，四个坑天然免疫），宿主 44 行全删、
+ *  布局职责回到插件 CSS（UA 默认样式 + 插件覆盖 margin/inset）。豁免随方案作废
+ *  回滚，预算恢复 5345。
+ */
+const CORE_BUDGET = 5345;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

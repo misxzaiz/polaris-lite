@@ -616,38 +616,5 @@ body.ws-dragging-tab { cursor: grabbing; }
   pointer-events: auto;
 }
 
-/* ===== 宿主级伪全屏机制（2026-11-26，html-preview 移动端根治）=====
- * 背景：Android WebView 原生 DOM 全屏的退出会触发窗口焦点周期，某 ROM 会把沉浸
- * 模式重放（「退出后又变回全屏」），页面层防御无效（见 plugins/html-preview/
- * fullscreen.ts 头注释）。根治 = 不调 requestFullscreen，全屏层改为本属性驱动。
- *
- * 设计：插件 JS 给自己的容器挂 data-plite-ufs 属性即成视口级全屏层。fixed 锚定
- * 必须由宿主持有（构建门禁禁插件 CSS 用 position:fixed——fixed 会逃出窗格盖住
- * 分隔条与抽屉，插件层无法为单个属性开口子，所以规则放宿主）。
- * iframe 原元素原位不动：零 reparent、零重载（游戏进度不丢）。 */
-[data-plite-ufs] {
-  position: fixed;
-  inset: 0;
-  z-index: 70; /* 盖过顶栏(60)/抽屉(40)/浮层根(60)；9999 调试角标在其上不受影响 */
-  background: var(--bg);
-  border: none !important; /* 原卡片边框/圆角在覆盖层语义下无意义，防视觉残留 */
-  border-radius: 0 !important;
-  box-shadow: none !important;
-  margin: 0 !important;
-  /* viewport-fit=cover 下状态栏悬浮在视口之上，全屏层顶到 y=0，必须让位
-   * （与宿主顶栏/抽屉的 safe-area 纪律对齐；桌面 inset=0 无副作用） */
-  padding-top: env(safe-area-inset-top, 0px) !important;
-  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
-}
 
-/* 全屏层从抽屉里出来后，抽屉自身让位：open 态 translateX(0) → none 视觉零差异，
- * 但 transform 非 none 会创建 containing block 劫持后代的 fixed 定位（fixed 后代
- * 会锚到抽屉而非视口）——所以必须置 none。宽度/层级一并让位。 */
-.shell-panel:has([data-plite-ufs]),
-.shell-sidebar:has([data-plite-ufs]) {
-  transform: none;
-  width: 100vw;
-  z-index: 70;
-  background: var(--bg);
-}
 
