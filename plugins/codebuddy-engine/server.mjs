@@ -28,6 +28,17 @@ import { StringDecoder } from 'node:string_decoder';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** 每个在途会话的运行态：sessionId::messageId → 控制 */
+
+// 断连宽限：客户端 SSE 断开（手机网络抖动/锁屏/刷新）后保留 run 的时长；
+// 期内重连续订则取消，超时才树杀。默认 2 分钟（一轮长任务 typical 上限内）。
+const DISCONNECT_GRACE_MS = Number(process.env.PLITE_CODEBUDDY_GRACE_MS ?? 120_000);
+// SSE 心跳：向在途订阅者定期写 ping，兼探测死连接
+const SSE_PING_MS = 15_000;
+// 事件缓冲上限：重放窗口的兜底（内存防护；正常一轮远达不到）
+const MAX_BUFFERED_EVENTS = 5_000;
+// run 结束后的重放保留窗口：迟到重连只读重放；期内同 messageId 新请求会替换
+const REPLAY_WINDOW_MS = 60_000;
+
 const running = new Map();
 
 /** 读取登记工作区根（与 agent-bash 同源：file-browser 维护的 workspace-roots.json） */
@@ -220,7 +231,7 @@ async function previewFromWrite(dataDir, selfPort, verifyTempToken, tempTokens, 
   } catch { return null }
 }
 
-/** SSE 帧写出 */
+/** SSE 帧写出（遗留单点写；主路径已由 emitEvent 扇出，保留给独立小响应） */
 function sseWrite(res, obj) {
   try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* 连接已断 */ }
 }
@@ -327,32 +338,121 @@ export function createServerPart(options = {}) {
       const messageId = String(payload.messageId ?? 'unknown');
       const key = `${sessionId}::${messageId}`;
 
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-
-      if (running.has(key)) {
-        sseWrite(res, { kind: 'stream.error', payload: { sessionId, messageId, message: '该消息已有在途引擎会话' } });
-        sseWrite(res, { kind: 'message.done', payload: { sessionId, messageId } });
-        res.end();
+      const existingRun = running.get(key);
+      if (existingRun && existingRun.finished) {
+        // run 已结束但仍在重放保留窗口内：迟到重连只读重放（含末尾 message.done）
+        // 即刻关闭，不重新执行任务。
+        attachToRun(existingRun, res, Number(payload.lastEventId ?? 0) || 0);
         return;
       }
+      if (existingRun) {
+        // 同一 messageId 重复请求 = 断连重连（续订），不是冲突：
+        // 先重放 lastEventId 之后的事件，再挂订阅。writeHead 由 attachToRun 统一发出。
+        attachToRun(existingRun, res, Number(payload.lastEventId ?? 0) || 0);
+        return;
+      }
+      // 上面两个分支覆盖了 existingRun 的全部情况；走到这里必然没有在途 run，
+      // 但 stale 的 finished run 可能还占着位（REPLAY_WINDOW_MS 内被用户重发）——先清掉。
+      running.delete(key);
 
       const workdir = resolveWorkdir(dataDir, payload.workdir);
       const prompt = flattenPrompt(payload);
-      const run = { sessionId, messageId, dataDir, killed: false, child: null, adapterStdin: null };
+
+      const run = {
+        sessionId, messageId, dataDir, key,
+        killed: false, child: null, adapterStdin: null,
+        finished: false,
+        seq: 0,
+        events: [],          // { seq, kind, payload }（内存态；run 结束即弃）
+        subs: new Set(),     // 在途 SSE 响应（断连可再补）
+        graceTimer: null,
+        writeArgs: null,
+      };
       running.set(key, run);
       audit(dataDir, { event: 'start', sessionId, messageId, workdir, model: payload.model ?? 'hy4flash-free' });
 
+      // 事件写出到所有在途订阅者（断连重连后新 res 也在 subs 里）
+      const emitEvent = (kind, payload) => {
+        run.seq += 1;
+        const ev = { seq: run.seq, kind, payload };
+        run.events.push(ev);
+        if (run.events.length > MAX_BUFFERED_EVENTS) run.events.splice(0, run.events.length - MAX_BUFFERED_EVENTS);
+        const frame = `data: ${JSON.stringify({ kind, payload, seq: ev.seq })}\n\n`;
+        for (const sub of [...run.subs]) {
+          try { sub.write(frame); } catch { run.subs.delete(sub); /* close 回调统一回收 */ }
+        }
+        return ev;
+      };
+
+      // 订阅一个响应到 run（重连续订共用）：先重放 lastEventId 之后的事件，再挂订阅与心跳。
+      function attachToRun(r, subRes, lastEventId) {
+        subRes.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        subRes.flushHeaders();
+        for (const ev of r.events) {
+          if (ev.seq <= lastEventId) continue;
+          try { subRes.write(`data: ${JSON.stringify({ kind: ev.kind, payload: ev.payload, seq: ev.seq })}\n\n`); } catch { return; /* 断开，close 回调回收 */ }
+        }
+        if (r.finished) {
+          try { subRes.end(); } catch { /* 已断 */ }
+          return;
+        }
+        // 有新订阅者在线：取消未决的断连树杀
+        if (r.graceTimer) { clearTimeout(r.graceTimer); r.graceTimer = null; audit(r.dataDir, { event: 'grace-cancel', sessionId: r.sessionId, messageId: r.messageId }); }
+        r.subs.add(subRes);
+        const ping = setInterval(() => {
+          try { subRes.write(`data: ${JSON.stringify({ kind: 'ping', payload: {}, seq: 0 })}\n\n`); } catch { /* close 回收 */ }
+        }, SSE_PING_MS);
+        subRes.on('close', () => {
+          clearInterval(ping);
+          r.subs.delete(subRes);
+          // 最后一个订阅者断开且 run 未结束：进入宽限期
+          if (r.subs.size === 0 && !r.finished) enterGrace(r);
+        });
+      }
+
+      // 宽限期：CLI 继续跑，事件继续进缓冲；到期仍无订阅者 → 树杀回收
+      function enterGrace(r) {
+        if (r.graceTimer || r.finished) return;
+        r.graceTimer = setTimeout(() => {
+          r.graceTimer = null;
+          if (r.subs.size === 0 && !r.finished) {
+            killRun(r, 'grace-expired');
+            if (running.get(r.key) === r) {
+              running.delete(r.key);
+              audit(r.dataDir, { event: 'end', reason: 'grace-expired', sessionId: r.sessionId, messageId: r.messageId });
+            }
+          }
+        }, DISCONNECT_GRACE_MS);
+        audit(r.dataDir, { event: 'grace-start', sessionId: r.sessionId, messageId: r.messageId, ms: DISCONNECT_GRACE_MS });
+      }
+
+      // 首个请求的响应也走统一订阅路径（心跳 + 断连宽限一并生效）
+      attachToRun(run, res, 0);
+
       const finish = (reason, extraEvent) => {
-        if (!running.has(key)) return;
+        if (run.finished) return;
+        run.finished = true;
+        if (run.graceTimer) { clearTimeout(run.graceTimer); run.graceTimer = null; }
         running.delete(key);
-        if (extraEvent) sseWrite(res, extraEvent);
-        sseWrite(res, { kind: 'message.done', payload: { sessionId, messageId, ...(reason === 'interrupted' ? { interrupted: true } : {}) } });
-        try { res.end(); } catch { /* 已断 */ }
+        if (extraEvent) emitEvent(extraEvent.kind, extraEvent.payload);
+        emitEvent('message.done', { sessionId, messageId, ...(reason === 'interrupted' ? { interrupted: true } : {}) });
+        for (const sub of [...run.subs]) {
+          try { sub.end(); } catch { /* 已断 */ }
+        }
+        run.subs.clear();
         audit(dataDir, { event: 'end', reason, sessionId, messageId });
+        // 结束后的重放窗口：客户端可能在 run 结束的瞬间才重连（断连期间任务跑完）。
+        // 短暂保留 run（只读重放，不再执行），迟到者带 lastEventId 续订能拿到全部事件；
+        // 窗口过后彻底回收。若期间同 messageId 发来新请求（用户重发），回收让位。
+        const doneRun = run;
+        setTimeout(() => {
+          if (running.get(key) === doneRun) running.delete(key);
+        }, REPLAY_WINDOW_MS).unref?.();
+        running.set(key, doneRun); // 重占位：attachToRun 见 finished=true 只重放即关闭
       };
 
       // spawn adapter（每轮一启一退；adapter 内部再 spawn codebuddy CLI）
@@ -404,6 +504,7 @@ export function createServerPart(options = {}) {
       // 必须显式 'utf-8'：Node 对 pipe 默认按 latin1/系统码页写，中文会 mojibake
       adapter.stdin.write(JSON.stringify({ id: 1, method: 'start_session', params: startParams }) + '\n', 'utf-8');
 
+      // ---- 事件循环：adapter stdout JSONL → SSE 事件 ----
       let outBuf = '';
       const stdoutDecoder = new StringDecoder('utf-8');
       adapter.stdout.on('data', (chunk) => {
@@ -418,7 +519,7 @@ export function createServerPart(options = {}) {
           if (frame.event !== 'ai_event') continue; // 响应帧（result）不进 UI
           if (frame.type === 'session_end') { finish(frame.reason === 'aborted' ? 'interrupted' : 'completed'); return; }
           const ev = translateEvent(sessionId, messageId, frame);
-          if (ev) sseWrite(res, ev);
+          if (ev) emitEvent(ev.kind, ev.payload);
           // HTML 预览联动：Write 工具成功写了 .html → 落 preview 并发 artifact.created
           //（Write 的参数在 tool_call_start 帧；start/end 两帧按 call_id 配对取 file_path）。
           if (frame.type === 'tool_call_start' && frame.tool === 'Write') {
@@ -432,7 +533,7 @@ export function createServerPart(options = {}) {
             run.writeArgs?.delete(frame.call_id);
             if (filePath) {
               void previewFromWrite(dataDir, selfPort, verifyTempToken, tempTokens, filePath, frame.call_id || '', sessionId, messageId)
-                .then((artifactEv) => { if (artifactEv && running.has(key)) sseWrite(res, artifactEv); })
+                .then((artifactEv) => { if (artifactEv && !run.finished) emitEvent(artifactEv.kind, artifactEv.payload); })
                 .catch(() => { /* 联动失败不影响主流程 */ });
             }
           }
@@ -447,20 +548,14 @@ export function createServerPart(options = {}) {
       });
       adapter.on('close', (code) => {
         // 正常路径 session_end 帧已 finish；这里是异常退出（崩溃/被杀）兜底
-        if (running.has(key)) {
+        if (!run.finished) {
           finish(run.killed ? 'interrupted' : (code === 0 ? 'completed' : 'error'),
             run.killed || code === 0 ? undefined : { kind: 'stream.error', payload: { sessionId, messageId, message: `引擎异常退出（码 ${code}）` } });
         }
       });
 
-      // 客户端断开（前端 abort / 页面关闭）→ 树杀
-      res.on('close', () => {
-        if (running.has(key)) {
-          killRun(run, 'client-disconnected');
-          running.delete(key);
-          audit(dataDir, { event: 'end', reason: 'client-disconnected', sessionId, messageId });
-        }
-      });
+      // 首个响应断开：不再立即树杀——进入宽限期（重连续订可取消），由 attachToRun 的
+      // close 回调统一管理（attach 时已挂 res.on('close')）。这里不重复挂监听。
       return;
     }
 

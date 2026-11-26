@@ -354,7 +354,13 @@ export async function interruptCodebuddy(sessionId: string): Promise<boolean> {
   return true;
 }
 
-/** codebuddy 直连一轮流：消费 SSE 帧转交 handleEnvelope，并镜像 re-emit 到总线供旁听方消费 */
+/** codebuddy 直连一轮流：消费 SSE 帧转交 handleEnvelope，并镜像 re-emit 到总线供旁听方消费。
+ *  断连韧性：服务端为每帧带 seq 并保留事件缓冲——fetch 中途断掉（手机网络抖动/锁屏）
+ *  时带 lastEventId 自动重连续订，事件重放幂等（chat-lite 按 kind+callId 去重），
+ *  不再把瞬断放大成整轮报废的 "network error"。 */
+const CODEBUDDY_RECONNECT_MAX = 6; // 重连次数上限（指数退避，封顶 8s）；超出才落到错误呈现
+const CODEBUDDY_RECONNECT_BASE_MS = 700;
+
 async function streamCodebuddyTurn(
   api: SlotHostApi,
   sid: string,
@@ -377,12 +383,17 @@ async function streamCodebuddyTurn(
       api.emit('cap.ai.chat:event', { source: 'codebuddy-engine', kind: ev.kind, payload: ev.payload ?? {} });
     } catch { /* grants 缺失或无监听者：旁听是旁路职责，不阻断渲染 */ }
   };
-  try {
+  let lastSeq = 0; // 已收到的最大帧序号（重连续订游标）
+  let turnDone = false; // message.done / stream.error 已到：正常收敛，不再重连
+
+  // 单次连接尝试：读到流结束（resp body done）为止。返回是否因断连需要重试。
+  const attemptOnce = async (): Promise<boolean> => {
     const resp = await fetch(CODEBUDDY_STREAM_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      // model 缺省=CLI 默认（hy4flash-free）；workdir=会话绑定工作区 path（服务端白名单校验）
+      // model 缺省=CLI 默认（hy4flash-free）；workdir=会话绑定工作区 path（服务端白名单校验）；
+      // lastEventId=断连重连游标（服务端重放该 seq 之后的事件）
       body: JSON.stringify({
         sessionId: sid,
         messageId: assistantId,
@@ -390,6 +401,7 @@ async function streamCodebuddyTurn(
         history,
         ...(model ? { model } : {}),
         ...(workdir ? { workdir } : {}),
+        ...(lastSeq > 0 ? { lastEventId: lastSeq } : {}),
       }),
       signal: abort.signal,
     });
@@ -399,23 +411,67 @@ async function streamCodebuddyTurn(
       try { const j = JSON.parse(text); msg = j.error?.message ?? j.error ?? msg; } catch { /* 保留状态码描述 */ }
       handleEnvelope({ source: 'codebuddy-engine', kind: 'stream.error', payload: { sessionId: sid, messageId: assistantId, message: String(msg) } });
       onSettled();
-      return;
+      return false;
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     const feed = createCodebuddySseParser((ev) => {
-      if (!ev.kind) return;
-      emitMirror(ev);
-      handleEnvelope({ source: 'codebuddy-engine', kind: ev.kind, payload: ev.payload ?? {} });
+      const frame = ev as { kind?: string; payload?: unknown; seq?: number };
+      if (!frame.kind) return;
+      if (typeof frame.seq === 'number' && frame.seq > 0) {
+        if (frame.seq <= lastSeq) return; // 重放去重：只处理新于游标的帧
+        lastSeq = frame.seq;
+      }
+      if (frame.kind === 'ping') return; // 心跳：只保连接，不进事件流
+      emitMirror({ kind: frame.kind, payload: frame.payload });
+      handleEnvelope({ source: 'codebuddy-engine', kind: frame.kind, payload: frame.payload ?? {} });
+      if (frame.kind === 'message.done' || frame.kind === 'stream.error') turnDone = true;
     });
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       feed(decoder.decode(value, { stream: true }));
     }
-    // SSE 正常关闭但无 done 帧（CLI 异常退出兜底）：强制收敛，防 UI 永久 streaming
-    handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId } });
-    onSettled();
+    return !turnDone; // 流结束但没等到 done/error = 中途断连
+  };
+
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      const needsReconnect = await attemptOnce();
+      if (!needsReconnect) {
+        // 正常收敛或不可重试错误：SSE 关闭但无 done 帧（CLI 异常退出兜底）——
+        // 强制收敛，防 UI 永久 streaming
+        if (!turnDone) {
+          handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId } });
+        }
+        onSettled();
+        return;
+      }
+      if (attempt >= CODEBUDDY_RECONNECT_MAX) {
+        // 重连额度耗尽：如实报错（不再裸 "network error"，带上断连语义与已生成进度）
+        handleEnvelope({
+          source: 'codebuddy-engine',
+          kind: 'stream.error',
+          payload: { sessionId: sid, messageId: assistantId, message: '连接反复中断（已自动重连未果）。任务可能仍在服务端执行，可稍后回到本会话查看，或点重发再试。' },
+        });
+        onSettled();
+        return;
+      }
+      // 断连退避重连；期间给用户可见的轻提示（幂等 notice 块）
+      const waitMs = Math.min(CODEBUDDY_RECONNECT_BASE_MS * 2 ** attempt, 8000);
+      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
+        type: 'notice',
+        text: `[连接中断，${Math.round(waitMs / 100) / 10}s 后自动重连（第 ${attempt + 1}/${CODEBUDDY_RECONNECT_MAX} 次）]`,
+      });
+      await new Promise((r) => setTimeout(r, waitMs));
+      if (abort.signal.aborted || turnDone) {
+        if (!turnDone) {
+          handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId, interrupted: true } });
+        }
+        onSettled();
+        return;
+      }
+    }
   } catch (err) {
     if (abort.signal.aborted) {
       // 用户中断：本地已断流收不到服务端补发的 done{interrupted}，就地合成收敛
