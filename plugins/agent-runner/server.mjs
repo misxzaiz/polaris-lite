@@ -221,6 +221,11 @@ export function createServerPart(options = {}) {
         blocks.push({ type: 'notice', text: `[已自动续写 ${p.attempt ?? '?'}/${p.max ?? 3}]` });
       } else if (ev.kind === 'message.truncated') {
         blocks.push({ type: 'truncated', text: p.text ?? '回复因达到输出上限被截断' });
+      } else if (ev.kind === 'stream.error') {
+        // 错误同样要落档：上游 402/401、引擎崩、CLI 未登录都只会走到这里。
+        // 不落的话刷新/换设备就只剩一条用户消息，看起来像「消息丢了」。
+        blocks.push({ type: 'text', text: String(p.message ?? '流式请求失败') });
+        text = text || String(p.message ?? '流式请求失败');
       }
     }
     if (blocks.length === 0) return;
@@ -1154,6 +1159,7 @@ export function createServerPart(options = {}) {
         .catch((e) => {
           audit({ op: 'run-fatal', runId, error: String(e?.message ?? e) });
           emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: String(e?.message ?? e).slice(0, 300) });
+          syncTurnToSession(run, 0); // 致命错误同样落档（否则刷新后只剩一条用户消息）
           finishRun(run);
         });
       return send(res, 200, { ok: true, runId, existing: false });
@@ -1188,6 +1194,7 @@ export function createServerPart(options = {}) {
       void runLoop(run).catch((e) => {
         audit({ op: 'resume-fatal', runId, error: String(e?.message ?? e) });
         emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: String(e?.message ?? e).slice(0, 300) });
+        syncTurnToSession(run, 0);
         finishRun(run);
       });
       return send(res, 200, { ok: true, runId, existing: false });

@@ -424,7 +424,10 @@ export function createServerPart(options = {}) {
             if (frame.event !== 'ai_event') continue;
             const t = frame.type;
             if (t === 'session_end') {
-              settle(null);
+              // CLI 报错且一个 token 都没产出（未登录 / 额度不足 / 模型不可用）时，
+              // 不能当正常空回复返回——上层只会渲染一条空白消息，用户完全看不出原因。
+              if (errorText && textAcc.join('').trim() === '' && toolCalls.length === 0) settle(new Error(errorText));
+              else settle(null);
               return;
             }
             if (t === 'token') {
