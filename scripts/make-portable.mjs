@@ -110,14 +110,17 @@ if (withBrowser) {
       rmSync(join(outDir, 'plugins/browser-lite/node_modules', name, p), { recursive: true, force: true });
     }
   }
-  // 根 undici（裁剪文档/类型）
-  cp(join(repoRoot, 'node_modules', 'undici'), 'node_modules/undici');
-  for (const p of ['docs', 'types', 'scripts']) {
-    rmSync(join(outDir, 'node_modules/undici', p), { recursive: true, force: true });
-  }
-  cp(join(repoRoot, 'package.json'), 'package.json');
-  cp(join(repoRoot, 'package-lock.json'), 'package-lock.json');
 }
+
+// ── 4'. 根运行时依赖 undici（必需，与 browser-lite 无关）
+// server/relay-core.mjs 顶层 import 'undici'；--no-browser 也必须带上，
+// 否则包里起服务直接 ERR_MODULE_NOT_FOUND（2026-11-26 实测发现并修正）。
+cp(join(repoRoot, 'node_modules', 'undici'), 'node_modules/undici');
+for (const p of ['docs', 'types', 'scripts']) {
+  rmSync(join(outDir, 'node_modules/undici', p), { recursive: true, force: true });
+}
+cp(join(repoRoot, 'package.json'), 'package.json');
+cp(join(repoRoot, 'package-lock.json'), 'package-lock.json');
 
 // ── 5. 启动脚本 + README ────────────────────────────────────────────────
 const ver = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version;
