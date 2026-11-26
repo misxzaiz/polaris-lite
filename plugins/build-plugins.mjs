@@ -47,6 +47,7 @@ import {
 import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseViewContributions, validateViews, isExported } from './manifest-views.mjs';
+import { PLUGIN_LIST } from './plugin-list.mjs';
 
 const pluginsRoot = dirname(fileURLToPath(import.meta.url));
 const hostRoot = resolve(pluginsRoot, '..');
@@ -58,73 +59,11 @@ const argv = new Set(process.argv.slice(2));
 const SKIP_BUILD = argv.has('--skip-build');
 const CHECK_ONLY = argv.has('--check');
 
-/**
- * 插件清单。`order` 只决定 registry 的书写顺序与产物列表；
- * **装配顺序由 manifest.requires 拓扑排序决定**（宿主启动时按「能力提供方先装配」排序）。
- * mock-engine：验收/演示用途，默认停用；启用会与 real-engine 抢注 cap.ai.chat。
- */
-const plugins = [
-  { id: 'config-manager', config: 'config-manager/vite.config.ts', dist: 'config-manager/dist', order: 1 },
-  { id: 'chat-lite', config: 'chat-lite/vite.config.ts', dist: 'chat-lite/dist', order: 2 },
-  { id: 'model-admin', config: 'model-admin/vite.config.ts', dist: 'model-admin/dist', order: 3 },
-  { id: 'real-engine', config: 'real-engine/vite.config.ts', dist: 'real-engine/dist', order: 4 },
-  { id: 'agent-bash', config: 'agent-bash/vite.config.ts', dist: 'agent-bash/dist', order: 5 },
-  { id: 'agent-loop', config: 'agent-loop/vite.config.ts', dist: 'agent-loop/dist', order: 6 },
-  { id: 'agent-files', config: 'agent-files/vite.config.ts', dist: 'agent-files/dist', order: 7 },
-  { id: 'cap-panel', config: 'cap-panel/vite.config.ts', dist: 'cap-panel/dist', order: 8 },
-  { id: 'mock-auth', config: 'mock-auth/vite.config.ts', dist: 'mock-auth/dist', order: 9 },
-  { id: 'mock-engine', config: 'mock-engine/vite.config.ts', dist: 'mock-engine/dist', order: 10, enabled: false },
-  { id: 'file-browser', config: 'file-browser/vite.config.ts', dist: 'file-browser/dist', order: 11 },
-  { id: 'theme-switcher', config: 'theme-switcher/vite.config.ts', dist: 'theme-switcher/dist', order: 12 },
-  { id: 'ai-events', config: 'ai-events/vite.config.ts', dist: 'ai-events/dist', order: 13 },
-  { id: 'interactive-cards', config: 'interactive-cards/vite.config.ts', dist: 'interactive-cards/dist', order: 14 },
-  { id: 'html-preview', config: 'html-preview/vite.config.ts', dist: 'html-preview/dist', order: 15 },
-  { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 16 },
-  { id: 'kv-store', config: 'kv-store/vite.config.ts', dist: 'kv-store/dist', order: 17 },
-  { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 17 },
-  // Git 能力（cap.git 提供方，server 半边）+ Git 面板（消费方；requires 保证 core 先装配）
-  { id: 'git-core', config: 'git-core/vite.config.ts', dist: 'git-core/dist', order: 23 },
-  { id: 'git-panel', config: 'git-panel/vite.config.ts', dist: 'git-panel/dist', order: 24 },
-  { id: 'chat-store', config: 'chat-store/vite.config.ts', dist: 'chat-store/dist', order: 19 },
-  { id: 'plugin-manager', config: 'plugin-manager/vite.config.ts', dist: 'plugin-manager/dist', order: 18 },
-  { id: 'mobile-companion', config: 'mobile-companion/vite.config.ts', dist: 'mobile-companion/dist', order: 20 },
-  // 应用更新（App 刷新引导）：版本检查 + 24h 惰性提示；server 半边提供版本端点
-  { id: 'app-updater', config: 'app-updater/vite.config.ts', dist: 'app-updater/dist', order: 21 },
-  { id: 'phone-agent', config: 'phone-agent/vite.config.ts', dist: 'phone-agent/dist', order: 22 },
-  { id: 'standalone-mode', config: 'standalone-mode/vite.config.ts', dist: 'standalone-mode/dist', order: 22 },
-  // CodeBuddy CLI 引擎（服务端半边 spawn adapter.js → codebuddy CLI）。
-  // 与 real-engine 互斥：cap.ai.chat 是单注册位，registry 里两者只能 enabled 一个。
-  // 当前主用 real-engine（OpenAI 兼容中继），codebuddy-engine 产物保留但默认停用；
-  // 需要切引擎时把 enabled 改回 true 并同步把 real-engine 置 enabled: false。
-  { id: 'codebuddy-engine', config: 'codebuddy-engine/vite.config.ts', dist: 'codebuddy-engine/dist', order: 23, enabled: false },
-  // 扩展能力插件（plans/extension-capability-pure-plugin-plan.md）：
-  // skill-loader = SKILL.md 技能发现 + read_skill 工具 + 系统提示附录（AGENTS.md/CLAUDE.md）；
-  // hook-bridge  = 生命周期钩子（CC/ZC hooks 兼容，进程执行器在 server 半边）。
-  { id: 'skill-loader', config: 'skill-loader/vite.config.ts', dist: 'skill-loader/dist', order: 24 },
-  { id: 'hook-bridge', config: 'hook-bridge/vite.config.ts', dist: 'hook-bridge/dist', order: 25 },
-  // mcp-bridge = MCP server 接入（stdio JSON-RPC client 池 + cap.tool.mcp 聚合工具 + 管理面）
-  { id: 'mcp-bridge', config: 'mcp-bridge/vite.config.ts', dist: 'mcp-bridge/dist', order: 26 },
-  // zcode-compat = CC/ZC 扩展文件扫描与固化导入（纯导入器，能力由上面三个插件承载）
-  { id: 'zcode-compat', config: 'zcode-compat/vite.config.ts', dist: 'zcode-compat/dist', order: 27 },
-  // plugin-market = 外部插件商城与运行时安装器（plans/runtime-extensions-and-market-final.md P2）
-  { id: 'plugin-market', config: 'plugin-market/vite.config.ts', dist: 'plugin-market/dist', order: 28 },
-  // transcript-share = AI 对话全过程只读分享（needs #069）：链接分享接口（token+有效期）+ panel + cap.tool.transcript
-  { id: 'transcript-share', config: 'transcript-share/vite.config.ts', dist: 'transcript-share/dist', order: 29 },
-  // shell-chrome = 多面板 tab 条 chrome 的插件化实现（host-slimming-report §7.2/P1-2;containers 契约首个消费者）
-  { id: 'shell-chrome', config: 'shell-chrome/vite.config.ts', dist: 'shell-chrome/dist', order: 30 },
-  // workspace-layout = 工作区布局树插件化（host-slimming-report §7.1/P2-2;layout-root 容器）
-  { id: 'workspace-layout', config: 'workspace-layout/vite.config.ts', dist: 'workspace-layout/dist', order: 31 },
-  // personal-hub = 个人空间（自 Polaris PersonalHub 迁移）：Supabase 直连的导航/书签/待办
-  { id: 'personal-hub', config: 'personal-hub/vite.config.ts', dist: 'personal-hub/dist', order: 32 },
-  // voice-radio = AI 无限语音电台（自 Polaris Radio Broadcast 移植）：cap.ai.chat 段循环 + MiMo TTS 服务端代理
-  { id: 'voice-radio', config: 'voice-radio/vite.config.ts', dist: 'voice-radio/dist', order: 33 },
-  // starter-suggestions = 新会话开场建议池（cap.kv 持久化 + cap.tool.suggestions 供 AI 实时增改 + panel 管理面）
-  { id: 'starter-suggestions', config: 'starter-suggestions/vite.config.ts', dist: 'starter-suggestions/dist', order: 34 },
-  // translate = 翻译（自 Polaris 翻译功能移植）：百度翻译 server 代理 + cap.tool.translate 供 AI 调用 + panel 面板
-  { id: 'translate', config: 'translate/vite.config.ts', dist: 'translate/dist', order: 35 },
-  // notification-center = 全局通知中心：cap.ui.notify 能力总线 + overlay-root 堆叠 toast + panel「通知」Tab
-  { id: 'notification-center', config: 'notification-center/vite.config.ts', dist: 'notification-center/dist', order: 36 },
-].sort((a, b) => a.order - b.order);
+/** 插件清单唯一来源见 plugin-list.mjs（前端产物与 server 半边共用同一 enabled） */
+const plugins = PLUGIN_LIST;
+
+/** 核心自带的协议能力：插件的 requires 可以依赖它们，但没有插件提供方 */
+const CORE_PROVIDES = new Set(['cap.meta', 'cap.ai.engine', 'cap.ai.chat', 'cap.ai.chat.interrupt']);
 
 class BuildError extends Error {}
 function fail(msg) {
@@ -297,6 +236,56 @@ function readSlotContributions(literal, pluginId) {
 }
 
 /**
+ * 解析 manifest.aiEngine 声明（引擎插件的静态身份）。
+ * manifest 必须可被静态校验，所以字段一律是字面量；函数/变量形式一律 fail-fast。
+ */
+function readAiEngine(literal, pluginId) {
+  const m = /\baiEngine\s*:\s*\{/.exec(literal);
+  if (!m) return null;
+  const text = extractBracketed(literal, literal.indexOf('{', m.index));
+  if (!text) fail(`插件 ${pluginId}：manifest.aiEngine 括号不闭合`);
+  const str = (field) => (new RegExp(`\\b${field}\\s*:\\s*['"\`]([^'"\`]*)['"\`]`).exec(text) ?? [])[1];
+  const bool = (field) => {
+    const hit = new RegExp(`\\b${field}\\s*:\\s*(true|false)`).exec(text);
+    return hit ? hit[1] === 'true' : undefined;
+  };
+  // features 是可选的内嵌对象：逐字段用正则取值，不要求整个对象字面量出现
+  const feature = (name) => {
+    const hit = new RegExp(`\\b${name}\\s*:\\s*(true|false)`).exec(text);
+    return hit ? hit[1] === 'true' : undefined;
+  };
+  const id = str('id');
+  const modelSource = str('modelSource');
+  if (!id) fail(`插件 ${pluginId}：aiEngine.id 必须是字符串字面量`);
+  if (!modelSource || !['app', 'builtin', 'hybrid', 'none'].includes(modelSource)) {
+    fail(`插件 ${pluginId}：aiEngine.modelSource 必须是 app / builtin / hybrid / none 之一`);
+  }
+  // 静态模型目录：只读取 models:[{id:'...'}] 里的 id（动态目录由 models cap 提供）
+  const models = [];
+  const modelsAt = /\bmodels\s*:\s*\[/.exec(text);
+  if (modelsAt) {
+    const arr = extractBracketed(text, text.indexOf('[', modelsAt.index));
+    if (arr) {
+      for (const hit of arr.matchAll(/\{\s*id\s*:\s*['"`]([^'"`]+)['"`][^}]*\}/g)) {
+        models.push(hit[1]);
+      }
+    }
+  }
+  return {
+    id,
+    displayName: str('displayName') ?? id,
+    kind: str('kind') ?? 'chat',
+    modelSource,
+    default: bool('default') ?? false,
+    features: {
+      ...(feature('supportsTools') !== undefined ? { supportsTools: feature('supportsTools') } : {}),
+      ...(feature('slashSkills') !== undefined ? { slashSkills: feature('slashSkills') } : {}),
+    },
+    models,
+  };
+}
+
+/**
  * 插件样式门禁：静态扫描 CSS 文本。
  *
  * 背景：插件 CSS 目前是全局注入（无隔离），一份 `.slot-tab { display:none }` 就能改掉
@@ -372,6 +361,7 @@ function readSourceManifest(p) {
     provides: list('provides'),
     requires: list('requires'),
     events: list('events'),
+    aiEngine: readAiEngine(literal, p.id),
     slots: readSlotContributions(literal, p.id),
     views: parseViews(literal, p.id),
     containers: readContainerContributions(literal, p.id),
@@ -438,9 +428,9 @@ function preflight() {
   }
   ok(`${plugins.length} 个插件的目录 / 配置 / 入口齐备，manifest.id 与目录名一致`);
 
-  // requires ⊆ 已启用插件的 provides
+  // requires ⊆ 已启用插件的 provides ∪ 核心自带的协议 cap
   const enabled = plugins.filter((p) => p.enabled !== false);
-  const providedBy = new Map();
+  const providedBy = new Map([...CORE_PROVIDES].map((cap) => [cap, '<core>']));
   for (const p of enabled) {
     for (const cap of manifests.get(p.id).provides) {
       if (providedBy.has(cap)) {
@@ -462,6 +452,29 @@ function preflight() {
     fail(`以下 requires 没有任何已启用插件提供（运行期只能告警 + 依赖缺失）：\n      ${orphanRequires.join('\n      ')}`);
   }
   ok('manifest.requires 均已被已启用插件的 provides 覆盖');
+
+  // AI 引擎声明校验：引擎即插件——身份、模型来源、默认位都由 manifest 静态声明，
+  // 核心分派器只认 id，不认识任何具体引擎。这里挡住「声明了但没注册对应 cap」的半可用状态。
+  const engineSeen = new Map();
+  const defaultEngines = [];
+  for (const p of enabled) {
+    const ai = manifests.get(p.id).aiEngine;
+    if (!ai) continue;
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(ai.id)) {
+      fail(`插件 ${p.id}：aiEngine.id "${ai.id}" 非法（小写字母/数字/下划线/连字符）`);
+    }
+    if (engineSeen.has(ai.id)) fail(`aiEngine.id "${ai.id}" 重复：${engineSeen.get(ai.id)} 与 ${p.id}`);
+    engineSeen.set(ai.id, p.id);
+    const caps = manifests.get(p.id).provides;
+    for (const cap of [`cap.ai.chat.${ai.id}`, `cap.ai.chat.${ai.id}.interrupt`]) {
+      if (!caps.includes(cap)) fail(`插件 ${p.id}：声明了 aiEngine "${ai.id}" 但未提供 ${cap}`);
+    }
+    if (ai.default) defaultEngines.push(p.id);
+  }
+  if (defaultEngines.length > 1) {
+    fail(`多个 AI 引擎声明 default：${defaultEngines.join('、')}（至多一个）`);
+  }
+  ok(`AI 引擎声明 ${engineSeen.size} 项：id 唯一、cap 对应、modelSource 合法、默认至多一个`);
 
   // grants.json 交叉校验：登记 + 申请项 ⊆ 授权项
   if (!existsSync(grantsFile)) fail(`授权表缺失：public/grants.json`);
@@ -603,7 +616,10 @@ function preflight() {
     for (const cap of manifests.get(p.id).provides) {
       const consumers = (consumedBy.get(cap) ?? []).filter((id) => id !== p.id);
       const looksLikePanelCap = PANEL_CAP_HINTS.some((h) => cap.includes(h));
-      if (consumers.length === 0 && !looksLikePanelCap) {
+      // 引擎的 namespaced cap 由核心通用分派器在运行时按 engineId 动态消费，
+      // 不会出现在任何插件的 capabilities 静态声明里——这是设计而非死能力。
+      const consumedByCoreRouter = /^cap\.ai\.chat\.[^.]+(\.(interrupt|models))?$/.test(cap);
+      if (consumers.length === 0 && !looksLikePanelCap && !consumedByCoreRouter) {
         deadCaps.push(`${p.id} provides ${cap}：无任何插件消费（也非面板/管理类），疑似死能力`);
       }
     }

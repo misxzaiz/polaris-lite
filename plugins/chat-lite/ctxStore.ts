@@ -100,7 +100,7 @@ export interface CtxState {
 interface CtxStore {
   ctx: Record<string, CtxState>;
   policies: Record<string, CtxPolicy>;
-  /** ai.usage（real-engine 流末发出） */
+  /** ai.usage（引擎流末发出） */
   applyUsage: (p: { sessionId: string; inputTokens?: number; outputTokens?: number; durationMs?: number; cachedTokens?: number; cacheCreationTokens?: number; estimated?: boolean; model?: string; contextWindow?: number }) => void;
   /** context.snapshot（agent-loop 每轮结束） */
   applySnapshot: (p: { sessionId: string; usedTokens?: number; window?: number; percent?: number; messages?: number; compacted?: boolean; exhausted?: boolean }) => void;

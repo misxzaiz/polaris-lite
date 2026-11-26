@@ -10,6 +10,7 @@ import { createRoot } from 'react-dom/client';
 import { host } from '@/core/hostRuntime';
 import { SlotLayout } from '@/core/SlotLayout';
 import { installMetaCapability } from '@/core/metaCapability';
+import { installAiEngineInfrastructure } from '@/core/aiEngine';
 import { viewRegistry } from '@/core/workspace/viewRegistry';
 import { pushNotice } from '@/core/shellState';
 import { getRuntimeComponent, loadExternalPlugins } from '@/core/externalPlugins';
@@ -44,6 +45,10 @@ async function bootstrap(): Promise<void> {
   // 1. 安装核心内建能力（meta 是核心自有 cap；布局能力已随 workspace-layout 插件走,P2-2）
   //    meta 传入视图/槽位注册表：describe 返回 views 与 slots 清单（自省型面板的免授权数据源）
   installMetaCapability(host.bus, () => host.policyTable(), viewRegistry, host.slots);
+  //    AI 引擎注册表 + 通用分派器同样是核心协议设施：消费方只认 cap.ai.chat，
+  //    分派器按 payload.engineId 路由到各引擎插件注册的 cap.ai.chat.<id>。
+  //    插件 setup 还没跑，故这里传延迟求值函数，自省时再读 manifest。
+  installAiEngineInfrastructure(host.bus, () => host.getPluginIds().map((id) => host.getManifest(id)));
 
   // 2. 外部注册：registry 决定「装哪些」，grants 决定「能干什么」（发现失败不阻断壳渲染）
   //    workspace-layout 插件的 setup 注册 cap.ui.layout；restore/prune 在其 LayoutRoot

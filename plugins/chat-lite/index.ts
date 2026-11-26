@@ -19,6 +19,7 @@ import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
 import { notifyRootsChanged } from './workspace-prefs';
 import { setRunnerConsumer, setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner } from './runnerBridge';
+import { bindEngineCatalog, loadEngines, supportsSlashSkills, supportsTools } from './engineCatalog';
 export type { StreamEnvelope } from './runnerTypes';
 import type { StreamEnvelope } from './runnerTypes';
 // 插件自带样式：会话侧栏 / 消息流 / 空态 / Markdown / 工具卡（原先散落在宿主 src/styles.css）
@@ -110,7 +111,7 @@ export const chatLitePlugin: LitePlugin = {
     id: 'chat-lite',
     name: '对话',
     version: '0.3.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.agent.loop', 'cap.meta', 'cap.hook.bridge'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.ai.engine', 'cap.agent.loop', 'cap.meta', 'cap.hook.bridge'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
@@ -129,6 +130,8 @@ export const chatLitePlugin: LitePlugin = {
   },
   setup(api) {
     hostApi = api;
+    bindEngineCatalog(api);
+    void loadEngines(); // 引擎清单自省（失败静默；面板打开时会重试）
     // 跨插件输入注入通道（file-browser「发到对话」等使用；经本函数保证走合法发送路径）
     (window as unknown as Record<string, unknown>)[CHANNEL_FILE_BROWSER_COMPOSE] = (text: string) => requestCompose(text);
     // 交互卡事件是 interactive-cards 直发（不走 cap.agent.loop:event 流通道），必须挂全局监听。
@@ -265,7 +268,7 @@ export const chatLitePlugin: LitePlugin = {
         }
       }
     };
-    // ai.usage：real-engine 流末发出（输入/输出 token、缓存命中、耗时、速率分母）
+    // ai.usage：引擎流末发出（输入/输出 token、缓存命中、耗时、速率分母）
     api.listen('cap.ai.chat:event', onCtxEvent);
     // context.*：agent-loop 编排事件（水位快照 / 压缩生命周期）
     api.listen('cap.agent.loop:event', onCtxEvent);
@@ -305,191 +308,6 @@ async function detectLoop(): Promise<boolean> {
 
 // StreamEnvelope 已上移 plugins/chat-lite/runnerTypes.ts（runnerBridge 与本文件共用同一形状；
 // 服务端 agent-runner 的 SSE 事件同构，渲染层零改动）。
-
-// ---- CodeBuddy 引擎直连通道（会话设置 engineId='codebuddy' 时启用）----
-// 不经 cap 总线（cap.ai.chat 是单注册位，被 real-engine 占用）：chat-lite 自己
-// POST /api/codebuddy/stream（服务端中间件已在 server-registry 无条件挂载，与前端
-// codebuddy-engine 插件的 enabled 无关），SSE 帧与 real-engine 事件同构，经
-// handleEnvelope 处理后按 cap.ai.chat:event re-emit（通知中心/取证/翻译等旁听方零改动）。
-// 代价（明示给用户的语义）：关页面即中断（与旧引擎通道同语义）；不支持附件；
-// 工具审批链不适用（CLI 自持工具，bypassPermissions——codebuddy-engine 既有设计）。
-const CODEBUDDY_STREAM_URL = '/api/codebuddy/stream';
-const CODEBUDDY_INTERRUPT_URL = '/api/codebuddy/interrupt';
-
-/** 在途 codebuddy 流：streamKey → abort（关页面/中断时本地断流，服务端检测断开即树杀 CLI） */
-const codebuddyRunning = new Map<string, () => void>();
-
-/** SSE 解析（与 runnerBridge 同款逐块累积；codebuddy 服务端帧已是 { kind, payload } 形态） */
-function createCodebuddySseParser(onFrame: (ev: { kind?: string; payload?: unknown }) => void): (chunk: string) => void {
-  let buf = '';
-  return (chunk: string) => {
-    buf += chunk;
-    let idx;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (!data) continue;
-      try { onFrame(JSON.parse(data)); } catch { /* 跳过不完整行 */ }
-    }
-  };
-}
-
-/** 中断会话的在途 codebuddy 流：本地断流 + 通知服务端树杀（幂等）。返回是否有在途流 */
-export async function interruptCodebuddy(sessionId: string): Promise<boolean> {
-  let had = false;
-  for (const [key, abort] of [...codebuddyRunning.entries()]) {
-    if (key.startsWith(`${sessionId}::`)) { had = true; abort(); }
-  }
-  if (!had) return false;
-  try {
-    await fetch(CODEBUDDY_INTERRUPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ sessionId }),
-    });
-  } catch { /* 服务端不可达：本地 abort 已断流，树杀由服务端 close 检测兜底 */ }
-  return true;
-}
-
-/** codebuddy 直连一轮流：消费 SSE 帧转交 handleEnvelope，并镜像 re-emit 到总线供旁听方消费。
- *  断连韧性：服务端为每帧带 seq 并保留事件缓冲——fetch 中途断掉（手机网络抖动/锁屏）
- *  时带 lastEventId 自动重连续订，事件重放幂等（chat-lite 按 kind+callId 去重），
- *  不再把瞬断放大成整轮报废的 "network error"。 */
-const CODEBUDDY_RECONNECT_MAX = 6; // 重连次数上限（指数退避，封顶 8s）；超出才落到错误呈现
-const CODEBUDDY_RECONNECT_BASE_MS = 700;
-
-async function streamCodebuddyTurn(
-  api: SlotHostApi,
-  sid: string,
-  assistantId: string,
-  effectiveText: string,
-  history: { role: string; content: unknown }[],
-  handleEnvelope: (payload: unknown) => void,
-  onSettled: () => void,
-  model?: string,
-  workdir?: string,
-): Promise<void> {
-  const streamKey = `${sid}::${assistantId}`;
-  const abort = new AbortController();
-  codebuddyRunning.set(streamKey, () => abort.abort());
-  let settledMirror = false; // done 之后不再 re-emit（与引擎总线生命周期同口径）
-  const emitMirror = (ev: { kind?: string; payload?: unknown }): void => {
-    if (!ev.kind || settledMirror) return;
-    if (ev.kind === 'message.done') settledMirror = true;
-    try {
-      api.emit('cap.ai.chat:event', { source: 'codebuddy-engine', kind: ev.kind, payload: ev.payload ?? {} });
-    } catch { /* grants 缺失或无监听者：旁听是旁路职责，不阻断渲染 */ }
-  };
-  let lastSeq = 0; // 已收到的最大帧序号（重连续订游标）
-  let turnDone = false; // message.done / stream.error 已到：正常收敛，不再重连
-
-  // 单次连接尝试：读到流结束（resp body done）为止。返回是否因断连需要重试。
-  const attemptOnce = async (): Promise<boolean> => {
-    const resp = await fetch(CODEBUDDY_STREAM_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      // model 缺省=CLI 默认（hy4flash-free）；workdir=会话绑定工作区 path（服务端白名单校验）；
-      // lastEventId=断连重连游标（服务端重放该 seq 之后的事件）
-      body: JSON.stringify({
-        sessionId: sid,
-        messageId: assistantId,
-        prompt: effectiveText,
-        history,
-        ...(model ? { model } : {}),
-        ...(workdir ? { workdir } : {}),
-        ...(lastSeq > 0 ? { lastEventId: lastSeq } : {}),
-      }),
-      signal: abort.signal,
-    });
-    if (!resp.ok || !resp.body) {
-      const text = await resp.text().catch(() => '');
-      let msg = `HTTP ${resp.status}`;
-      try { const j = JSON.parse(text); msg = j.error?.message ?? j.error ?? msg; } catch { /* 保留状态码描述 */ }
-      handleEnvelope({ source: 'codebuddy-engine', kind: 'stream.error', payload: { sessionId: sid, messageId: assistantId, message: String(msg) } });
-      onSettled();
-      return false;
-    }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    const feed = createCodebuddySseParser((ev) => {
-      const frame = ev as { kind?: string; payload?: unknown; seq?: number };
-      if (!frame.kind) return;
-      if (typeof frame.seq === 'number' && frame.seq > 0) {
-        if (frame.seq <= lastSeq) return; // 重放去重：只处理新于游标的帧
-        lastSeq = frame.seq;
-      }
-      if (frame.kind === 'ping') return; // 心跳：只保连接，不进事件流
-      emitMirror({ kind: frame.kind, payload: frame.payload });
-      handleEnvelope({ source: 'codebuddy-engine', kind: frame.kind, payload: frame.payload ?? {} });
-      if (frame.kind === 'message.done' || frame.kind === 'stream.error') turnDone = true;
-    });
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      feed(decoder.decode(value, { stream: true }));
-    }
-    return !turnDone; // 流结束但没等到 done/error = 中途断连
-  };
-
-  try {
-    for (let attempt = 0; ; attempt += 1) {
-      const needsReconnect = await attemptOnce();
-      if (!needsReconnect) {
-        // 正常收敛或不可重试错误：SSE 关闭但无 done 帧（CLI 异常退出兜底）——
-        // 强制收敛，防 UI 永久 streaming
-        if (!turnDone) {
-          handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId } });
-        }
-        onSettled();
-        return;
-      }
-      if (attempt >= CODEBUDDY_RECONNECT_MAX) {
-        // 重连额度耗尽：如实报错（不再裸 "network error"，带上断连语义与已生成进度）
-        handleEnvelope({
-          source: 'codebuddy-engine',
-          kind: 'stream.error',
-          payload: { sessionId: sid, messageId: assistantId, message: '连接反复中断（已自动重连未果）。任务可能仍在服务端执行，可稍后回到本会话查看，或点重发再试。' },
-        });
-        onSettled();
-        return;
-      }
-      // 断连退避重连；期间给用户可见的轻提示（幂等 notice 块）
-      const waitMs = Math.min(CODEBUDDY_RECONNECT_BASE_MS * 2 ** attempt, 8000);
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'notice',
-        text: `[连接中断，${Math.round(waitMs / 100) / 10}s 后自动重连（第 ${attempt + 1}/${CODEBUDDY_RECONNECT_MAX} 次）]`,
-      });
-      await new Promise((r) => setTimeout(r, waitMs));
-      if (abort.signal.aborted || turnDone) {
-        if (!turnDone) {
-          handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId, interrupted: true } });
-        }
-        onSettled();
-        return;
-      }
-    }
-  } catch (err) {
-    if (abort.signal.aborted) {
-      // 用户中断：本地已断流收不到服务端补发的 done{interrupted}，就地合成收敛
-      // 事件（real-engine interrupt 同语义），否则 UI 永久停在「停止」态
-      handleEnvelope({ source: 'codebuddy-engine', kind: 'message.done', payload: { sessionId: sid, messageId: assistantId, interrupted: true } });
-      onSettled();
-      return;
-    }
-    handleEnvelope({
-      source: 'codebuddy-engine',
-      kind: 'stream.error',
-      payload: { sessionId: sid, messageId: assistantId, message: err instanceof Error ? err.message : String(err) },
-    });
-    onSettled();
-  } finally {
-    codebuddyRunning.delete(streamKey);
-  }
-}
 
 /** 工具块事件处理（仅 loop 模式；块内嵌于 assistant 消息，按 callId 幂等建块/更新） */
 function handleToolEvent(
@@ -540,9 +358,9 @@ function handleToolEvent(
       return;
     }
     if (kind === 'tool.card') {
-      // codebuddy CLI 对同一 callId 连发两帧：content_block_start 时 input 恒为空（args={}），
-      // content_block_stop 后才带完整参数（adapter.cjs:135-164）。首帧已建卡，这里把
-      // 第二帧的非空字段回填，否则折叠头/ArgsBlock 永远停在 "{}"。与审批帧补丁同构，
+      // 部分引擎对同一 callId 连发两帧：首帧 input 恒为空（args={}），
+      // 收尾帧才带完整参数。首帧已建卡，这里把第二帧的非空字段回填，
+      // 否则折叠头/ArgsBlock 永远停在 "{}"。与审批帧补丁同构，
       // patchCard 不过 trimCard，长参数在此手动裁剪。
       patchCard(callId, (c) => ({
         ...c,
@@ -622,12 +440,11 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       return;
     }
   } catch { /* 钩子桥未装：正常发送 */ }
-  // /name 斜杠技能展开仅对默认引擎生效：CodeBuddy 会话的 read_skill 工具不存在
-  // （CLI 自持 Skill 体系），改写文本会让 AI 拿到一个不存在的指令（2026-11-25 实测：
-  // AI 搜索后只能如实回答「没有该工具」）。codebuddy 会话原文直发，让 CLI 自己的
-  // 技能机制处理斜杠输入。
-  const slashSkipForCodebuddy = useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.engineId === 'codebuddy';
-  const slashMatch = !slashSkipForCodebuddy
+  // /name 斜杠技能展开由引擎声明的 features.slashSkills 决定：宿主侧技能体系
+  // （read_skill）不存在的引擎应显式关掉该能力，原文直发让引擎自己的技能机制处理。
+  // 这里不认识任何具体引擎 id。
+  const slashEngineId = useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.modelRef?.engineId;
+  const slashMatch = supportsSlashSkills(slashEngineId)
     ? /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim())
     : null;
   if (slashMatch) {
@@ -697,8 +514,12 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     streaming: true,
   } as unknown as ChatMessage);
 
-  // loop 模式探测：cap.agent.loop 存在（已启用）则走编排通道，否则回落纯引擎
-  const useLoop = await detectLoop();
+  // loop 模式探测：cap.agent.loop 存在且当前引擎声明支持工具编排才走编排通道。
+  // 能力开关来自引擎插件声明（features.supportsTools），不是写死的引擎 id。
+  const sendingSession = useSessionStore.getState().sessions.find((s) => s.id === sid);
+  const engineId = sendingSession?.modelRef?.engineId;
+  const toolCapable = supportsTools(engineId);
+  const useLoop = toolCapable && (await detectLoop());
 
   // ---- delta 按帧合并（写入 assistant 末尾 text 块；content 镜像由 store 同步） ----
   let buf = '';
@@ -949,56 +770,27 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   });
   armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
 
-  // ---- CodeBuddy 引擎分支（会话设置 engineId='codebuddy'）----
-  // 直连 SSE（不经 runner/cap 总线；CLI 自持工具与上下文）。done/error 经
-  // handleEnvelope 统一收敛（settle 幂等），通知中心等旁听方经 re-emit 拿到同构事件。
-  const activeSession = useSessionStore.getState().sessions.find((s) => s.id === sid);
-  if (activeSession?.engineId === 'codebuddy') {
-    if (hasAttachments) {
-      // CLI 通道不支持附件：明示拒绝而不是静默丢文本（与 real-engine「失效即报错」同原则）
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'notice',
-        text: 'CodeBuddy 引擎暂不支持图片附件：请移除附件后重发，或在会话设置切回默认引擎。',
-      });
-      settle();
-      return;
-    }
-    // 会话级模型（会话设置「模型」行写入；缺省=CLI 默认 hy4flash-free）。服务端校验在
-    // CLI 侧：不认识的 ID 由 CLI 报错经 stream.error 呈现，不在这里二次白名单（清单是动态的）。
-    // 工作目录：会话绑定的工作区 path（root id → /api/fs/roots 解析），随 workdir 透传；
-    // 未绑定/解析失败不传 → 服务端 resolveWorkdir 回落 builtin workspace（既有安全白名单校验不变）。
-    void (async () => {
-      let workdir: string | undefined;
-      if (activeSession.workspaceId) {
-        try {
-          const r = await fetch('/api/fs/roots', { credentials: 'include' });
-          const j = (await r.json()) as { roots?: { id: string; path: string; missing?: boolean }[] };
-          const root = j.roots?.find((x) => x.id === activeSession.workspaceId && !x.missing);
-          if (root?.path) workdir = root.path;
-        } catch { /* 解析失败：不传，服务端回落 builtin */ }
-      }
-      await streamCodebuddyTurn(api, sid, assistantId, effectiveText, history ?? [], handleEnvelope, settle, activeSession.codebuddyModel, workdir);
-    })();
-    return;
-  }
+  const session = sendingSession ?? store.sessions.find((s) => s.id === sid);
+  const modelRef = session?.modelRef;
 
-  // ---- 服务端编排优先（B1）：runner 可用即走 /api/agent/start（服务端持循环，
-  // 刷新页面任务不死）；不可用/被拒回落既有 cap 通道（旧 loop / 纯引擎）。 ----
-  const session = store.sessions.find((s) => s.id === sid);
-  const runnerStarted = await startRunnerRun({
-    sessionId: sid,
-    messageId: assistantId,
-    prompt: effectiveText,
-    history: history ?? [],
-    providerId: session?.providerId,
-    modelId: session?.modelId,
-    // 会话绑定工作区 + 关联只读目录（服务端据此解析 bash cwd / files 默认根 / system prompt）
-    workspaceId: session?.workspaceId,
-    linkedWorkspaceIds: session?.linkedWorkspaceIds,
-    ctxPolicy: useLoop ? ctxPolicyOf(sid) : undefined,
-    ...(hasAttachments && attachments ? { attachments } : {}),
-  });
-  if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
+  // ---- 服务端编排优先（B1）：仅支持工具编排的引擎走 /api/agent/start；
+  // 不支持的引擎（如 CLI 自持工具的引擎）直接走 cap.ai.chat，由核心分派器路由。 ----
+  if (toolCapable) {
+    const runnerStarted = await startRunnerRun({
+      sessionId: sid,
+      messageId: assistantId,
+      prompt: effectiveText,
+      history: history ?? [],
+      providerId: modelRef?.providerId,
+      modelId: modelRef?.modelId,
+      // 会话绑定工作区 + 关联只读目录（服务端据此解析 bash cwd / files 默认根 / system prompt）
+      workspaceId: session?.workspaceId,
+      linkedWorkspaceIds: session?.linkedWorkspaceIds,
+      ctxPolicy: useLoop ? ctxPolicyOf(sid) : undefined,
+      ...(hasAttachments && attachments ? { attachments } : {}),
+    });
+    if (runnerStarted) return; // 事件经 SSE → setRunnerConsumer 消费；本端不重复派发
+  }
 
   await api.dispatch({
     target: useLoop ? 'cap.agent.loop' : 'cap.ai.chat',
@@ -1008,21 +800,15 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       messageId: assistantId,
       prompt: effectiveText,
       history,
+      // 引擎选择：核心分派器按 engineId 路由到 cap.ai.chat.<id>；option 由引擎自行解释
+      ...(engineId ? { engineId } : {}),
+      ...(modelRef?.option ? { option: modelRef.option } : {}),
+      ...(modelRef?.providerId ? { providerId: modelRef.providerId } : {}),
+      ...(modelRef?.modelId ? { modelId: modelRef.modelId } : {}),
       // 会话绑定的文件工作区（agent-loop 据此设置 bash cwd 与 system prompt；缺省=默认 workspace）
-      ...(store.sessions.find((s) => s.id === sid)?.workspaceId
-        ? { workspaceId: store.sessions.find((s) => s.id === sid)!.workspaceId }
-        : {}),
+      ...(session?.workspaceId ? { workspaceId: session.workspaceId } : {}),
       // 关联只读目录：files 工具可读、bash 不在此执行（服务端仍按登记根白名单校验）
-      ...((store.sessions.find((s) => s.id === sid)?.linkedWorkspaceIds?.length ?? 0) > 0
-        ? { linkedWorkspaceIds: store.sessions.find((s) => s.id === sid)!.linkedWorkspaceIds }
-        : {}),
-      // 会话级模型覆盖（会话设置面板写入；缺省=跟随全局默认，引擎行为不变）
-      ...((store.sessions.find((s) => s.id === sid)?.providerId || store.sessions.find((s) => s.id === sid)?.modelId)
-        ? {
-            providerId: store.sessions.find((s) => s.id === sid)!.providerId,
-            modelId: store.sessions.find((s) => s.id === sid)!.modelId,
-          }
-        : {}),
+      ...((session?.linkedWorkspaceIds?.length ?? 0) > 0 ? { linkedWorkspaceIds: session!.linkedWorkspaceIds } : {}),
       // 会话级上下文压缩策略（agent-loop 据此触发自动压缩；spec §4.3）
       ...(useLoop ? { ctxPolicy: ctxPolicyOf(sid) } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -1117,8 +903,6 @@ export function interruptChat(): void {
   const messageId = streamingMsg?.id;
 
   const doInterrupt = async (): Promise<{ ok: boolean; data?: { found?: boolean } }> => {
-    // CodeBuddy 直连通道优先：在途流必经本地 abort + 服务端树杀（runner/loop 对它不可见）
-    if (await interruptCodebuddy(sessionId)) return { ok: true, data: { found: true } };
     // 服务端编排通道：中断 run（服务端 abort 上游流 + 挂起审批 deny 收敛 + 树杀在途 exec）
     if (await interruptRunnerRun(sessionId)) return { ok: true, data: { found: true } };
     if (await detectLoop()) {
@@ -1130,10 +914,12 @@ export function interruptChat(): void {
       // loop 没有在途轮次（found=false）时回落打断引擎直通流
       if (res.ok && res.data?.found !== false) return res;
     }
+    const engineId = useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.modelRef?.engineId;
     return api.dispatch<{ found?: boolean }>({
       target: 'cap.ai.chat.interrupt',
       action: 'interrupt',
-      payload: { sessionId },
+      // engineId 决定中断哪个引擎的 running 表；缺省时核心扇出到所有已注册引擎
+      payload: { sessionId, ...(messageId ? { messageId } : {}), ...(engineId ? { engineId } : {}) },
     });
   };
 

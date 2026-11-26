@@ -35,8 +35,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  2026-11-25 上调 4880 → 4915：面板槽位高度链修复（styles.css +29 行）——
  *  .slot 基类无高度/flex，tab 化面板内 absolute 插件面板塌 0 高（plite-guide 列表
  *  不可见）；宿主各锚点本就有「谁包 .slot 谁撑满」专属规则，面板 tabpanel 缺同款。
- *  属壳层布局职责修复，非新功能进核心。 */
-const CORE_BUDGET = 4915;
+ *  属壳层布局职责修复，非新功能进核心。
+ *  2026-11-26 上调 4915 → 5180：AI 引擎注册化的协议层（src/core/aiEngine.ts 通用注册表
+ *  + 分派器、src/core/types.ts 的 aiEngine 契约类型）。核心只认 cap.ai.chat.<id> 命名
+ *  约定与 manifest 元数据，不认识任何具体引擎/厂商；引擎实现全在插件里。
+ *  不放进插件的原因：总线单注册位 + assertAllowed 精确匹配，插件路由器要么撕开单注册
+ *  语义、要么开 cap.ai.chat.* 通配授权，反而扩大特权面。 */
+const CORE_BUDGET = 5180;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

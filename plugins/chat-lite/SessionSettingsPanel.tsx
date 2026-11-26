@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE } from '@sdk';
+import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE, type AiEngineInfo } from '@sdk';
 import { type PendingSend } from './store';
 import { ShareDrawerRows } from './ShareDrawer';
 import { ChevronRightIcon } from './icons';
@@ -75,20 +75,18 @@ interface PopupPos { left: number; width: number; bottom: number; maxHeight: num
 interface SessionSettingsPanelProps {
   // ---- 会话标题（头部展示；未设置=「新会话」时回退用户第一句）----
   sessionTitle: string;
-  // ---- AI 引擎（会话级：默认 real-engine / CodeBuddy CLI；codebuddy 时供应商/模型行禁用）----
-  engineId: 'codebuddy' | undefined;
-  codebuddyAvailable: boolean;
-  /** CodeBuddy 模型清单（服务端从 CLI --help 动态解析；空=解析失败只显示「默认」） */
-  codebuddyModels: string[];
-  /** CodeBuddy 会话级模型（undefined=CLI 默认） */
-  codebuddyModel: string | undefined;
-  onSetSessionCodebuddyModel: (model: string | undefined) => void;
-  onSetSessionEngine: (engineId: 'codebuddy' | undefined) => void;
+  // ---- AI 引擎（会话级：undefined=默认引擎；列表来自 cap.ai.engine 注册表）----
+  engineId: string | undefined;
+  engines: AiEngineInfo[];
+  onSetSessionEngine: (engineId: string | undefined) => void;
+  /** 自带目录引擎的模型/变体（语义由引擎解释；缺省用引擎默认） */
+  option: string | undefined;
+  onSetSessionOption: (option: string | undefined) => void;
   // ---- 模型（会话级覆盖；undefined=跟随全局默认）----
   providerId: string | undefined;
   modelId: string | undefined;
   onSetSessionModel: (providerId: string | undefined, modelId: string | undefined) => void;
-  // ---- 新会话默认（模型分区底部：把引擎/供应商/模型/CodeBuddy 模型快照为新建会话默认）----
+  // ---- 新会话默认（模型分区底部：把引擎/供应商/模型/自带变体快照为新建会话默认）----
   /** 当前会话配置 == 已记住的默认（无会话时为 false） */
   defaultsActive: boolean;
   /** 已记住任意一项默认（用于区分「跟随全局」与「另有默认」） */
@@ -129,7 +127,7 @@ interface SessionSettingsPanelProps {
 export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const {
     sessionTitle,
-    engineId, codebuddyAvailable, codebuddyModels, codebuddyModel, onSetSessionCodebuddyModel, onSetSessionEngine,
+    engineId, engines, onSetSessionEngine, option, onSetSessionOption,
     providerId, modelId, onSetSessionModel,
     defaultsActive, hasAnyDefault, hasSession, onToggleDefaults,
     workspaceId, wsLabel, wsMissing, linkedCount, onOpenWorkspacePicker,
@@ -142,8 +140,8 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const [providers, setProviders] = useState<ProviderEntry[] | null>(null);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [providersErr, setProvidersErr] = useState(false);
-  /** 模型选择浮层：null=关；provider=选供应商；model=选模型；cbmodel=选 CodeBuddy 模型 */
-  const [modelPop, setModelPop] = useState<null | 'provider' | 'model' | 'cbmodel'>(null);
+  /** 选择浮层：null=关；engine=选引擎；provider/model=应用供应商模型；option=自带目录模型 */
+  const [modelPop, setModelPop] = useState<null | 'engine' | 'provider' | 'model' | 'option'>(null);
   /** 面板定位（贴输入条上方）与模型浮层定位（叠面板同位）——两个状态分开，
    *  否则 resize 时两个跟随 listener 会互相覆盖对方的定位口径 */
   const [panelPos, setPanelPos] = useState<PopupPos | null>(null);
@@ -227,10 +225,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     };
   }, []);
 
-  const openModelPop = (kind: 'provider' | 'model' | 'cbmodel') => {
+  const openModelPop = (kind: 'engine' | 'provider' | 'model' | 'option') => {
     setModelPos(computeModelPos());
     setModelPop(kind);
-    if (kind !== 'cbmodel') void loadProviders(); // cbmodel 清单经 props 传入（health 探测），无需现拉
+    if (kind === 'provider' || kind === 'model') void loadProviders();
   };
 
   // 点空白关闭（面板与模型浮层共用一处理：浮层内部 / 输入条 / 工作目录浮层内的点击不算外）
@@ -278,6 +276,12 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const sourceEntry = activeEntry ?? providers?.find((p) => p.id === defaultProviderId) ?? null;
   const providerName = providerId ? (activeEntry?.name ?? providerId) : null;
   const effectiveModel = modelId ?? sourceEntry?.activeModel ?? null;
+
+  // 引擎形态完全由注册表声明决定：没有写死的引擎 id，也没有专属字段。
+  const currentEngine = engines.find((e) => e.id === engineId);
+  const modelSource = currentEngine?.modelSource ?? 'app'; // 默认引擎按「适配应用供应商」处理
+  const engineModels = currentEngine?.models ?? [];
+  const engineDisabled = engines.length === 0 || currentEngine?.available === false;
 
   if (!panelPos) return null;
 
@@ -332,47 +336,43 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
         <div className="chat-settings-body">
           {/* ===== 模型（会话级覆盖）===== */}
           <div className="chat-assistant-sec">模型</div>
-          {/* AI 引擎行：codebuddy 不可用时锁定「默认」并说明原因（服务端中间件挂了但
-              CLI 缺失/被禁用的环境下，选择没有意义——不给用户一个看起来可选的假选项） */}
+          {/* AI 引擎行：列表来自 cap.ai.engine（各引擎插件的 manifest 声明），
+              chat-lite 不认识任何具体引擎 id；默认引擎即「跟随全局」。 */}
           <div className="chat-assistant-row">
             <span className="chat-assistant-key">AI 引擎</span>
             <button
-              className={`chat-ws-chip chat-model-chip ${engineId === 'codebuddy' ? 'pinned' : ''}`}
-              onClick={() => onSetSessionEngine(engineId === 'codebuddy' ? undefined : 'codebuddy')}
-              disabled={!codebuddyAvailable}
-              title={
-                !codebuddyAvailable
-                  ? 'CodeBuddy 引擎不可用（CLI 未安装或已被禁用）'
-                  : engineId === 'codebuddy'
-                    ? '当前：CodeBuddy（CLI 自持工具，本会话不支持图片附件）。点击切回默认引擎'
-                    : '当前：默认引擎（real-engine / 服务端编排）。点击切换到 CodeBuddy（腾讯 CodeBuddy CLI，会话级）'
-              }
+              className={`chat-ws-chip chat-model-chip ${engineId ? 'pinned' : ''}`}
+              onClick={() => openModelPop('engine')}
+              disabled={engines.length === 0}
+              title={engines.length === 0
+                ? '没有已注册的 AI 引擎插件'
+                : `${currentEngine?.displayName ?? '默认引擎'}（点击切换）`}
             >
-              {engineId === 'codebuddy' ? 'CodeBuddy' : '默认'}
+              {currentEngine?.displayName ?? '默认'}
             </button>
-            {engineId === 'codebuddy' && (
-              <span className="chat-row-aux" title="CodeBuddy 会话：关闭页面会中断在途任务；工具由 CLI 自持执行">
-                CLI 直连
-              </span>
-            )}
+            {engineDisabled && <span className="chat-row-aux" title="当前引擎不可用">不可用</span>}
           </div>
-          {engineId === 'codebuddy' ? (
-            /* CodeBuddy 引擎：模型行变为 CLI 模型选择（清单动态来自 health，CLI 升级自动跟随）；
-             * 供应商概念不适用（CLI 自持配置），整行换成 CodeBuddy 模型 chip */
+          {modelSource === 'none' ? (
+            <div className="chat-assistant-row">
+              <span className="chat-assistant-key">模型</span>
+              <span className="chat-assistant-val">该引擎无模型概念</span>
+            </div>
+          ) : modelSource === 'builtin' ? (
+            /* 自带目录引擎：模型清单由引擎自己暴露（CLI health / 静态声明），无供应商概念 */
             <div className="chat-assistant-row">
               <span className="chat-assistant-key">模型</span>
               <button
-                className={`chat-ws-chip chat-model-chip ${codebuddyModel ? 'pinned' : ''}`}
-                onClick={() => openModelPop('cbmodel')}
-                title="选择本对话使用的 CodeBuddy 模型（清单来自 CLI --help，随 CLI 版本更新）"
+                className={`chat-ws-chip chat-model-chip ${option ? 'pinned' : ''}`}
+                onClick={() => openModelPop('option')}
+                title="选择本对话使用的引擎模型（清单由引擎插件提供）"
               >
-                {codebuddyModel ?? '默认'}
+                {option ?? '默认'}
               </button>
-              {codebuddyModel && (
+              {option && (
                 <button
                   className="chat-model-reset"
-                  onClick={() => onSetSessionCodebuddyModel(undefined)}
-                  title="清除选择，回到 CLI 默认模型"
+                  onClick={() => onSetSessionOption(undefined)}
+                  title="清除选择，回到引擎默认模型"
                 >
                   恢复默认
                 </button>
@@ -408,8 +408,8 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
           </div>
           )}
 
-          {/* 新会话默认：把上面四项（引擎/供应商/模型/CodeBuddy 模型）快照为新建会话默认。
-              全 undefined 时快照即「跟随全局」，仍可显式记住；再点一次取消回到跟随全局。
+          {/* 新会话默认：把上面的 modelRef（引擎/供应商/模型/自带变体）快照为新建会话默认。
+              全空时快照即「跟随全局」，仍可显式记住；再点一次取消回到跟随全局。
               与工作区「设为新对话默认」同一形态：本地偏好，新会话继承后随会话 JSON 上云。 */}
           <button
             type="button"
@@ -418,7 +418,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             disabled={!hasSession}
             title={defaultsActive
               ? '点击取消记住：新会话恢复跟随全局默认'
-              : '记住上面的引擎/供应商/模型配置，作为新会话默认'}
+              : '记住上面的引擎/模型配置，作为新会话默认'}
           >
             <span className="chat-assistant-key">新会话默认</span>
             <span className={`chat-ws-chip ${defaultsActive ? 'pinned' : ''}`}>
@@ -518,38 +518,65 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
           ref={modelPopRef}
           className="chat-ws-pop chat-model-pop"
           role="dialog"
-          aria-label={modelPop === 'provider' ? '选择模型供应商' : modelPop === 'cbmodel' ? '选择 CodeBuddy 模型' : '选择模型'}
+          aria-label={modelPop === 'engine' ? '选择 AI 引擎' : modelPop === 'provider' ? '选择模型供应商' : '选择模型'}
           style={{ left: modelPos.left, bottom: modelPos.bottom, width: modelPos.width, maxHeight: modelPos.maxHeight }}
         >
           <div className="chat-picker-head">
             <span className="chat-picker-title">
-              {modelPop === 'provider' ? '选择供应商（会话级）' : modelPop === 'cbmodel' ? '选择 CodeBuddy 模型（会话级）' : '选择模型（会话级）'}
+              {modelPop === 'engine' ? '选择 AI 引擎（会话级）' : modelPop === 'provider' ? '选择供应商（会话级）' : '选择模型（会话级）'}
             </span>
             <button className="chat-picker-done" onClick={() => setModelPop(null)}>完成</button>
           </div>
           <div className="chat-model-list">
-            {modelPop === 'cbmodel' ? (
+            {modelPop === 'engine' ? (
               <>
                 <button
-                  className={`chat-model-row ${!codebuddyModel ? 'sel' : ''}`}
-                  onClick={() => onSetSessionCodebuddyModel(undefined)}
-                  title="使用 CodeBuddy CLI 的默认模型（hy4flash-free）"
+                  className={`chat-model-row ${!engineId ? 'sel' : ''}`}
+                  onClick={() => onSetSessionEngine(undefined)}
+                  title="跟随全局默认引擎"
                 >
-                  <span className="chat-model-name">CLI 默认（hy4flash-free）</span>
-                  {!codebuddyModel && <span className="chat-model-current">当前</span>}
+                  <span className="chat-model-name">默认（跟随全局）</span>
+                  {!engineId && <span className="chat-model-current">当前</span>}
                 </button>
-                {codebuddyModels.map((m) => (
+                {engines.map((e) => (
                   <button
-                    key={m}
-                    className={`chat-model-row ${codebuddyModel === m ? 'sel' : ''}`}
-                    onClick={() => onSetSessionCodebuddyModel(m)}
+                    key={e.id}
+                    className={`chat-model-row ${engineId === e.id ? 'sel' : ''}`}
+                    disabled={e.available === false}
+                    onClick={() => onSetSessionEngine(e.id)}
+                    title={e.available === false ? '该引擎当前不可用' : `模型来源：${e.modelSource}`}
                   >
-                    <span className="chat-model-name">{m}</span>
-                    {codebuddyModel === m && <span className="chat-model-current">当前</span>}
+                    <span className="chat-model-name">{e.displayName}</span>
+                    <span className="chat-model-meta">{e.modelSource}</span>
+                    {engineId === e.id && <span className="chat-model-current">当前</span>}
                   </button>
                 ))}
-                {codebuddyModels.length === 0 && (
-                  <div className="chat-model-empty">模型清单获取失败：保持 CLI 默认，或稍后重试</div>
+                {engines.length === 0 && (
+                  <div className="chat-model-empty">没有已注册的 AI 引擎插件</div>
+                )}
+              </>
+            ) : modelPop === 'option' ? (
+              <>
+                <button
+                  className={`chat-model-row ${!option ? 'sel' : ''}`}
+                  onClick={() => onSetSessionOption(undefined)}
+                  title="使用引擎默认模型"
+                >
+                  <span className="chat-model-name">引擎默认</span>
+                  {!option && <span className="chat-model-current">当前</span>}
+                </button>
+                {engineModels.map((m) => (
+                  <button
+                    key={m.id}
+                    className={`chat-model-row ${option === m.id ? 'sel' : ''}`}
+                    onClick={() => onSetSessionOption(m.id)}
+                  >
+                    <span className="chat-model-name">{m.label ?? m.id}</span>
+                    {option === m.id && <span className="chat-model-current">当前</span>}
+                  </button>
+                ))}
+                {engineModels.length === 0 && (
+                  <div className="chat-model-empty">引擎未提供模型清单：保持默认，或稍后重试</div>
                 )}
               </>
             ) : providersErr ? (

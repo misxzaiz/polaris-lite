@@ -10,7 +10,7 @@
  *   队列项携带完整附件，避免「排队后图片丢失」。
  */
 import { create } from 'zustand';
-import type { ChatMessage, ChatSession } from '@sdk';
+import type { ChatMessage, ChatSession, ModelRef } from '@sdk';
 import type { Attachment } from './attachments';
 import { loadWorkspacePrefs } from './workspace-prefs';
 import { loadSessionDefaults } from './session-defaults';
@@ -85,17 +85,8 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
   workspaceId?: string;
   /** 关联只读目录 root id：可被 files 工具读取，但 bash 不在此执行、不可写 */
   linkedWorkspaceIds?: string[];
-  /** 会话级模型覆盖（会话设置面板写入）：缺省=跟随全局默认供应商/模型，引擎行为不变。
-   *  只选供应商不选模型时 modelId 为空 → 用该供应商的 activeModel。随会话 JSON 一并上云。 */
-  providerId?: string;
-  modelId?: string;
-  /** 会话级 AI 引擎选择（会话设置面板写入）：缺省 = 默认引擎（real-engine/runner）；
-   *  'codebuddy' = CodeBuddy 引擎（chat-lite 直连 /api/codebuddy/stream SSE，CLI 自持工具）。
-   *  与 providerId/modelId 同口径：随会话 JSON 上云，多端一致。 */
-  engineId?: 'codebuddy';
-  /** CodeBuddy 引擎的会话级模型（CLI 模型 ID，如 glm-5.3；缺省=CLI 默认 hy4flash-free）。
-   *  仅 engineId='codebuddy' 时有意义；清单来自 /api/codebuddy/health 的 models。 */
-  codebuddyModel?: string;
+  /** 会话级模型引用（继承核心 ChatSession.modelRef）：缺省=跟随全局默认引擎与模型。
+   *  引擎/供应商/模型/自带模型变体统一为这一组 id，语义由被引擎解释，随会话 JSON 上云。 */
   /** 最后活跃时间（任意消息/标题/绑定变更即刷新）；侧栏与相邻切换按此排序（新→旧）。
    *  缺省回退 createdAt（旧快照兼容）。随会话 JSON 一并上云，多端排序一致。 */
   lastActiveAt?: number;
@@ -143,12 +134,9 @@ interface SessionState {
   setSessionWorkspace: (id: string, workspaceId: string | undefined) => void;
   /** 设置会话的关联只读目录（最多 3 个；主目录自动排除） */
   setSessionLinkedWorkspaces: (id: string, linked: string[]) => void;
-  /** 设置/清除会话级模型覆盖（undefined=清除该字段，回到跟随全局默认） */
-  setSessionModel: (id: string, providerId: string | undefined, modelId: string | undefined) => void;
-  /** 设置会话级 AI 引擎（undefined/'real'=默认引擎；'codebuddy'=CodeBuddy CLI 引擎） */
-  setSessionEngine: (id: string, engineId: 'codebuddy' | undefined) => void;
-  /** 设置/清除 CodeBuddy 引擎的会话级模型（undefined=CLI 默认） */
-  setSessionCodebuddyModel: (id: string, model: string | undefined) => void;
+  /** 局部更新会话级 modelRef（undefined 字段=删除该键，回到跟随全局默认）。
+   *  一个入口覆盖引擎/供应商/模型/自带变体，新增引擎不再新增专属 setter。 */
+  setSessionModelRef: (id: string, patch: Partial<ModelRef>) => void;
   deleteSession: (id: string) => void;
   appendMessage: (sessionId: string, msg: StoreMessage) => void;
   updateMessage: (sessionId: string, msgId: string, patch: Partial<StoreMessage>) => void;
@@ -313,10 +301,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const session = touch({
       id, title: title ?? '新会话', messages: [], createdAt: Date.now(),
       ...(defaultWs ? { workspaceId: defaultWs } : {}),
-      ...(defaults.engineId ? { engineId: defaults.engineId } : {}),
-      ...(defaults.providerId ? { providerId: defaults.providerId } : {}),
-      ...(defaults.modelId ? { modelId: defaults.modelId } : {}),
-      ...(defaults.codebuddyModel ? { codebuddyModel: defaults.codebuddyModel } : {}),
+      ...(defaults.modelRef ? { modelRef: defaults.modelRef } : {}),
     });
     set((st) => ({ sessions: sortSessions([session, ...st.sessions]), activeId: id }));
     saveActiveHint(id);
@@ -371,42 +356,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     scheduleSync();
   },
 
-  setSessionModel: (id, providerId, modelId) => {
+  setSessionModelRef: (id, patch) => {
     set((st) => ({
       sessions: sortSessions(st.sessions.map((s) => {
         if (s.id !== id) return s;
-        // undefined=显式删除键（而不是留一个 undefined 值），旧快照兼容口径与 JSON 落盘形态一致
-        const next = { ...s };
-        if (providerId === undefined) delete next.providerId; else next.providerId = providerId;
-        if (modelId === undefined) delete next.modelId; else next.modelId = modelId;
-        return touch(next);
-      })),
-    }));
-    dirty.add(id);
-    scheduleSync();
-  },
-
-  setSessionEngine: (id, engineId) => {
-    set((st) => ({
-      sessions: sortSessions(st.sessions.map((s) => {
-        if (s.id !== id) return s;
-        // undefined=显式删除键：与 setSessionModel 同口径（JSON 落盘不留 undefined 值）
-        const next = { ...s };
-        if (engineId === undefined) delete next.engineId; else next.engineId = engineId;
-        return touch(next);
-      })),
-    }));
-    dirty.add(id);
-    scheduleSync();
-  },
-
-  setSessionCodebuddyModel: (id, model) => {
-    set((st) => ({
-      sessions: sortSessions(st.sessions.map((s) => {
-        if (s.id !== id) return s;
-        const next = { ...s };
-        if (model === undefined) delete next.codebuddyModel; else next.codebuddyModel = model;
-        return touch(next);
+        // undefined=显式删除键（而不是留一个 undefined 值），JSON 落盘形态一致
+        const ref: ModelRef = { ...(s.modelRef ?? {}) };
+        for (const field of Object.keys(patch) as (keyof ModelRef)[]) {
+          const value = patch[field];
+          if (value === undefined) delete ref[field];
+          else (ref as Record<string, string>)[field] = value;
+        }
+        return touch({ ...s, ...(Object.keys(ref).length ? { modelRef: ref } : { modelRef: undefined }) });
       })),
     }));
     dirty.add(id);

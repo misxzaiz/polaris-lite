@@ -12,6 +12,7 @@
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import type { AiEngineInfo } from '@sdk';
 import { sendUserMessage, interruptChat, enqueuePending, clearPending, sendPendingNow, editPending, removePendingItem, onCompose } from './index';
 import { useSessionStore } from './store';
 import {
@@ -25,6 +26,7 @@ import { SessionSettingsPanel } from './SessionSettingsPanel';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
 import { onRootsChanged } from './workspace-prefs';
 import { loadSessionDefaults, saveSessionDefaults, clearSessionDefaults } from './session-defaults';
+import { getEngines, loadEngines } from './engineCatalog';
 import { ContextMeter } from './ContextMeter';
 import './chat-input.css';
 
@@ -133,62 +135,46 @@ export function ChatInput() {
   const sessionLinkedIds = useSessionStore(
     (s) => s.sessions.find((x) => x.id === s.activeId)?.linkedWorkspaceIds ?? [],
   );
-  /** 会话级模型覆盖（会话设置面板写入；undefined=跟随全局默认供应商/模型） */
-  const sessionProviderId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.providerId);
-  const sessionModelId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelId);
-  const setSessionModel = useSessionStore((s) => s.setSessionModel);
-  /** 会话级 AI 引擎（'codebuddy'=CodeBuddy CLI 直连；undefined=默认引擎） */
-  const sessionEngineId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.engineId);
-  const setSessionEngine = useSessionStore((s) => s.setSessionEngine);
-  /** CodeBuddy 引擎的会话级模型（undefined=CLI 默认 hy4free） */
-  const sessionCbModel = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.codebuddyModel);
-  const setSessionCodebuddyModel = useSessionStore((s) => s.setSessionCodebuddyModel);
+  /** 会话级模型引用（引擎 / 供应商 / 模型 / 自带变体统一一组 id） */
+  const sessionModelRef = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelRef);
+  const sessionProviderId = sessionModelRef?.providerId;
+  const sessionModelId = sessionModelRef?.modelId;
+  const sessionEngineId = sessionModelRef?.engineId;
+  const sessionOption = sessionModelRef?.option;
+  const setSessionModelRef = useSessionStore((s) => s.setSessionModelRef);
   /** 新会话默认配置（会话设置面板「记住当前配置」写入；createSession 读取注入） */
   const [sessionDefaults, setSessionDefaults] = useState(() => loadSessionDefaults());
-  const hasAnyDefault = !!(
-    sessionDefaults.engineId || sessionDefaults.providerId || sessionDefaults.modelId || sessionDefaults.codebuddyModel
-  );
-  const defaultsActive = !!activeId
-    && sessionDefaults.engineId === sessionEngineId
-    && sessionDefaults.providerId === sessionProviderId
-    && sessionDefaults.modelId === sessionModelId
-    && sessionDefaults.codebuddyModel === sessionCbModel;
-  /** 切换「记住当前配置」：已生效则取消（回跟随全局），否则把当前四项快照写入偏好 */
+  const defaultRef = sessionDefaults.modelRef;
+  const hasAnyDefault = !!defaultRef && Object.keys(defaultRef).length > 0;
+  const defaultsActive = !!activeId && !!defaultRef
+    && defaultRef.engineId === sessionEngineId
+    && defaultRef.providerId === sessionProviderId
+    && defaultRef.modelId === sessionModelId
+    && defaultRef.option === sessionOption;
+  /** 切换「记住当前配置」：已生效则取消（回跟随全局），否则把当前 modelRef 快照写入偏好 */
   const toggleSessionDefaults = useCallback(() => {
     const cur = loadSessionDefaults();
-    const same = cur.engineId === sessionEngineId
-      && cur.providerId === sessionProviderId
-      && cur.modelId === sessionModelId
-      && cur.codebuddyModel === sessionCbModel;
+    const cr = cur.modelRef ?? {};
+    const same = !!activeId
+      && cr.engineId === sessionEngineId
+      && cr.providerId === sessionProviderId
+      && cr.modelId === sessionModelId
+      && cr.option === sessionOption;
     const next = same
       ? clearSessionDefaults()
-      : saveSessionDefaults({
-        engineId: sessionEngineId,
-        providerId: sessionProviderId,
-        modelId: sessionModelId,
-        codebuddyModel: sessionCbModel,
-      });
+      : saveSessionDefaults({ modelRef: {
+          ...(sessionEngineId ? { engineId: sessionEngineId } : {}),
+          ...(sessionProviderId ? { providerId: sessionProviderId } : {}),
+          ...(sessionModelId ? { modelId: sessionModelId } : {}),
+          ...(sessionOption ? { option: sessionOption } : {}),
+        } });
     setSessionDefaults(next);
-  }, [sessionEngineId, sessionProviderId, sessionModelId, sessionCbModel]);
-  /** CodeBuddy 引擎可用性 + 模型清单（探测 /api/codebuddy/health：CLI 缺失/被禁用时锁定「默认」；
-   *  models 从 CLI --help 动态解析，CLI 升级新增模型自动跟随，不写死） */
-  const [codebuddyAvailable, setCodebuddyAvailable] = useState(false);
-  const [codebuddyModels, setCodebuddyModels] = useState<string[]>([]);
+  }, [activeId, sessionEngineId, sessionProviderId, sessionModelId, sessionOption]);
+  /** 引擎目录：只来自 cap.ai.engine（插件声明）。面板打开时刷新一次，新增引擎无需改这里。 */
+  const [engines, setEngines] = useState<AiEngineInfo[]>(() => getEngines());
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const r = await fetch('/api/codebuddy/health', { credentials: 'include', cache: 'no-store' });
-        const j = (await r.json().catch(() => null)) as { ok?: boolean; cliFound?: boolean; models?: string[] } | null;
-        if (!alive) return;
-        setCodebuddyAvailable(!!j?.ok && !!j?.cliFound);
-        setCodebuddyModels(Array.isArray(j?.models) ? j!.models! : []);
-      } catch {
-        if (alive) setCodebuddyAvailable(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
+    void loadEngines().then(setEngines);
+  }, [assistantOpen]);
   /** 会话标题（会话设置面板头部展示）：未设置（「新会话」）时回退用户第一句，与侧栏 displayTitle 同口径 */
   const sessionTitle = useSessionStore((s) => {
     const cur = s.sessions.find((x) => x.id === s.activeId);
@@ -620,14 +606,13 @@ export function ChatInput() {
           <SessionSettingsPanel
             sessionTitle={sessionTitle}
             engineId={sessionEngineId}
-            codebuddyAvailable={codebuddyAvailable}
-            codebuddyModels={codebuddyModels}
-            codebuddyModel={sessionCbModel}
-            onSetSessionCodebuddyModel={(m) => setSessionCodebuddyModel(activeId ?? createSession(), m)}
-            onSetSessionEngine={(eid) => setSessionEngine(activeId ?? createSession(), eid)}
+            engines={engines}
+            onSetSessionEngine={(eid) => setSessionModelRef(activeId ?? createSession(), { engineId: eid })}
+            option={sessionOption}
+            onSetSessionOption={(opt) => setSessionModelRef(activeId ?? createSession(), { option: opt })}
             providerId={sessionProviderId}
             modelId={sessionModelId}
-            onSetSessionModel={(pid, mid) => setSessionModel(activeId ?? createSession(), pid, mid)}
+            onSetSessionModel={(pid, mid) => setSessionModelRef(activeId ?? createSession(), { providerId: pid, modelId: mid })}
             defaultsActive={defaultsActive}
             hasAnyDefault={hasAnyDefault}
             hasSession={!!activeId}

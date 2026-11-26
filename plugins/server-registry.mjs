@@ -17,7 +17,9 @@
  * fail-fast：加载失败（文件缺失 / 未导出 createServerPart / 抛错）会让宿主启动失败，
  * 而不是静默 404。理由同前端——「插件说装了但端点不存在」是最难排查的一类故障。
  */
-export const SERVER_PLUGINS = [
+import { isPluginEnabled } from './plugin-list.mjs';
+
+const RAW_SERVER_PLUGINS = [
   { id: 'file-browser', entry: './file-browser/server.mjs' },
   { id: 'agent-bash', entry: './agent-bash/server.mjs' },
   { id: 'agent-files', entry: './agent-files/server.mjs' },
@@ -48,6 +50,11 @@ export const SERVER_PLUGINS = [
   { id: 'translate', entry: './translate/server.mjs' },
 ];
 
+/** 与前端清单共享 enabled：前端关掉的插件，server 半边也不挂载。
+ *  以前 codebuddy-engine 前端停用却无条件挂载 /api/codebuddy/stream，
+ *   chat-lite 才能绕过插件生命周期直连它——这条暗通道已随引擎注册化移除。 */
+export const SERVER_PLUGINS = RAW_SERVER_PLUGINS.map((p) => ({ ...p, enabled: isPluginEnabled(p.id) }));
+
 /**
  * 加载清单里的所有 server 模块，返回工厂清单 [{ id, createServerPart }]。
  * 只做「模块可加载 + 导出签名正确」的校验，**不调用工厂**——真实 options 由宿主
@@ -57,7 +64,8 @@ export const SERVER_PLUGINS = [
  */
 export async function loadServerParts({ importModule = (p) => import(p), base = import.meta.url } = {}) {
   const loaded = [];
-  for (const { id, entry } of SERVER_PLUGINS) {
+  for (const { id, entry, enabled } of SERVER_PLUGINS) {
+    if (enabled === false) continue;
     const spec = new URL(entry, base).href;
     const mod = await importModule(spec);
     if (typeof mod.createServerPart !== 'function') {

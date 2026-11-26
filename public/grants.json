@@ -15,6 +15,7 @@
       "capabilities": [
         "cap.ai.chat",
         "cap.ai.chat.interrupt",
+        "cap.ai.engine",
         "cap.agent.loop",
         "cap.meta",
         "cap.hook.bridge"
@@ -48,8 +49,8 @@
         "cap.model.admin"
       ],
       "provides": [
-        "cap.ai.chat",
-        "cap.ai.chat.interrupt"
+        "cap.ai.chat.real",
+        "cap.ai.chat.real.interrupt"
       ],
       "events": [
         "model-config-changed",
@@ -78,8 +79,8 @@
     "mock-engine": {
       "capabilities": [],
       "provides": [
-        "cap.ai.chat",
-        "cap.ai.chat.interrupt"
+        "cap.ai.chat.mock",
+        "cap.ai.chat.mock.interrupt"
       ],
       "events": []
     },
@@ -270,8 +271,9 @@
     "codebuddy-engine": {
       "capabilities": [],
       "provides": [
-        "cap.ai.chat",
-        "cap.ai.chat.interrupt"
+        "cap.ai.chat.codebuddy",
+        "cap.ai.chat.codebuddy.interrupt",
+        "cap.ai.chat.codebuddy.models"
       ],
       "events": []
     },

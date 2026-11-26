@@ -11,6 +11,19 @@ export type SlotId = 'sidebar' | 'stream' | 'input' | 'panel' | 'auth';
 
 export const SLOT_IDS: readonly SlotId[] = ['sidebar', 'stream', 'input', 'panel'];
 
+/**
+ * 由核心（而非插件）提供的能力。插件的 `requires` 可以声明依赖它们，
+ * 但装配拓扑不会把它们当作某个插件提供——提供方是宿主自身。
+ *
+ * 注意这里只有「通道/协议」常量，没有任何具体引擎 id 或厂商信息。
+ */
+export const CORE_CAPABILITIES: readonly string[] = [
+  'cap.meta',
+  'cap.ai.engine',
+  'cap.ai.chat',
+  'cap.ai.chat.interrupt',
+];
+
 /** cap.auth 契约常量（壳层只认这三个契约串，不认任何插件实现） */
 export const CAP_AUTH = 'cap.auth';
 export const SLOT_AUTH = 'auth';
@@ -151,6 +164,59 @@ export interface ContainerDescriptor {
   order?: number;
 }
 
+/** AI 引擎模型目录项（引擎自报，宿主不校验语义） */
+export interface AiEngineModel {
+  id: string;
+  label?: string;
+}
+
+/**
+ * AI 引擎的可选能力声明。消费方据此决定 UI 控件与编排路径，
+ * 而不是靠 `engineId === 'xxx'` 这类写死判断。
+ * 缺省一律按「支持」处理，避免新引擎因漏声明被降级。
+ */
+export interface AiEngineFeatures {
+  /** 是否支持工具编排（false 时对话 UI 跳过 agent-loop / 服务端 runner） */
+  supportsTools?: boolean;
+  /** 是否支持宿主侧的 /slash 技能展开（CLI 自持技能体系的引擎应显式关掉） */
+  slashSkills?: boolean;
+}
+
+/**
+ * 引擎插件在 manifest 里的声明式元数据。
+ *
+ * 宿主的引擎注册表只认这批字段和一个 id 字符串；它不认识任何具体厂商、模型或协议。
+ * 引擎差异（供应商适配 / 自带凭据 / 混合 / CLI 等其它协议）全部留在引擎插件内部，
+ * 只通过 modelSource + features 告诉平台「该显示什么控件、能走哪条编排路径」。
+ */
+export interface AiEngineMetadata {
+  /** 引擎 id；对应实现的 `cap.ai.chat.<id>` 系列能力 */
+  id: string;
+  displayName: string;
+  kind?: 'chat' | 'agent';
+  /**
+   * 模型来源，决定会话设置面板显示哪些控件：
+   * - app：从应用模型供应商取 provider/model（key 不出后端）
+   * - builtin：引擎自带目录与凭据，模型来自 `cap.ai.chat.<id>.models`
+   * - hybrid：优先 app 的 provider/model，否则回落引擎自带（直连/自带 key 也归此类）
+   * - none：无模型概念
+   */
+  modelSource: 'app' | 'builtin' | 'hybrid' | 'none';
+  /** 静态模型目录；动态目录优先（引擎提供 `cap.ai.chat.<id>.models` 时由它覆盖） */
+  models?: AiEngineModel[];
+  features?: AiEngineFeatures;
+  /** 是否作为未指定 engineId 时的默认引擎；至多一个 */
+  default?: boolean;
+}
+
+/** 引擎注册表对外暴露的运行时信息（元数据 + 动态自省结果） */
+export interface AiEngineInfo extends AiEngineMetadata {
+  /** 引擎当前是否可用（有动态 models cap 时由它裁定；无则 true） */
+  available: boolean;
+  /** 实际生效的模型目录（动态优先） */
+  models: AiEngineModel[];
+}
+
 /** 插件 manifest（Polaris manifest 的瘦身版） */
 export interface LiteManifest {
   id: string;
@@ -164,6 +230,8 @@ export interface LiteManifest {
   events?: string[];
   /** 依赖的能力（如 'cap.model.admin'）：宿主据此决定插件装配顺序，缺失时告警 */
   requires?: string[];
+  /** AI 引擎声明式元数据；只有声明了本字段的插件才进入引擎注册表 */
+  aiEngine?: AiEngineMetadata;
   contributes?: {
     slots?: SlotDescriptor[];
     /** 可被工作区树摆放的视图（新契约；与 slots 并存，二者都由宿主统一渲染） */
@@ -291,11 +359,25 @@ export type AssistantBlockMessage = ChatMessage & AssistantBlocks;
 /** 会话消息统一形态（协议消息[可携 blocks] + 旧版独立工具卡） */
 export type SessionStoreMessage = ChatMessage | ToolCardMessage | AssistantBlockMessage;
 
+/**
+ * 会话级模型选择（统一四套旧字段为一个引用）。
+ * 语义由被引擎解释：engineId 决定分派目标，providerId/modelId 供适配应用供应商的引擎使用，
+ * option 供自带目录的引擎使用（如 CLI 模型）。平台只搬运，不认识任何具体值。
+ */
+export interface ModelRef {
+  engineId?: string;
+  providerId?: string;
+  modelId?: string;
+  option?: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
   messages: ChatMessage[];
   createdAt: number;
+  /** 会话级模型引用；缺省=跟随全局默认引擎与默认模型 */
+  modelRef?: ModelRef;
   // 注：待发队列（流式预输入）属于对话 UI 的实现细节，不放核心契约，
   // 由 chat-lite 自己的 store 持有（见 plugins/chat-lite/store.ts）。
 }

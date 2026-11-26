@@ -12,6 +12,11 @@
  */
 export type {
   SlotId,
+  CORE_CAPABILITIES,
+  AiEngineModel,
+  AiEngineFeatures,
+  AiEngineMetadata,
+  AiEngineInfo,
   AuthStatus,
   AuthUser,
   AuthStatusResult,
@@ -30,6 +35,7 @@ export type {
   StreamEvent,
   ChatMessage,
   ChatSession,
+  ModelRef,
   ToolCardStatus,
   ToolCardData,
   ToolCardMessage,

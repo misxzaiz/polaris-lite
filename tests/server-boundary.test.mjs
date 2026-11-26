@@ -71,9 +71,10 @@ test('注册表的每个 server 半边存在、签名正确，宿主可装配出
   const dataDir = mkdtempSync(join(tmpdir(), 'plite-boundary-'));
   try {
     const host = createHost({ dataDir });
-    assert.deepEqual(host.serverPlugins, SERVER_PLUGINS.map((p) => p.id));
-    // 平台 + 领域中间件都在链上：3 个平台（auth/providers/relay）+ N 个领域
-    assert.equal(host.middlewares.length, 3 + SERVER_PLUGINS.length);
+    const enabled = SERVER_PLUGINS.filter((p) => p.enabled !== false);
+    assert.deepEqual(host.serverPlugins, enabled.map((p) => p.id));
+    // 平台 + 领域中间件都在链上：3 个平台（auth/providers/relay）+ N 个启用的领域
+    assert.equal(host.middlewares.length, 3 + enabled.length);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

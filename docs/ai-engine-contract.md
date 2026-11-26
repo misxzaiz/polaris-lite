@@ -1,88 +1,81 @@
-# AI 引擎适配契约(ai-engine) 草案 v0.1
+# AI 引擎契约（ai-engine）v1
 
-,未实施。与 plugin-contract.md / server-gateway-contract.md 并列。
+与 `plugin-contract.md` / `server-gateway-contract.md` 并列。本文描述**已实施**的机制。
 
-## 0. 可行性检查结论
+## 1. 目标
 
-基于现有代码核对,方案可行,无需推翻现有设计:
+1. 引擎即插件：新增引擎 = 新增插件 + 声明元数据 + 注册自己的 cap，宿主与消费方零改动。
+2. 核心零业务：`src/core/` 与 `server/` 不认识任何具体引擎 id、厂商、模型或端点。
+3. 形态差异留在引擎内部：适配应用供应商、自带目录与凭据、混合、其它协议（CLI/MCP/A2A）都走同一公共面。
+4. 统一流事件协议：文本增量 / 思考 / 工具 / 用量 / 重试 / 完成 / 错误走同一种事件流（词汇表见 `plugins/engine-kit/vocabulary.ts`）。
 
-- relay-core 是配置型代理,上游请求头固定,引擎适配不能塞进 relay;引擎插件 server 半边需自行发起上游调用。
-- 插件 server 半边现有 createServerPart({dataDir,getSession,store,policy,logger}) 注入,能力按 server-gateway-contract.md 注册到 /api/cap。
-- chat-lite 已有工具卡/审批/中断/思考展示 UI,契约事件只需覆盖这些既有能力,无需新增 UI 概念。
-- chat-lite 现仅耦合 cap.ai.chat 能力名,演进为面向 ai-engine 契约编程。
-- 宿主零业务原则不变:宿主不认识任何具体厂商,引擎差异全部由引擎插件适配。
+## 2. 角色
 
----
+- **引擎插件**：声明 `manifest.aiEngine`，注册 `cap.ai.chat.<engineId>` / `.interrupt`（可选 `.models`），自行适配厂商与协议。
+- **核心协议设施**（`src/core/aiEngine.ts`）：注册唯一的 `cap.ai.chat`、`cap.ai.chat.interrupt` 与只读自省 `cap.ai.engine`；按 `payload.engineId` 把调用转发到 namespaced cap，把事件注入 `engineId` 后广播。它只认命名约定与元数据形状。
+- **消费方**（chat-lite / agent-loop / voice-radio / starter-suggestions / translate 等）：只声明 `cap.ai.chat`，不认识具体引擎；会话设置 UI 从 `cap.ai.engine` 动态拉取引擎与模型目录。
 
-## 1. 目标与非目标
+## 3. Manifest 声明
 
-### 1.1 目标
-1. 引擎即插件: 新增引擎 = 新增插件,宿主与 chat-lite 零改动。
-2. 最大引擎自由度: 思考等级/工具适配/采样参数/私有能力由引擎插件自行映射,契约只约定最小公共面。
-3. 统一流事件协议: 文本增量/工具调用/思考/用量/错误/完成走同一种事件流。
-4. 同端口统一鉴权: 上游调用在插件 server 半边,密钥不出后端,对外仅宿主一个端口。
-5. 面向 Agent 引擎预留: Claude Code 类 CLI Agent 的会话/工具执行/权限确认仅做协议预留。
+```ts
+aiEngine: {
+  id: string;                 // 对应 cap.ai.chat.<id>
+  displayName: string;
+  kind?: 'chat' | 'agent';
+  modelSource: 'app' | 'builtin' | 'hybrid' | 'none';
+  models?: { id: string; label?: string }[];  // 静态目录；动态目录优先
+  features?: {
+    supportsTools?: boolean;  // false 时消费方跳过 agent-loop / 服务端 runner
+    slashSkills?: boolean;    // false 时不做 /slash 技能展开
+  };
+  default?: boolean;          // 未指定 engineId 时的默认引擎，至多一个
+}
+```
 
-### 1.2 非目标(v1 不做)
-- 不实现具体引擎插件。
-- 不定义进程级沙箱(沿用 server-gateway G5)。
-- 不规定引擎插件内部架构(可直连/可走 relay/可包 CLI 子进程)。
-- 不承诺负载均衡/故障转移/配额管理。
+`modelSource` 决定 UI 控件：
 
----
+| 取值 | 语义 | UI |
+|---|---|---|
+| `app` | 从应用供应商取 provider/model，key 不出后端 | 供应商 + 模型二级选择 |
+| `builtin` | 引擎自带目录与凭据 | 引擎模型目录选择 |
+| `hybrid` | 优先 app 的 provider/model，否则回落自带（直连/自带 key 归此类） | 供应商 + 模型，引擎内部处理回落 |
+| `none` | 无模型概念 | 隐藏模型行 |
 
-## 2. 角色与总览
+构建期（`plugins/build-plugins.mjs`）校验：id 唯一且合法、id 与 `provides` 的 namespaced cap 对应、`modelSource` 枚举合法、默认引擎至多一个。
 
-- 对话 UI 插件(如 chat-lite): 面向 AiEnginePlugin 契约编程,不 import 任何具体引擎。
-- 引擎插件: 提供 ai-engine 能力,自行适配厂商差异(思考等级/工具/参数/流格式/CLI 子进程)。
-- 宿主: 仅提供能力网关(/api/cap)、权限裁决、审计;不解析任何厂商语义。
-- 引擎分派器(平台小模块): 按 engineId 路由到已注册引擎插件,默认 real-engine 兜底。
+## 4. Cap 契约
 
-请求路径: chat-lite -,...) - srv.ai.* - server 半边 -  ---  ##
-3.
-引擎插件
-Manifest
-约定  引擎插件在
-manifest
-中声明:  
-provides:
-[ai-engine], 
-aiEngine:
+### 4.1 `cap.ai.chat`（流式，核心注册）
 
-kind:
-chat | agent, 
-displayName:
-Claude Code, 
-models:
-[ 
+- `action: 'start'`，`payload` 至少含 `{ sessionId, messageId, prompt }`；可选 `engineId`、`option`（引擎自解释）、`providerId`/`modelId`（适配应用供应商的引擎用）、`history`、`attachments`、`messages`/`tools`。
+- 未给 `engineId` → 使用 manifest 标 `default` 的引擎；没有默认值时用第一个注册引擎。
+- 事件以 `cap.ai.chat:event` 广播，载荷保留引擎原始 `kind`/`payload`，并注入 `engineId`；`source` 由宿主按 `cap.ai.chat` 提供方注入，插件无法伪造。
 
-id:
-claude-code,
-label:
-Claude Code,
-supportsTools:
-true,
-supportsStream:
-true,
-supportsThinking:
-true,
-contextWindow:
-200000
-} 
-] 
-}  约束: -
-aiEngine.models
-是静态声明;运行时可用
-srv.ai.models
-返回更全目录,二者冲突时以运行时为准。 -
-kind=agent
-的引擎必须实现会话事件流(见第
-5
-节
-toolCall/session
-事件),否则不得声明为
-agent。 -
-models
-的能力字段仅供
-UI
-提示与能力协商,宿主不校验语义。 
+### 4.2 `cap.ai.chat.interrupt`
+
+- `payload: { sessionId, messageId?, engineId? }`。
+- 指定 `engineId` → 只中断该引擎；缺省 → 扇出到所有已注册引擎（各引擎按自己的 running 表判定，无流即 `found=false`）。
+
+### 4.3 `cap.ai.engine`（只读自省）
+
+- `list` → `{ engines: AiEngineInfo[], defaultEngineId? }`
+- `describe` / `models`（`payload.engineId`）→ 单个引擎信息 / 模型目录
+- 引擎若提供 `cap.ai.chat.<id>.models`，其返回的 `{ available, models }` 覆盖 manifest 静态声明；例如 CLI 引擎的模型清单随版本动态变化。
+
+## 5. 协议 / 传输
+
+契约只约束**入站 payload + 出站事件流**，不约束引擎内部如何产生事件：
+
+- `inproc`：直接实现 `StreamCapabilityHandler`（real / mock）。
+- `server-proxy`：引擎前端壳 fetch 自己 server 半边的私有端点、解析 SSE、emit 同构事件（codebuddy CLI）。
+- `external`：未来 MCP/A2A/CLI Agent 可只写 server 半边 + 通用前端代理，协议不进总线。
+
+SSE 读、重连、中断映射、usage 方言、tool_calls 聚合沉淀在 `engine-kit`，各引擎复用；消费方不得为某一家重写。
+
+## 6. 会话模型
+
+会话字段收敛为 `modelRef: { engineId?, providerId?, modelId?, option? }`（核心 `ChatSession` 契约）。`option` 是自带目录引擎的模型/变体，语义由引擎解释。引擎选择由此一个字段驱动，不再有专属字段。
+
+## 7. 生命周期一致
+
+前端清单 `plugins/plugin-list.mjs` 是 `enabled` 的唯一来源；`server-registry.mjs` 按同一份清单决定是否挂载 server 半边。前端禁用的插件，其服务端端点也必须不可用，避免绕过插件生命周期的暗通道。

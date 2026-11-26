@@ -5,7 +5,8 @@
  * - 引擎**不再接触 API Key**：中继接受 {providerId, body}，由服务端注入 key 与上游地址；
  * - 供应商信息经 cap.model.admin/resolveActive 取得（masked 视图：id / activeModel / 能力表）；
  * - 因此本插件不再依赖 cap.config，也不再在浏览器里存放任何密钥；
- * - 对外仍提供 cap.ai.chat / cap.ai.chat.interrupt（流式，message.delta → message.done）。
+ * - 对外提供 cap.ai.chat.real / cap.ai.chat.real.interrupt（流式，message.delta → message.done）；
+ *   核心分派器把公共 cap.ai.chat 按 engineId 路由到这里，消费方无需认识本引擎。
  *
  * 独立档直连（docs/mobile-app-plan.md §10.3，B 档数据面）：
  * - 监听 mode-changed：standalone（宿主不可达）时经 /api/providers/direct-config
@@ -753,7 +754,16 @@ export const realEnginePlugin: LitePlugin = {
     requires: ['cap.model.admin'],
     // mode-changed：standalone-mode 的运行模式广播（独立档切直连，docs/mobile-app-plan.md §10.3）
     events: ['model-config-changed', 'auth-changed', 'mode-changed'],
-    provides: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
+    provides: ['cap.ai.chat.real', 'cap.ai.chat.real.interrupt'],
+    /** 引擎身份声明：核心分派器与会话设置面板只认这些字段，不认具体厂商 */
+    aiEngine: {
+      id: 'real',
+      displayName: '应用模型',
+      kind: 'chat',
+      modelSource: 'hybrid',
+      default: true,
+      features: { supportsTools: true, slashSkills: true },
+    },
     contributes: { slots: [] },
   },
   setup(api: SlotHostApi) {
@@ -786,8 +796,8 @@ export const realEnginePlugin: LitePlugin = {
     void refresh();
     // 面板保存时也会直接广播，这里不额外轮询：避免未登录空转
 
-    api.registerCapability.registerStreaming('cap.ai.chat', streamHandler);
-    api.registerCapability.register('cap.ai.chat.interrupt', interruptHandler);
+    api.registerCapability.registerStreaming('cap.ai.chat.real', streamHandler);
+    api.registerCapability.register('cap.ai.chat.real.interrupt', interruptHandler);
 
     // 独立档配置操作桥（standalone-mode 面板按钮调用；同 CHANNEL_FILE_BROWSER_COMPOSE(@sdk) 先例：
     // 经受限 window 通道而非跨插件 cap——这是「数据搬运动作」而非可声明能力）

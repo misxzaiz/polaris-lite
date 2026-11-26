@@ -2,8 +2,8 @@
  * mock-engine 插件：AI 引擎插件（cap.ai.chat 的流式实现）。
  *
  * 验收修复：
- * - [P0 C-1] 能力注册改经 setup(api.registerCapability)，manifest 声明 provides:['cap.ai.chat']，
- *   宿主校验提供资格；main.tsx 不再代为注册。
+ * - [P0 C-1] 能力注册改经 setup(api.registerCapability)，manifest 声明 provides:['cap.ai.chat.mock', ...]，
+ *   宿主校验提供资格；核心分派器把公共 cap.ai.chat 按 engineId 路由到这里。
  * - [P0 B-5] running map key 改为 sessionId::messageId，中断不再误伤同会话并发流。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi, StreamCapabilityHandler } from '@sdk';
@@ -20,7 +20,14 @@ export const mockEnginePlugin: LitePlugin = {
     name: 'Mock AI 引擎',
     version: '0.1.0',
     capabilities: [],
-    provides: ['cap.ai.chat', 'cap.ai.chat.interrupt'],
+    provides: ['cap.ai.chat.mock', 'cap.ai.chat.mock.interrupt'],
+    aiEngine: {
+      id: 'mock',
+      displayName: 'Mock 引擎',
+      kind: 'chat',
+      modelSource: 'none',
+      features: { supportsTools: false, slashSkills: false },
+    },
     contributes: { slots: [] },
   },
   setup(api: SlotHostApi) {    const streamHandler: StreamCapabilityHandler = async (req, emit) => {
@@ -83,8 +90,8 @@ export const mockEnginePlugin: LitePlugin = {
       return { ok: false, found: false };
     };
 
-    api.registerCapability.registerStreaming('cap.ai.chat', streamHandler);
-    api.registerCapability.register('cap.ai.chat.interrupt', interruptHandler);
+    api.registerCapability.registerStreaming('cap.ai.chat.mock', streamHandler);
+    api.registerCapability.register('cap.ai.chat.mock.interrupt', interruptHandler);
   },
 };
 

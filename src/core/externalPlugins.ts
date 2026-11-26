@@ -5,7 +5,7 @@
  * 1. **导入**：fetch registry.json 与 grants.json → 逐个动态 import 插件模块 →
  *    解析有效权限（manifest ∩ grants）→ 登记组件。**不执行 setup**。
  * 2. **排序**：按 manifest.requires 做拓扑排序，让「能力提供方」先于「消费者」装配。
- *    此前顺序靠 build-plugins.mjs 里的 order 注释维持（real-engine 必须先于 mock-engine），
+ *    此前顺序靠 build-plugins.mjs 里的 order 注释维持（能力提供方必须先于消费者），
  *    一旦增删插件就会静默错序；现在由声明驱动，缺失依赖会在启动告警里点名。
  * 3. **装配**：按序 registerPlugin（此时才跑 setup）。
  *
@@ -13,6 +13,7 @@
  */
 import type { ComponentType } from 'react';
 import type { LitePlugin } from '../core/types';
+import { CORE_CAPABILITIES } from '../core/types';
 import { loadGrants, resolvePolicy, type EffectivePolicy } from './policy';
 
 export interface ExternalPluginEntry {
@@ -174,7 +175,9 @@ export async function loadExternalPlugins(
   }
 
   // ---------- 阶段 2：按 requires 拓扑排序（提供方先装配） ----------
-  const providerOf = new Map<string, string>();
+  // 核心提供的协议 cap（cap.meta / cap.ai.chat / cap.ai.engine 等）没有插件提供方，
+  // 但插件的 requires 可以合法依赖它们。先播种为 '<core>'，拓扑遍历时 byId 查不到即跳过。
+  const providerOf = new Map<string, string>(CORE_CAPABILITIES.map((cap) => [cap, '<core>']));
   for (const s of staged) {
     for (const cap of s.policy.provides) providerOf.set(cap, s.plugin.manifest.id);
   }
