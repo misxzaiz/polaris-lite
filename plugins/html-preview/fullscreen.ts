@@ -62,6 +62,24 @@ export function releaseOrientationLock(): void {
 }
 
 /**
+ * 双击重入防御（2026-11-26 移动端实测 bug：点「退出全屏」后画面又变回全屏）。
+ *
+ * 根因：退出全屏是异步 + 带动画的过程（exitFullscreen() → 系统移除 custom view
+ * → fullscreenchange 派发 → React 才把按钮换回「全屏运行」）。退出动画还在进行、
+ * 画面尚未明显缩回时，用户「没看到反馈补点一下」的第二次点按落在已切换为
+ * enter 的按钮上 → 重新 requestFullscreen → 再次全屏。
+ *
+ * 双层防御：
+ * 1. 全屏中禁重入——enter 时若 document.fullscreenElement 非空直接 return
+ *    （覆盖「全屏中又请求全屏」的边界）；
+ * 2. 退出冷却窗口——exit 发起时打时间戳，冷却期内（覆盖退出动画 + fullscreenchange
+ *   滞后 + 触屏补点高发段）enter 一律静默忽略。冷却取 600ms：Android WebView 退出
+ *   动画约 200-400ms，加上事件循环滞后与手指二次触发的窗口足够；刻意快速重进
+ *   全屏的用户点第二次（600ms 后）即可恢复，无可感知损失。
+ */
+let exitCooldownUntil = 0;
+
+/**
  * 进入全屏，并尽量保持进入前的朝向。
  * 调用方需在用户手势（click）中直接调用，否则 requestFullscreen 会被拒绝。
  *
@@ -73,6 +91,8 @@ export function releaseOrientationLock(): void {
  */
 export async function enterFullscreenKeepingOrientation(el: HTMLElement | null): Promise<void> {
   if (!el || typeof el.requestFullscreen !== 'function') return;
+  if (document.fullscreenElement) return; // 防御 1：已在全屏中，禁重入
+  if (Date.now() < exitCooldownUntil) return; // 防御 2：退出冷却期内忽略（触屏补点重入）
   const want = currentOrientation(); // 全屏前采样，全屏后读到的可能已经被浏览器翻过去了
   if (want === 'portrait') {
     await tryLock('portrait'); // 竖屏锁不依赖全屏态：进全屏前先钉住，防浏览器强制横屏
@@ -94,6 +114,7 @@ export async function enterFullscreenKeepingOrientation(el: HTMLElement | null):
 /** 退出全屏并释放可能存在的方向锁 */
 export function exitFullscreenAndUnlock(): void {
   if (document.fullscreenElement) {
+    exitCooldownUntil = Date.now() + 600; // 见 enterFullscreenKeepingOrientation 注释：双击重入防御
     void document.exitFullscreen?.().catch(() => undefined);
   }
   releaseOrientationLock();
