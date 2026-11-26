@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs';
 const read = (p) => readFileSync(p, 'utf8');
 const loopSrc = read('plugins/agent-runner/server.mjs');
 const engineSrc = read('plugins/real-engine/index.ts');
-const chatSrc = read('plugins/chat-lite/index.ts');
+// 事件渲染机制已上移 liveTurn.ts（发起端与重开恢复共用），契约断言合并读两处
+const chatSrc = read('plugins/chat-lite/index.ts') + read('plugins/chat-lite/liveTurn.ts');
 const blockSrc = read('plugins/chat-lite/BlockGroup.tsx');
 const storeSrc = read('plugins/chat-lite/store.ts');
 // 消息模型已上移契约层(host-slimming-report P1-3):块类型的事实源在 src/core/types.ts,经 @sdk 暴露

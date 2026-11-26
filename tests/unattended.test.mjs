@@ -18,7 +18,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const loopSrc = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8');
-const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8');
+// 看门狗/超时常量已上移 liveTurn.ts；契约断言合并读两处
+const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8') + readFileSync(resolve(root, 'plugins/chat-lite/liveTurn.ts'), 'utf8');
 const askSrc = readFileSync(resolve(root, 'plugins/interactive-cards/index.ts'), 'utf8');
 
 test('审批超时与用户主动拒绝分离：resolve timeout，且 emit 携带 autoRejected', () => {

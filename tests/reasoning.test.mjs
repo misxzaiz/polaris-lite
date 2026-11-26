@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const engineSrc = readFileSync(resolve(root, 'plugins/real-engine/index.ts'), 'utf8');
 const loopSrc = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8');
-const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8');
+// 事件渲染机制已上移 liveTurn.ts；契约断言合并读两处
+const chatSrc = readFileSync(resolve(root, 'plugins/chat-lite/index.ts'), 'utf8') + readFileSync(resolve(root, 'plugins/chat-lite/liveTurn.ts'), 'utf8');
 const storeSrc = readFileSync(resolve(root, 'plugins/chat-lite/store.ts'), 'utf8');
 const blockSrc = readFileSync(resolve(root, 'plugins/chat-lite/BlockGroup.tsx'), 'utf8');
 

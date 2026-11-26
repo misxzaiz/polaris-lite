@@ -19,6 +19,16 @@ interface LiveEnvelope { kind: string; payload: Record<string, unknown>; at?: nu
 
 const active = new Map<string, { es: EventSource; wd: ReturnType<typeof setTimeout>; msgId: string }>();
 
+/**
+ * runner 会话的 live 挂载钩子（chat-lite setup 注入）：
+ * 执行中的 run 走 agent-runner 的事件流（见 liveTurn.attachRunnerLive），
+ * 与本文件的 chat-store live-event overlay 是两条独立通道，先 runner 后 overlay。
+ */
+let runnerAttach: ((sessionId: string) => Promise<boolean>) | null = null;
+export function setRunnerAttach(fn: ((sessionId: string) => Promise<boolean>) | null): void {
+  runnerAttach = fn;
+}
+
 function armWatchdog(sessionId: string): void {
   const a = active.get(sessionId);
   if (!a) return;
@@ -132,6 +142,11 @@ export async function openLiveIfNeeded(sessionId: string): Promise<boolean> {
   if (!session) return false;
   // 本端自己正在流式：本地已是实时渲染，不需要 overlay
   if (session.messages.some((m) => !isToolCard(m) && m.streaming && !(m as AssistantBlockMessage).overlayLive)) return false;
+
+  // 服务端 runner 编排的会话：直接接 runner 的事件流（下面 chat-store 的 live-event
+  // 镜像只对旧的「发起端在浏览器里跑 loop」通道有数据，runner 会话没有发布方）。
+  if (runnerAttach && await runnerAttach(sessionId).catch(() => false)) return true;
+
   if (!st.runningLoops[sessionId]) return false;
 
   // 先拉最新落盘全文（overlay 之前的前置消息），再订阅事件流

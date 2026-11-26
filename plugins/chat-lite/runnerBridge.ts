@@ -233,25 +233,26 @@ export async function interruptRunnerRun(sessionId: string): Promise<boolean> {
  * 记录依据（run 归属在服务端），这里按服务端 running 表全量恢复。
  */
 export async function restoreRunnerRuns(sessionIds: string[]): Promise<void> {
+  const handler = restoreHandler;
+  if (!handler) return;
   if (!(await probeRunner())) return;
+  const missing: string[] = [];
   for (const sessionId of sessionIds) {
     if (active.has(sessionId)) continue;
-    try {
-      const resp = await fetch(`${SRV.agent}/state?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'include' });
-      if (!resp.ok) continue;
-      const data = (await resp.json().catch(() => null)) as { running?: boolean; runId?: string; assistantId?: string } | null;
-      if (!data?.running || !data.runId) continue;
-      const handle: RunHandle = {
-        runId: data.runId,
-        sessionId,
-        assistantId: data.assistantId ?? '',
-        es: null,
-        lastSeq: 0,
-      };
-      active.set(sessionId, handle);
-      subscribe(handle);
-    } catch { /* 单会话失败不阻断其他 */ }
+    const att = await findRunningRun(sessionId);
+    if (!att) continue;
+    // 渲染器挂载失败（会话/消息还没拉到本地）→ 稍后补一次，避免「刷新太快就永远不追平」
+    if (!handler(att)) missing.push(sessionId);
   }
+  if (missing.length === 0) return;
+  setTimeout(() => {
+    for (const sessionId of missing) {
+      if (active.has(sessionId)) continue;
+      void findRunningRun(sessionId).then((att) => {
+        if (att) handler(att);
+      }).catch(() => undefined);
+    }
+  }, 2000);
 }
 
 /** 会话删除/切走时清理订阅（服务端 run 继续跑，不影响执行） */
@@ -260,4 +261,65 @@ export function closeRunnerSession(sessionId: string): void {
   if (!handle) return;
   try { handle.es?.close(); } catch { /* 已断 */ }
   active.delete(sessionId);
+}
+
+// ---------------------------------------------------------------- 重开/切回：挂载执行中的 run
+
+/** 挂载参数：从哪起放（lastSeq = 已落进 chat-store 的事件游标） */
+export interface RunnerAttach {
+  runId: string;
+  sessionId: string;
+  assistantId: string;
+  lastSeq: number;
+}
+
+/** 恢复处理器（chat-lite 注入：建/复位 assistant 消息 + 挂 LiveTurn 渲染器） */
+type RestoreHandler = (att: RunnerAttach) => boolean;
+let restoreHandler: RestoreHandler | null = null;
+export function setRunnerRestoreHandler(fn: RestoreHandler | null): void {
+  restoreHandler = fn;
+}
+
+/**
+ * 查询会话是否有执行中的 run（**不订阅**，便于调用方先挂渲染器再订阅）。
+ *
+ * lastSeq 取服务端 `/state` 的 syncedSeq —— 即 runner 已写进 chat-store 的事件游标。
+ * 从 syncedSeq 起放而不是从 0 起：重开时本地已经通过会话快照拿到那部分块，
+ * 从 0 重放会把正文块重复追加一遍（工具卡按 callId 幂等，正文不会）。
+ */
+export async function findRunningRun(sessionId: string): Promise<RunnerAttach | null> {
+  if (!(await probeRunner())) return null;
+  const existing = active.get(sessionId);
+  if (existing && !isClosed(existing)) {
+    return { runId: existing.runId, sessionId, assistantId: existing.assistantId, lastSeq: existing.lastSeq };
+  }
+  try {
+    const resp = await fetch(`${SRV.agent}/state?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'include' });
+    if (!resp.ok) return null;
+    const data = (await resp.json().catch(() => null)) as
+      | { running?: boolean; runId?: string; assistantId?: string; syncedSeq?: number }
+      | null;
+    if (!data?.running || !data.runId || !data.assistantId) return null;
+    return {
+      runId: data.runId,
+      sessionId,
+      assistantId: data.assistantId,
+      lastSeq: Number(data.syncedSeq) || 0,
+    };
+  } catch { return null; }
+}
+
+/** 建立订阅（幂等；调用前渲染器必须已就位——重放会立刻投递） */
+export function subscribeRunner(att: RunnerAttach): void {
+  const existing = active.get(att.sessionId);
+  if (existing && !isClosed(existing)) return;
+  const handle: RunHandle = {
+    runId: att.runId,
+    sessionId: att.sessionId,
+    assistantId: att.assistantId,
+    es: null,
+    lastSeq: att.lastSeq,
+  };
+  active.set(att.sessionId, handle);
+  subscribe(handle);
 }

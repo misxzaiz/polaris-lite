@@ -11,14 +11,16 @@
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
 import { CHANNEL_FILE_BROWSER_COMPOSE, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
-import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, CARD_STORE_CAP, markRunnerOwned, unmarkRunnerOwned, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
+import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, markRunnerOwned, type StoreMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
 import { notifyRootsChanged } from './workspace-prefs';
-import { setRunnerConsumer, setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner, resumeRunnerRun } from './runnerBridge';
+import { setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner, resumeRunnerRun, setRunnerRestoreHandler, findRunningRun } from './runnerBridge';
+import { createLiveTurn, attachRunnerLive } from './liveTurn';
+import { setRunnerAttach } from './liveOverlay';
 import { bindEngineCatalog, loadEngines, supportsSlashSkills, supportsTools } from './engineCatalog';
 export type { StreamEnvelope } from './runnerTypes';
 import type { StreamEnvelope } from './runnerTypes';
@@ -31,13 +33,9 @@ import { SRV } from './serverApi';
 /** 与 mock-auth 的会话镜像键：经 @sdk 契约登记（暗通道收编） */
 
 /**
- * 看门狗只是「疑似卡住」的软提示阈值，不是超时上限，更不是收敛信号。
- * 无人值守场景下，模型长思考 / reasoning / provider 慢都能几十秒无 delta，
- * 因此这里刻意取大值，且超时后只提示、不收敛（收敛只认 message.done / stream.error / 用户停止）。
- * 流式阶段：慢首 token 兜底；工具阶段：多轮审批 + bash 的静默兜底。
+ * 看门狗阈值与「delta 合帧 → 落块 → 收敛」的渲染机制已上移 liveTurn.ts
+ * （发起端与「页面重开/切回执行中会话」共用同一套渲染器；这里不再保留第二份闭包）。
  */
-const STREAM_IDLE_TIMEOUT_MS = 120_000;
-const TOOL_PHASE_TIMEOUT_MS = 600_000;
 
 /**
  * 首条用户消息 → 会话标题（自动命名）：
@@ -93,6 +91,23 @@ export function onStreamRetry(fn: RetryListener): () => void {
 }
 function notifyStreamRetry(attempt: number, maxAttempts: number, chars: number): void {
   for (const fn of retryListeners) fn(attempt, maxAttempts, chars);
+}
+
+/**
+ * 重开/切回一个执行中的会话时，挂渲染器用的公共钩子：
+ * - 旁听通道（ai-events 取证）与发起端同口径；
+ * - 登录过期同样收敛回登录视图。
+ */
+function restoredHooks() {
+  return {
+    onRetry: notifyStreamRetry,
+    onEvent: (envelope: StreamEnvelope): void => {
+      try { hostApi?.emit('cap.ai.chat.runner:event', envelope); } catch { /* 旁听失败不影响渲染 */ }
+    },
+    onAuthExpired: (): void => {
+      void hostApi?.dispatch({ target: 'cap.auth', action: 'logout' }).finally(() => window.location.reload());
+    },
+  };
 }
 
 let hostApi: SlotHostApi | null = null;
@@ -278,6 +293,15 @@ export const chatLitePlugin: LitePlugin = {
 
     // ---- 服务端编排（B1）刷新恢复：页面加载后对服务端 running 表对账， ----
     // 执行中的会话重建 SSE 订阅（事件日志重放 → UI 追平）；服务端继续执行不受刷新影响。
+    // 恢复时必须**同时**挂上渲染器并把消息复位成 streaming：否则重开后工具卡不实时
+    // （事件没人接），输入框还会显示「已结束」而不是「停止」。
+    setRunnerRestoreHandler((att) => attachRunnerLive(att, restoredHooks()));
+    // 切进一个正在执行的会话（另一台设备发起 / 重开后落到别的会话）同样接实时流
+    setRunnerAttach(async (sessionId) => {
+      const att = await findRunningRun(sessionId);
+      if (!att) return false;
+      return attachRunnerLive(att, restoredHooks());
+    });
     // 延迟到 sync bootstrap 之后再做（会话列表就绪才有遍历对象）；探活失败静默跳过。
     setTimeout(() => {
       void probeRunner().then((ok) => {
@@ -291,104 +315,6 @@ export const chatLitePlugin: LitePlugin = {
 
 // StreamEnvelope 已上移 plugins/chat-lite/runnerTypes.ts（runnerBridge 与本文件共用同一形状；
 // 服务端 agent-runner 的 SSE 事件同构，渲染层零改动）。
-
-/** 工具块事件处理（仅 loop 模式；块内嵌于 assistant 消息，按 callId 幂等建块/更新） */
-function handleToolEvent(
-  kind: string,
-  inner: NonNullable<StreamEnvelope['payload']>,
-  sid: string,
-  assistantId: string,
-  armPhaseWatchdog: () => void,
-): void {
-  const st = useSessionStore.getState();
-  // 工具阶段（执行/审批）无 delta 流，用长看门狗并逐事件续期，避免误杀在途编排
-  armPhaseWatchdog();
-  // patchCard 路径不过 trimCard（appendAssistantBlock 才过）——argsJson 在此手动裁剪
-  const capArgs = (raw?: string): string | undefined =>
-    raw ? (raw.length > CARD_STORE_CAP ? `${raw.slice(0, CARD_STORE_CAP)}…[已截断]` : raw) : undefined;
-  const patchCard = (callId: string, patch: (card: ToolCardData) => ToolCardData): void => {
-    // 新版：块内嵌于 assistant 消息；旧版（历史会话）：独立 tool 卡消息
-    const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
-    if (msg && hasBlocks(msg)) {
-      const blk = msg.blocks.find((b) => b.type === 'tool' && b.card.callId === callId);
-      st.patchAssistantToolBlock(sid, assistantId, callId, patch(blk && blk.type === 'tool' ? blk.card : ({} as ToolCardData)));
-      return;
-    }
-    const legacy = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === `card-${callId}`) as ToolCardMessage | undefined;
-    if (legacy) {
-      st.updateMessage(sid, legacy.id, { tool: patch(legacy.tool) } as Partial<StoreMessage>);
-    }
-  };
-
-  if (kind === 'tool.card' || kind === 'tool.approval.required') {
-    const callId = inner.callId ?? '';
-    const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
-    const exists = msg && hasBlocks(msg) && msg.blocks.some((b) => b.type === 'tool' && b.card.callId === callId);
-    if (!exists) {
-      // 新块（tool.card 先到即建 running 卡）。
-      // command 兜底（2026-11-21）：旧版 loop 对语义工具发空串 command——`?? ` 不会
-      // 跳过空串，摘要永远空白；改用 `||` 让空串落到 argsJson（ArgsBlock 可折叠细看）。
-      st.appendAssistantBlock(sid, assistantId, {
-        type: 'tool',
-        card: {
-          callId,
-          name: inner.name ?? 'tool',
-          command: inner.command || inner.argsJson,
-          argsJson: inner.argsJson,
-          status: kind === 'tool.card' ? 'running' : 'awaiting',
-        },
-      });
-      return;
-    }
-    if (kind === 'tool.card') {
-      // 部分引擎对同一 callId 连发两帧：首帧 input 恒为空（args={}），
-      // 收尾帧才带完整参数。首帧已建卡，这里把第二帧的非空字段回填，
-      // 否则折叠头/ArgsBlock 永远停在 "{}"。与审批帧补丁同构，
-      // patchCard 不过 trimCard，长参数在此手动裁剪。
-      patchCard(callId, (c) => ({
-        ...c,
-        ...(inner.command ? { command: capArgs(inner.command) } : {}),
-        ...(inner.argsJson ? { argsJson: capArgs(inner.argsJson) } : {}),
-      }));
-    } else if (kind === 'tool.approval.required') {
-      patchCard(callId, (c) => ({
-        ...c,
-        status: 'awaiting',
-        // 审批事件同样带 display 摘要与原始参数（建卡先于审批到达时在此补齐细节）
-        ...(inner.command ? { command: inner.command } : {}),
-        ...(inner.argsJson ? { argsJson: capArgs(inner.argsJson) } : {}),
-      }));
-    }
-    return;
-  }
-  if (kind === 'tool.approval.resolved') {
-    patchCard(inner.callId ?? '', (c) => ({
-      ...c,
-      status: inner.decision === 'deny' ? 'denied' : 'resolved',
-      decision: inner.decision,
-      // 超时自动拒绝单独标注，便于用户回看时区分「我拒绝的」与「无人值守超时」
-      stderr: inner.autoRejected ? '无人值守：120s 无审批，已自动拒绝' : c.stderr,
-    }));
-    return;
-  }
-  if (kind === 'tool.result') {
-    patchCard(inner.callId ?? '', (c) => ({
-      ...c,
-      status: inner.status ?? 'error',
-      // 终态摘要回填（2026-11-21）：loop 在 tool.result 里带 display 摘要——
-      // 建卡阶段没收到 command（旧会话/异常路径）时在这里补齐
-      ...(inner.command ? { command: inner.command } : {}),
-      stdout: inner.stdout,
-      stderr: inner.stderr,
-      exitCode: inner.exitCode,
-      durationMs: inner.durationMs,
-      truncated: inner.truncated,
-    }));
-    return;
-  }
-  // 注：interactive.created/answered 不走本通道（interactive-cards 直发普通事件，
-  // 非 loop 流转发），监听挂在 setup 里——见 setup 的 onInteractive。
-}
 
 /** 由 ChatInput / 快捷建议 / 队列泵调用：发送用户消息并触发流式回复 */
 export async function sendUserMessage(text: string, attachments?: Attachment[]): Promise<void> {
@@ -503,256 +429,34 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
   const engineId = sendingSession?.modelRef?.engineId;
   const toolCapable = supportsTools(engineId);
 
-  // ---- delta 按帧合并（写入 assistant 末尾 text 块；content 镜像由 store 同步） ----
-  let buf = '';
-  let frame = 0;
-  const flushDelta = (): void => {
-    if (frame) {
-      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
-      frame = 0;
-    }
-    if (!buf) return;
-    const chunk = buf;
-    buf = '';
-    useSessionStore.getState().appendAssistantBlock(sid, assistantId, { type: 'text', text: chunk });
-  };
-  const pushDelta = (delta: string): void => {
-    buf += delta;
-    if (frame) return;
-    frame = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(flushDelta)
-      : (setTimeout(flushDelta, 16) as unknown as number);
-  };
-
-  // ---- 思考流按帧合并（reasoning_content → thinking 块）----
-  // 推理模型的思考可能先于正文持续 30s+；把它落成可见块，用户才知道 AI「在动」。
-  let rbuf = '';
-  let rframe = 0;
-  const flushReasoning = (): void => {
-    if (rframe) {
-      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rframe);
-      rframe = 0;
-    }
-    if (!rbuf) return;
-    const chunk = rbuf;
-    rbuf = '';
-    useSessionStore.getState().appendAssistantBlock(sid, assistantId, { type: 'thinking', text: chunk });
-  };
-  const pushReasoning = (delta: string): void => {
-    rbuf += delta;
-    if (rframe) return;
-    rframe = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(flushReasoning)
-      : (setTimeout(flushReasoning, 16) as unknown as number);
-  };
-
-  // ---- 幂等收敛 + 看门狗 ----
-  // 两个 timer 必须独立：流式阶段每帧 delta 会续期短看门狗，若与工具阶段共用一个变量，
-  // 工具执行期间偶发的一段模型文本会把长看门狗切回 30s → 误杀在途编排。
-  let settled = false;
-  let streamWatchdog: ReturnType<typeof setTimeout> | null = null;
-  let phaseWatchdog: ReturnType<typeof setTimeout> | null = null;
-  let unbind: (() => void) | undefined;
-  let idleHintShown = false; // 每条流只提示一次，避免长思考期间反复追加相同文本
-
-  const clearWatchdogs = (): void => {
-    if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
-    if (phaseWatchdog) { clearTimeout(phaseWatchdog); phaseWatchdog = null; }
-  };
-
-  /** 真收敛：仅由 message.done / stream.error / 用户主动停止触发；看门狗永不调用 */
-  const settle = (): void => {
-    if (settled) return;
-    settled = true;
-    clearWatchdogs();
-    flushDelta();
-    flushReasoning();
-    useSessionStore.getState().updateMessage(sid, assistantId, {
-      streaming: false,
-      // 收敛时刻：done/error/停止三路统一落，UI 据此显示本轮耗时（endedAt - createdAt）
-      endedAt: Date.now(),
-    });
-    unbind?.();
-    // 会话档单一权威化：runner 编排结束——解除占用；服务端已写完本轮产物，
-    // 本端恢复未占用态（此后 pull 对账按服务端档案刷新本地镜像）。
-    unmarkRunnerOwned(sid);
-    sendNextPending(); // 流结束：自动派发队列下一条（若有）
-  };
-
-  /**
-   * 软提示：超时只告诉用户「仍在等待」，绝不 settle / unbind。
-   * 收敛权交给后端权威信号（message.done / stream.error）和用户「停止」——
-   * 这样模型长思考或后台长编排期间静默再久，结果到达后仍会被订阅到并落块。
-   */
-  const showIdleHint = (label: string): void => {
-    if (settled || idleHintShown) return;
-    idleHintShown = true;
-    useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-      type: 'text',
-      text: `[运行提示] ${label}暂无新内容，任务可能仍在后台执行；结果到达后会自动更新。如需中止请点「停止」。`,
-    });
-  };
-
-  /** 流式阶段看门狗：仅慢首 token / 长思考兜底；进入工具阶段后让位 */
-  const armWatchdog = (): void => {
-    if (phaseWatchdog) return; // 已进入工具阶段：流式看门狗长期让位
-    if (streamWatchdog) clearTimeout(streamWatchdog);
-    streamWatchdog = setTimeout(() => {
-      if (settled) return;
-      streamWatchdog = null;
-      showIdleHint(`已 ${STREAM_IDLE_TIMEOUT_MS / 1000}s`);
-    }, STREAM_IDLE_TIMEOUT_MS);
-  };
-
-  /** 工具阶段看门狗：每个 tool.* 事件续期；超时同样只提示不收敛 */
-  const armPhaseWatchdog = (): void => {
-    if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
-    if (phaseWatchdog) clearTimeout(phaseWatchdog);
-    phaseWatchdog = setTimeout(() => {
-      if (settled) return;
-      phaseWatchdog = null;
-      showIdleHint(`工具阶段已 ${TOOL_PHASE_TIMEOUT_MS / 1000}s`);
-    }, TOOL_PHASE_TIMEOUT_MS);
-  };
-
-  const handleEnvelope = (payload: unknown): void => {
-    const envelope = payload as StreamEnvelope;
-    // 来源由宿主取「该 cap 的提供方插件 id」后注入，插件无法伪造；
-    // 无来源的事件一律不认（避免核心内部广播被误当流式事件处理）。
-    if (!envelope.source) return;
-    const inner = envelope.payload ?? {};
-    // 精确匹配：会话 + 消息 双重过滤（并发流不串台；loop 的内部轮次 messageId 不同不会误入）
-    if (inner.sessionId && inner.sessionId !== sid) return;
-    if (inner.messageId && inner.messageId !== assistantId) return;
-
-    // 工具块事件（loop 模式专属）
-    if (envelope.kind.startsWith('tool.')) {
-      handleToolEvent(envelope.kind, inner, sid, assistantId, armPhaseWatchdog);
-      return;
-    }
-
-    // 交互卡事件（服务端 runner 通道；旧通道走 interactive-cards 直发全局事件）：
-    // runner 的 interactive.required/resolved 落成 assistant 消息里的 interactive 块，
-    // 作答经 POST /api/agent/interactive 回填服务端挂起。
-    if (envelope.kind === 'interactive.required') {
-      armPhaseWatchdog();
-      const callId = String(inner.callId ?? '');
-      if (!callId) return;
-      const st2 = useSessionStore.getState();
-      const msg2 = st2.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
-      const blocks2 = (msg2 as { blocks?: { type: string; card?: { callId: string } }[] } | undefined)?.blocks;
-      if (!msg2 || !Array.isArray(blocks2)) return;
-      if (blocks2.some((b) => b.type === 'interactive' && b.card?.callId === callId)) return; // 幂等
-      st2.appendAssistantBlock(sid, assistantId, {
-        type: 'interactive',
-        card: {
-          callId,
-          kind: (inner.kind as 'question' | 'form' | 'confirm') ?? 'question',
-          title: String(inner.title ?? '请确认'),
-          payload: { options: inner.options ?? [], fields: inner.fields ?? [] },
-          status: 'awaiting',
-        },
-      });
-      return;
-    }
-    if (envelope.kind === 'interactive.resolved') {
-      // 服务端已收到作答：用事件携带的 answer 回填卡片（本端 draft 不进 store，
-      // 不带 answer 会回显「已提交 · {}」空白）；他端作答时同样能看到内容。
-      const callId = String(inner.callId ?? '');
-      if (!callId) return;
-      const answer = (inner.answer ?? {}) as Record<string, unknown>;
-      useSessionStore.getState().patchAssistantInteractiveBlock(sid, assistantId, callId, {
-        status: 'answered',
-        answer,
-      });
-      return;
-    }
-
-    // 产物事件（服务端 runner 通道；旧通道是 html-preview 等产物插件直发全局事件）：
-    // 落通用 artifact 块，渲染器由产物插件经 CHANNEL_ARTIFACT_RENDERERS(@sdk) 登记。
-    if (envelope.kind === 'artifact.created') {
-      const callId = String(inner.callId ?? '');
-      if (!sid || !assistantId || !callId || !inner.rendererType) return;
-      const st4 = useSessionStore.getState();
-      const msg4 = st4.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
-      const blocks4 = (msg4 as { blocks?: { type: string; card?: { callId: string } }[] } | undefined)?.blocks;
-      if (!msg4 || !Array.isArray(blocks4)) return;
-      if (blocks4.some((b) => b.type === 'artifact' && b.card?.callId === callId)) return; // 幂等
-      st4.appendAssistantBlock(sid, assistantId, {
-        type: 'artifact',
-        card: {
-          callId,
-          rendererType: String(inner.rendererType),
-          title: String(inner.title ?? '产物'),
-          status: 'ready',
-          data: (inner.data ?? {}) as Record<string, unknown>,
-        },
-      });
-      return;
-    }
-
-    if (envelope.kind === 'message.reasoning' && inner.delta) {
-      armWatchdog(); // 思考流也是活跃信号：长思考期间看门狗持续续期（只软提示不收敛）
-      pushReasoning(inner.delta);
-    } else if (envelope.kind === 'stream.retry') {
-      // 引擎断流自动重试（2026-11-20「突然中断」修复）：页面上可见
-      // 「正在重试 N/10」——不写 store（瞬态，重试成功/失败都不留痕在历史），
-      // 经重试提示通道通知 MessageStream 渲染瞬态浮层。
-      notifyStreamRetry(inner.attempt ?? 0, inner.maxAttempts ?? 10, inner.chars ?? 0);
-      armWatchdog(); // 重试也是活跃信号：退避等待期间不让看门狗误报
-    } else if (envelope.kind === 'message.truncated') {
-      // finish_reason=length 截断且自动续写已耗尽：落 truncated 块（带「继续」按钮兜底）
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'truncated',
-        text: inner.text ?? '回复因达到输出上限被截断',
-      });
-    } else if (envelope.kind === 'message.continued') {
-      // 自动续写进行中（burst N/max）：轻提示块，不打断流式渲染
-      armWatchdog();
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'notice',
-        text: `[已自动续写 ${inner.attempt ?? '?'}/${inner.max ?? 3}${inner.reason === 'tool-truncated' ? ' · 工具参数被截断，已引导重试' : inner.reason === 'reasoning-exhausted' ? ' · 思考耗尽预算，已引导直出结论' : ''}]`,
-      });
-    } else if (envelope.kind === 'message.delta' && inner.delta) {
-      armWatchdog();
-      pushDelta(inner.delta);
-    } else if (envelope.kind === 'message.done') {
-      settle();
-    } else if (envelope.kind === 'stream.error') {
-      flushDelta();
-      const detail = (inner as { message?: string }).message ?? '';
-      // 会话过期（服务端 401）：经 cap.auth 登出（权限插件清理自己的会话镜像），
-      // 再回登录视图——不再直接清别的插件的私有 storage 键。
-      if (detail.includes('登录已过期') || detail.includes('SESSION_REQUIRED')) {
-        void api.dispatch({ target: 'cap.auth', action: 'logout' }).finally(() => window.location.reload());
-        return;
-      }
-      // 错误信息作为独立 text 块追加（blocks 模式渲染以块为准）
-      useSessionStore.getState().appendAssistantBlock(sid, assistantId, {
-        type: 'text',
-        text: `${detail || '流式请求失败'}`,
-      });
-      settle();
-    }
-  };
-
-  // 引擎直达事件仍走 cap.ai.chat:event；服务端 runner 编排事件经 runnerBridge 的
-  // SSE 消费者进入同一 handleEnvelope（事件形状一致，渲染层零改动）。
-  const off = api.listen('cap.ai.chat:event', handleEnvelope);
-  unbind = () => {
-    off();
-    setRunnerConsumer(null); // 本轮流结束：摘除 runner 消费者（下一轮流再挂）
-  };
-  setRunnerConsumer((envelope) => {
-    // runner 事件按 sessionId 精确过滤（与其他通道同口径）
-    const inner = envelope.payload ?? {};
-    if (inner.sessionId && inner.sessionId !== sid) return;
-    if (inner.messageId && inner.messageId !== assistantId) return;
-    // 旁听层（ai-events 取证）：把服务端事件投到专用总线通道，形状保持 envelope 原样
-    try { api.emit('cap.ai.chat.runner:event', envelope); } catch { /* 旁听失败不影响渲染 */ }
-    handleEnvelope(envelope);
+  // ---- 本轮渲染器（liveTurn）：delta 合帧 / 工具卡 / 看门狗 / 收敛集中在一处 ----
+  // 页面重开或切回执行中的会话时，liveTurn.attachRunnerLive 复用同一实现，
+  // 所以本函数不再自己持有闭包（两份实现会漂：重开路径曾因此完全没有消费者）。
+  let offCap: (() => void) | undefined;
+  const turn = createLiveTurn({
+    sessionId: sid,
+    assistantId,
+    hooks: {
+      onRetry: notifyStreamRetry,
+      onSettle: () => {
+        offCap?.();
+        sendNextPending(); // 流结束：自动派发队列下一条（若有）
+      },
+      onAuthExpired: () => {
+        // 会话过期（服务端 401）：经 cap.auth 登出（权限插件清理自己的会话镜像），再回登录视图
+        void hostApi?.dispatch({ target: 'cap.auth', action: 'logout' }).finally(() => window.location.reload());
+      },
+      // 旁听层（ai-events 取证）：服务端事件投到专用总线通道，形状保持 envelope 原样
+      onEvent: (envelope) => {
+        try { api.emit('cap.ai.chat.runner:event', envelope); } catch { /* 旁听失败不影响渲染 */ }
+      },
+    },
   });
-  armWatchdog(); // 首个 delta 之前就无响应（上游挂住）也能收敛
+
+  // 引擎直达事件仍走 cap.ai.chat:event（不支持工具编排的引擎）；
+  // 服务端 runner 事件由 liveTurn 的全局消费者按 sessionId 路由到同一个渲染器。
+  offCap = api.listen('cap.ai.chat:event', turn.dispatch);
+
 
   const session = sendingSession ?? store.sessions.find((s) => s.id === sid);
   const modelRef = session?.modelRef;
@@ -923,8 +627,7 @@ const RESUME_TIMEOUT_MS = 300_000;
 /**
  * 截断续写兜底（truncated 块「继续」按钮）：不新增用户消息，直接续开同一 assistant
  * 消息——shadow 尾是 assistant 半截 prefill（agent-loop resume 动作语义，MOSI 实测支持）。
- * 轻量监听：只处理 delta/reasoning/continued/truncated/done/error 六类事件，
- * 不带 sendUserMessage 的完整看门狗机制（超时软兜底复位 streaming）。
+ * 渲染复用 liveTurn（与常规流同一套 delta/工具/收敛实现），仅多一个 5 分钟软兜底。
  */
 export function resumeTruncated(sessionId: string, messageId: string): void {
   const st = useSessionStore.getState();
@@ -932,38 +635,21 @@ export function resumeTruncated(sessionId: string, messageId: string): void {
   if (!msg || isToolCard(msg) || msg.streaming) return; // 幂等：流式中不重复触发
   st.updateMessage(sessionId, messageId, { streaming: true });
 
-  const finish = (): void => {
-    useSessionStore.getState().updateMessage(sessionId, messageId, { streaming: false });
-  };
-  const timer = setTimeout(finish, RESUME_TIMEOUT_MS);
-  const cleanup = (): void => { clearTimeout(timer); setRunnerConsumer(null); };
-  // 服务端 runner 接续：事件经 SSE → 同一 handleEnvelope 渲染层（形状与常规流一致）。
-  // 临时 consumer 只处理本条续写消息，message.done/error 时收敛。
-  setRunnerConsumer((envelope) => {
-    const inner = envelope.payload ?? {};
-    if (inner.sessionId && inner.sessionId !== sessionId) return;
-    if (inner.messageId && inner.messageId !== messageId) return;
-    const kind = envelope.kind ?? '';
-    if (kind === 'message.delta' && inner.delta) {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: String(inner.delta) });
-    } else if (kind === 'message.reasoning' && inner.delta) {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'thinking', text: String(inner.delta) });
-    } else if (kind === 'message.continued') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'notice', text: `[已自动续写 ${String(inner.attempt ?? '?')}/${String(inner.max ?? 3)}]` });
-    } else if (kind === 'message.truncated') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'truncated', text: String(inner.text ?? '回复因达到输出上限被截断') });
-    } else if (kind === 'message.done') {
-      cleanup();
-      finish();
-    } else if (kind === 'stream.error') {
-      useSessionStore.getState().appendAssistantBlock(sessionId, messageId, { type: 'text', text: String(inner.message ?? '流式请求失败') });
-      cleanup();
-      finish();
-    }
+  // 与常规流同一套渲染器：续写只是「同一个 assistant 消息再来一段」，
+  // 不应有第二份 delta/工具/收敛实现（旧实现在这里另挂了一个 consumer，
+  // 会把 liveTurn 的全局消费者顶掉）。
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const turn = createLiveTurn({
+    sessionId,
+    assistantId: messageId,
+    hooks: { onSettle: () => { if (timer) { clearTimeout(timer); timer = null; } } },
   });
-  void resumeRunnerRun(sessionId, messageId).then((runId) => {
-    if (!runId) { cleanup(); finish(); }
-  }).catch(() => { cleanup(); finish(); });
+  // 软兜底：服务端没回执时 5 分钟后强制收敛（与旧实现同阈值）
+  timer = setTimeout(() => { turn.settle(); }, RESUME_TIMEOUT_MS);
+
+  void resumeRunnerRun(sessionId, messageId)
+    .then((runId) => { if (!runId) turn.settle(); })
+    .catch(() => turn.settle());
 }
 
 /** 审批决策回填（ToolCard 按钮调用；服务端编排挂起审批，任意在线设备先到先得） */

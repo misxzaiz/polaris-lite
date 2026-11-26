@@ -69,7 +69,9 @@ test('vocabulary:17+ kind 两层登记全量（结构契约）', async () => {
 
 test('词汇表与 chat-lite 消费面一致（防契约漂移）', async () => {
   const vocab = await read('vocabulary.ts');
-  const chat = await readFile(resolve(kitRoot, '../chat-lite/index.ts'), 'utf8');
+  // 事件渲染机制已上移 liveTurn.ts；消费面断言合并读两处
+  const chat = (await readFile(resolve(kitRoot, '../chat-lite/index.ts'), 'utf8'))
+    + (await readFile(resolve(kitRoot, '../chat-lite/liveTurn.ts'), 'utf8'));
   // chat-lite 消费的关键 kind 必须全部在词汇表里
   for (const k of ['tool.approval.required', 'message.truncated', 'message.continued', 'context.compact-failed']) {
     assert.ok(vocab.includes(`'${k}'`), `chat-lite 消费的 ${k} 未登记进词汇表`);

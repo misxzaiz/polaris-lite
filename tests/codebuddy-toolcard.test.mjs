@@ -18,7 +18,8 @@ const read = (rel) => readFile(resolve(root, rel), 'utf8');
 const slice = (src, start, end) => src.slice(src.indexOf(start), src.indexOf(end));
 
 test('chat-lite: 已建卡分支回填 tool.card 第二帧（不吞完整参数）', async () => {
-  const src = await read('plugins/chat-lite/index.ts');
+  // 工具块事件处理已上移 liveTurn.ts（发起端与重开恢复共用同一实现）
+  const src = await read('plugins/chat-lite/liveTurn.ts');
   const branch = slice(
     src,
     "if (kind === 'tool.card' || kind === 'tool.approval.required')",

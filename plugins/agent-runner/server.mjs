@@ -948,6 +948,13 @@ export function createServerPart(options = {}) {
       '你是 polaris-lite 工作台里的 AI 助手，可以使用 bash 工具与 files 工具（浏览/读取文件，只读）。',
     );
     sysParts.push(`当前日期时间：${new Date().toLocaleString('zh-CN', { hour12: false })}（宿主本地时区）。`);
+    // 实例身份：同一台机器上跑着 5000/9825/9826 三个实例，数据目录各不相同。
+    // 不写明的话 AI 只能靠端口猜测自己在哪里，容易把写入/查询指向别的实例。
+    const instPort = String(process.env.PORT ?? '').trim();
+    if (instPort) {
+      const instRole = instPort === '5000' ? '开发' : instPort === '9825' ? '生产' : instPort === '9826' ? '钉住分析实例' : '未登记';
+      sysParts.push(`当前实例：http://127.0.0.1:${instPort}（${instRole}），数据目录 ${dataDir}。`);
+    }
     if (run.wsHint) sysParts.push(`bash 的 cwd 固定为：${run.wsHint}。`);
     if (run.wsFallbackNote) sysParts.push(run.wsFallbackNote);
     sysParts.push(
@@ -1299,6 +1306,9 @@ export function createServerPart(options = {}) {
         phase: run.phase,
         startedAt: run.startedAt,
         seq: run.seq,
+        // 已落进 chat-store 的事件游标：重开页面时从这之后放，避免把已落档的
+        // 正文块再追加一遍（工具卡按 callId 幂等，正文不幂等）。
+        syncedSeq: run.syncedSeq ?? 0,
         assistantId: run.assistantId,
       });
     }
