@@ -147,6 +147,10 @@ export function createServerPart(options = {}) {
     const job = readJson(jobFile);
     if (!job) return null;
     if ((job.status === 'running' || job.status === 'queued') && !pidAlive(Number(job.pid))) {
+      // pm2 托管时 pid 要等 worker 起来才写（几十毫秒~1s）。刚投递的空窗期不能
+      // 判成 stale，否则面板会立刻显示「已中断」并允许重复投递。
+      const age = Date.now() - Date.parse(job.startedAt ?? 0);
+      if (job.status === 'queued' && !job.pid && age >= 0 && age < 60_000) return job;
       return {
         ...job,
         status: 'stale',
@@ -182,6 +186,58 @@ export function createServerPart(options = {}) {
     if (r.error || r.status !== 0) return null;
     const lines = String(r.stdout ?? '').split('\n').filter(Boolean);
     return { count: lines.length, sample: lines.slice(0, 5) };
+  }
+
+  // ── 拉起 worker：pm2 托管优先，detached 仅作无 pm2 时的降级 ─────────────
+  const PM2_NAME = 'plite-deploy-9826';
+  const pm2Bin = resolve(srcDir, 'node_modules', '.bin', process.platform === 'win32' ? 'pm2.cmd' : 'pm2');
+  const spawnSyncFn = options.spawnSync ?? spawnSync;
+
+  function launchWorker({ jobId, logFile }) {
+    if (existsSync(pm2Bin) && options.usePm2 !== false) {
+      try {
+        // 上一个 job 的 app 可能还以 stopped 状态留着：先删掉，避免 --name 冲突
+        spawnSyncFn(pm2Bin, ['delete', PM2_NAME], {
+          cwd: srcDir, shell: true, windowsHide: true, encoding: 'utf8', timeout: 15_000,
+        });
+        const r = spawnSyncFn(
+          pm2Bin,
+          ['start', workerPath, '--name', PM2_NAME, '--no-autorestart', '--', dataDir, jobId, srcDir],
+          { cwd: srcDir, shell: true, windowsHide: true, encoding: 'utf8', timeout: 30_000 },
+        );
+        if (!r?.error && r?.status === 0) return { ok: true, mode: 'pm2' };
+        const detail = String(r?.stderr || r?.stdout || r?.error?.message || '').trim().slice(0, 300);
+        return { ok: false, error: `pm2 拉起失败（exit ${r?.status ?? '?'}）：${detail || '无输出'}` };
+      } catch (e) {
+        return { ok: false, error: `pm2 拉起失败：${String(e?.message ?? e)}` };
+      }
+    }
+
+    // 降级：没有 pm2 的机器上仍可用；注意它的父进程是本实例，pm2 restart 时可能被
+    // taskkill /T 连带杀掉（这正是默认走 pm2 的原因，日志里会留痕）
+    let child;
+    const out = openSync(logFile, 'a');
+    try {
+      child = spawnFn(process.execPath, [workerPath, dataDir, jobId, srcDir], {
+        cwd: srcDir,
+        detached: true,
+        stdio: ['ignore', out, out],
+        windowsHide: true,
+        env: {
+          ...process.env,
+          PLITE_DEPLOY_JOB: jobId,
+          PLITE_DEPLOY_DATA_DIR: dataDir,
+          PLITE_DEPLOY_SRC_DIR: srcDir,
+          PLITE_SRC_DIR: srcDir,
+        },
+      });
+    } catch (e) {
+      return { ok: false, error: `拉起部署进程失败：${String(e?.message ?? e)}` };
+    } finally {
+      closeSync(out); // 子进程已 dup 一份句柄，父进程不再持有
+    }
+    child.unref();
+    return { ok: true, mode: 'detached', pid: child.pid };
   }
 
   return async function deployApi(req, res, next) {
@@ -284,8 +340,8 @@ export function createServerPart(options = {}) {
         pruneJobLogs(stateDir);
         writeFileSync(logFile, `[deploy-panel] ${startedAt} 投递部署 ${jobId} → ${target.sha.slice(0, 7)}\n`, 'utf8');
 
-        // job.json 必须**先于 spawn** 落盘：worker 起来第一件事就是读它拿 targetSha，
-        // 反过来（先 spawn 再写）worker 会读到空值并把 server 写的 running/queued 互相覆盖。
+        // job.json 必须**先于拉起 worker** 落盘：worker 第一件事就是读它拿 targetSha，
+        // 反过来（先拉起再写）worker 会读到空值，且两边的 running/queued 会互相覆盖。
         writeJson(jobFile, {
           id: jobId,
           status: 'queued',
@@ -295,35 +351,31 @@ export function createServerPart(options = {}) {
           targetSha: target.sha,
         });
 
-        // detached + unref：端点立刻返回；本进程（9826）随后被 restart 也不影响构建。
-        let child;
-        const out = openSync(logFile, 'a');
-        try {
-          child = spawnFn(process.execPath, [workerPath], {
-            cwd: srcDir,
-            detached: true,
-            stdio: ['ignore', out, out],
-            windowsHide: true,
-            env: {
-              ...process.env,
-              PLITE_DEPLOY_JOB: jobId,
-              PLITE_DEPLOY_DATA_DIR: dataDir,
-              PLITE_DEPLOY_SRC_DIR: srcDir,
-              PLITE_SRC_DIR: srcDir,
-            },
+        const launched = launchWorker({ jobId, logFile });
+        if (!launched.ok) {
+          writeJson(jobFile, {
+            id: jobId,
+            status: 'done',
+            phase: '失败',
+            startedAt,
+            endedAt: new Date().toISOString(),
+            targetSha: target.sha,
+            error: launched.error,
           });
-        } catch (e) {
-          writeJson(jobFile, { id: jobId, status: 'done', phase: '失败', startedAt, endedAt: new Date().toISOString(), targetSha: target.sha, error: `拉起 worker 失败：${String(e?.message ?? e)}` });
-          return sendJson(500, { error: `拉起部署进程失败：${String(e?.message ?? e)}`, code: 'DEPLOY_SPAWN_FAILED' });
-        } finally {
-          closeSync(out); // 子进程已 dup 一份句柄，父进程不再持有
+          return sendJson(500, { error: launched.error, code: 'DEPLOY_SPAWN_FAILED' });
         }
-        child.unref();
 
-        // pid 补写：queued 但没有活 pid 会被 readJob 判成 stale，所以紧跟着 spawn 落盘。
-        // 两处 writeJson 之间没有 await——单线程下不存在「status 恰好读到 pid:null」的窗口。
-        writeJson(jobFile, { ...(readJson(jobFile) ?? {}), pid: child.pid });
-        audit({ event: 'run', jobId, targetSha: target.sha, pid: child.pid, by: session?.user ?? null });
+        // 只补 launcher/pid 这类元数据，绝不覆盖 worker 可能已经写好的 status/phase
+        // （两处写之间没有 await，单线程下不会与 status 轮询交错）。
+        writeJson(jobFile, {
+          ...(readJson(jobFile) ?? {}),
+          launcher: launched.mode,
+          ...(launched.pid ? { pid: launched.pid } : {}),
+        });
+        audit({
+          event: 'run', jobId, targetSha: target.sha, launcher: launched.mode,
+          pid: launched.pid ?? null, by: session?.user ?? null,
+        });
         return sendJson(202, { jobId, targetSha: target.sha });
       }
 

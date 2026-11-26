@@ -309,6 +309,90 @@ test('run：spawn 抛错时给出 500 并把 job 收尾成失败（不留 runnin
   assert.match(job.error, /EACCES/);
 });
 
+// ── pm2 托管（发布中途要 restart 9826，worker 必须不在它的进程树里）──────
+
+/** 造一个「有 pm2」的仓库布局：只要 node_modules/.bin/pm2* 存在即走 pm2 分支 */
+function stubPm2Bin(srcDir) {
+  const dir = join(srcDir, 'node_modules', '.bin');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, process.platform === 'win32' ? 'pm2.cmd' : 'pm2'), '@echo off\n', 'utf8');
+}
+
+test('run：默认用 pm2 托管 worker（--no-autorestart，父进程是 daemon 而非 9826）', async () => {
+  const { srcDir, dataDir } = layout();
+  stubWorker(srcDir);
+  stubPm2Bin(srcDir);
+  initClone(cloneDirOf(srcDir));
+  const target = rev(cloneDirOf(srcDir));
+
+  const calls = [];
+  let jobAtLaunch = null;
+  const fakePm2 = (bin, args, opts) => {
+    calls.push({ bin, args: [...args], shell: opts?.shell });
+    if (args[0] === 'start') jobAtLaunch = JSON.parse(readFileSync(join(dataDir, 'deploy', 'job.json'), 'utf8'));
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const mw = createServerPart({
+    dataDir, getSession: () => ({ user: 'root' }), enabled: true,
+    spawnSync: fakePm2,
+    spawn: () => { throw new Error('不该退回 detached'); },
+  });
+  const res = await call(mw, '/api/deploy/run', { method: 'POST', body: '{}' });
+  assert.equal(res.state.status, 202);
+  const { jobId } = res.json();
+
+  // 先 delete（清理上一轮的 stopped app），再 start
+  assert.equal(calls[0].args[0], 'delete');
+  assert.equal(calls[0].args[1], 'plite-deploy-9826');
+  const start = calls.find((c) => c.args[0] === 'start');
+  assert.ok(start, '必须调用 pm2 start');
+  assert.equal(start.args[1], join(srcDir, 'scripts', 'deploy-worker.mjs'));
+  assert.deepEqual(start.args.slice(2, 6), ['--name', 'plite-deploy-9826', '--no-autorestart', '--']);
+  assert.deepEqual(start.args.slice(6), [dataDir, jobId, srcDir], 'dataDir / jobId / srcDir 必须作为 argv 传给 worker');
+  assert.equal(start.shell, true, 'Windows 下 .cmd 需要 shell');
+
+  assert.equal(jobAtLaunch?.targetSha, target, 'job.json 必须在拉起 worker 之前就带 targetSha');
+  const job = JSON.parse(readFileSync(join(dataDir, 'deploy', 'job.json'), 'utf8'));
+  assert.equal(job.launcher, 'pm2');
+});
+
+test('run：pm2 拉起失败 → 500 且 job 收尾成失败（不静默退回 detached）', async () => {
+  const { srcDir, dataDir } = layout();
+  stubWorker(srcDir);
+  stubPm2Bin(srcDir);
+  initClone(cloneDirOf(srcDir));
+  const mw = createServerPart({
+    dataDir, getSession: () => ({ user: 'root' }), enabled: true,
+    spawnSync: (_bin, args) => (args[0] === 'start'
+      ? { status: 1, stdout: '', stderr: 'pm2 daemon not running' }
+      : { status: 1, stdout: '', stderr: 'not found' }),
+    spawn: () => { throw new Error('不该退回 detached'); },
+  });
+  const res = await call(mw, '/api/deploy/run', { method: 'POST', body: '{}' });
+  assert.equal(res.state.status, 500);
+  assert.equal(res.json().code, 'DEPLOY_SPAWN_FAILED');
+  assert.match(res.json().error, /pm2 daemon not running/);
+  const job = JSON.parse(readFileSync(join(dataDir, 'deploy', 'job.json'), 'utf8'));
+  assert.equal(job.status, 'done');
+  assert.equal(job.phase, '失败');
+});
+
+test('status：刚投递、pid 还没写回来的空窗期不算「已中断」；超时才判 stale', async () => {
+  const { dataDir } = layout();
+  const stateDir = join(dataDir, 'deploy');
+  mkdirSync(stateDir, { recursive: true });
+  const write = (startedAt) => writeFileSync(join(stateDir, 'job.json'), JSON.stringify({
+    id: 'warm0001', status: 'queued', phase: '排队', pid: null, startedAt,
+  }), 'utf8');
+  const mw = createServerPart({ dataDir, getSession: () => ({ user: 'root' }), enabled: true });
+
+  write(new Date().toISOString());
+  assert.equal((await call(mw, '/api/deploy/status')).json().job.status, 'queued', '1s 内的空窗期不能误判');
+
+  write(new Date(Date.now() - 120_000).toISOString());
+  assert.equal((await call(mw, '/api/deploy/status')).json().job.status, 'stale', '两分钟还没起来就是真挂了');
+});
+
 // ── ack / notice ────────────────────────────────────────────────────
 
 test('notice：成功且未确认 → 补弹一次；ack 后消失；旧 id 的迟到 ack 不误标', async () => {

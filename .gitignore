@@ -3,6 +3,9 @@ node_modules
 dist
 plugins/*/dist
 
+# vite 读取配置时在仓库根留下的临时文件（每次 build 都变，不该进 dirty 统计）
+vite.config.ts.timestamp-*
+
 # 插件构建产物（由 `node plugins/build-plugins.mjs` 生成，含 registry.json）
 # 不入库：避免把构建产物里可能存在的敏感值固化进历史
 public/plugins

@@ -12,9 +12,9 @@
 面板把发布动作拆成两段：
 
 ```
-浏览器 ──POST /api/deploy/run──► 9826（只写任务文件 + spawn detached 子进程，立刻 202）
+浏览器 ──POST /api/deploy/run──► 9826（只写任务文件 + pm2 start 拉起 worker，立刻 202）
                                         │
-                                        ▼  （detached + unref，父进程死了照跑）
+                                        ▼  （pm2 托管：父进程是 pm2 daemon，不在 9826 进程树里）
                               scripts/deploy-worker.mjs
                                         │ spawn
                                         ▼
@@ -33,6 +33,26 @@
 | `GET /api/deploy/status` | 版本差距 / 进行中的 job / 待确认的完成通知 | clone 的 `git fetch` 节流 10s；日志只回尾部 40 行 |
 | `POST /api/deploy/run` | 投递一次发布 | 202 `{jobId,targetSha}`；已有活 job → 409；目标固定 `origin/master` |
 | `POST /api/deploy/ack` | 标记完成通知已弹 | 幂等；旧 id 的迟到 ack 不会误标新通知 |
+
+## 为什么 worker 必须由 pm2 托管（实测结论，不是选择偏好）
+
+第一版用的是 `detached + unref` 子进程，理由是「Windows 上父进程退出后进程树断开」。
+**实测证明这个判断是错的**：在 9826 里点「一键部署」，日志跑到
+`[PM2] Applying action restartProcessId on app [polaris-lite-9826]` 就断了，
+`job.json` 永远停在 `queued`，`last-run.json` 根本没写出来 —— pm2 停进程用的是
+`taskkill /T`（沿 `ParentProcessId` 杀整棵进程树），detached 只换进程组、不改 PPID。
+
+现在改成 `pm2 start scripts/deploy-worker.mjs --name plite-deploy-9826 --no-autorestart -- <dataDir> <jobId> <srcDir>`：
+worker 的父进程是 pm2 daemon，`pm2 restart polaris-lite-9826` 从进程结构上就碰不到它。
+两个配套措施：
+
+- **幂等护栏**：`pm2 save` 会把本 app 存进 dump，机器重启后 `resurrect` 可能把它拉起；
+  worker 启动时若发现 `job.json` 已经是 `done` 就直接退出，绝不在没人点按钮时又发布一次；
+- **冷启动空窗期**：pm2 托管时 pid 要等 worker 起来才写，`queued + pid=null` 在 60s 内
+  不判 `stale`，否则面板会瞬间显示「已中断」。
+
+`node_modules/.bin/pm2` 不存在时才退回 detached（老机器可用，但具备上面那个已知缺陷，
+日志会留痕）。
 
 ## 安全边界（这是本插件最重要的部分）
 
@@ -84,9 +104,9 @@ worker 完成 → 写 last-run.json { ok:true, notified:false }
 ```
 plugins/deploy-panel/index.tsx      manifest + 完成通知 watcher
 plugins/deploy-panel/Panel.tsx      面板（版本差距 / 一键部署 / 进度 / 历史）
-plugins/deploy-panel/server.mjs     /api/deploy/* + detached 投递
+plugins/deploy-panel/server.mjs     /api/deploy/* + pm2 托管投递
 plugins/deploy-panel/panel.css
-scripts/deploy-worker.mjs           一次性后台发布进程
+scripts/deploy-worker.mjs           一次性后台发布进程（pm2 app: plite-deploy-9826）
 scripts/deploy-phases.mjs           输出行 → 用户可读阶段名（纯函数，可单测）
 tests/deploy-panel.test.mjs         门禁 / 单飞 / 竞态 / 通知 / 阶段映射（15 条）
 ```
