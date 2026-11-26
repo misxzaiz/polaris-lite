@@ -418,11 +418,12 @@
 .chat-bubble.markdown { white-space: normal; }
 .chat-bubble .cursor {
   display: inline-block;
-  width: 1px;
+  width: 0;
   height: 15px;
   background: var(--accent-bright);
   vertical-align: text-bottom;
-  margin-left: 4px;
+  margin-left: 2px;
+  box-shadow: 1px 0 0 0 var(--accent-bright); /* 用阴影画竖线：零宽度不参与末行换行计算 */
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }

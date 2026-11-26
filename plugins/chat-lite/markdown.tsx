@@ -8,7 +8,7 @@
  *    被当普通文字显示，天然免疫注入（`<img onerror>` 这类 payload 只会变成一行字）；
  * 3. 解析与渲染分离：正则边界由 markdown-parse.ts 承担并可被单元测试覆盖。
  */
-import { useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode } from 'react';
 import { parseBlocks, parseInline, type Block, type Inline } from './markdown-parse';
 import { copyText } from '../shared/copyText';
 import { CheckIcon, CopyIcon } from './icons';
@@ -120,11 +120,34 @@ function renderBlock(b: Block, key: string): ReactNode {
   }
 }
 
-/** 助手消息正文：Markdown 渲染入口 */
-export function Markdown({ text }: { text: string }) {
+// 简单字符串哈希：块级稳定 key 用（非加密，只求碰撞低、快）
+function hashKey(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) & 0x7fffffff;
+  return h.toString(36);
+}
+
+/**
+ * 助手消息正文：Markdown 渲染入口。
+ *
+ * 流式抖动修复（两处）：
+ * 1. useMemo 缓存解析结果——text 不变（整段消息重渲时）不再全文重 parseBlocks；
+ * 2. 块 key 两段式：前面「已完成」的块用内容哈希做 key，跨帧保持稳定，
+ *    React 按 key 复用 DOM，前文布局完全静止；只有末尾正在生长的块用
+ *    位置索引 key（它内容本就每帧都变，重挂无妨）。旧实现全用 b${i} 位置
+ *    key，流式中前文块一分裂/合并，后续所有块索引位移 → 整段卸载重挂，
+ *    布局跳变就是抖动感的第二大来源。
+ */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   if (text.length > MARKDOWN_MAX_CHARS) {
     // 超长正文（贴日志/长文）：不做解析，保持纯文本 + 保留换行
     return <span className="md">{text}</span>;
   }
-  return <div className="md">{parseBlocks(text).map((b, i) => renderBlock(b, `b${i}`))}</div>;
-}
+  const blocks = useMemo(() => parseBlocks(text), [text]);
+  const last = blocks.length - 1;
+  return (
+    <div className="md">
+      {blocks.map((b, i) => renderBlock(b, i === last ? `b-live-${i}` : `b-${hashKey(JSON.stringify(b))}`))}
+    </div>
+  );
+});

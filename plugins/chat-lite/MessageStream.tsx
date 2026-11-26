@@ -419,9 +419,24 @@ export function MessageStream() {
     return size;
   })();
 
+  // 跟滚分两路：新消息到达走一次 smooth（低频、动画合理）；内容增长（delta 帧）
+  // 在 rAF 内直接贴底定位——流式期间反复触发 smooth 动画会互相打断，滚动位置在
+  // 追赶点附近震荡，正是流式输出「抖」的主因。直接设 scrollTop 也绕开了
+  // CSS scroll-behavior:smooth 与 scroll-padding-bottom 的叠加偏移。
+  const prevCountForScrollRef = useRef(0);
   useEffect(() => {
     if (!atBottom) return;
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const isNewMessage = msgCount !== prevCountForScrollRef.current;
+    prevCountForScrollRef.current = msgCount;
+    if (isNewMessage) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+    const el = streamRef.current;
+    const anchor = el?.querySelector('.chat-conversation > :last-child') as HTMLElement | null;
+    if (!el || !anchor) return;
+    const target = anchor.offsetTop + anchor.offsetHeight;
+    requestAnimationFrame(() => { el.scrollTop = target; });
   }, [msgCount, lastActivity, lastContent, atBottom]);
 
   // 待审批计数（块内 + 旧版独立卡）
