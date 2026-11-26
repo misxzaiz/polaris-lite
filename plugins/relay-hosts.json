@@ -1,1 +1,9 @@
-["api.mosi.cn"]
+[
+  "api.mosi.cn",
+  "api.openai.com",
+  "api.deepseek.com",
+  "api.moonshot.cn",
+  "api.anthropic.com",
+  "dashscope.aliyuncs.com",
+  "open.bigmodel.cn"
+]

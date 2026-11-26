@@ -25,6 +25,12 @@
  *   server/adapter-registry.mjs（按 id 注册/查找，零引擎/工具知识），引擎与工具插件在
  *   各自 server 半边注册、agent-runner 只查表调用；另 prod-server 增加 NODE_TEST_CONTEXT
  *   守卫（PM2 托管 shell 里跑测试不再抢端口）。CORE_BUDGET 5180 → 5260。
+ *   2026-11-26 · 壳层语义补全 + 跨插件存储收口：i18n 字典（src/core/i18n.ts，替换
+ *   `t: key => key` 的空实现）、主题色唯一出处（src/core/theme.ts，消除与 tokens 的
+ *   三处漂移）、槽位 tab 语义表（slotRegistry 的 SLOT_TABS，替代 `slot === 'panel'`
+ *   硬编码）、适配器注册表新增 service 表（跨插件读写的唯一合法通道，替代 agent-runner
+ *   直写 chat-store 文件 / 直连 kv-store sqlite）。四者都是「机制/壳层」，不是业务；
+ *   业务实现仍在插件里。CORE_BUDGET 5260 → 5345。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,7 +51,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  约定与 manifest 元数据，不认识任何具体引擎/厂商；引擎实现全在插件里。
  *  不放进插件的原因：总线单注册位 + assertAllowed 精确匹配，插件路由器要么撕开单注册
  *  语义、要么开 cap.ai.chat.* 通配授权，反而扩大特权面。 */
-const CORE_BUDGET = 5260;
+const CORE_BUDGET = 5345;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FolderIcon, CheckIcon } from './icons';
+import { SRV } from './serverApi';
 import {
   loadWorkspacePrefs, pushRecentWorkspace, saveWorkspacePrefs, onRootsChanged,
 } from './workspace-prefs';
@@ -81,7 +82,7 @@ export function WorkspacePickerBody({
 
   const refreshRoots = useCallback(async () => {
     try {
-      const r = await fetch('/api/fs/roots', { credentials: 'include' });
+      const r = await fetch(`${SRV.fs}/roots`, { credentials: 'include' });
       const j = (await r.json().catch(() => null)) as { roots?: RootRow[] } | null;
       setRoots(j?.roots ?? []);
     } catch {
@@ -155,14 +156,14 @@ export function WorkspacePickerBody({
       if (seqRef.current === seq) setBrowseLoading(true);
     }, 150);
     try {
-      const r = await fetch(`/api/fs/tree?dir=${encodeURIComponent(next)}`, { credentials: 'include' });
+      const r = await fetch(`${SRV.fs}/tree?dir=${encodeURIComponent(next)}`, { credentials: 'include' });
       const j = (await r.json().catch(() => null)) as { nodes?: TreeNode[]; sessionRoam?: boolean } | null;
       if (seq !== seqRef.current) return;
       if (!r.ok) {
         // 漫游被禁用：留在顶层，让用户从已登记根里选，或用手输路径兜底
         setRoamBlocked(true);
         setDir('');
-        const top = await fetch('/api/fs/tree', { credentials: 'include' });
+        const top = await fetch(`${SRV.fs}/tree`, { credentials: 'include' });
         const tj = (await top.json().catch(() => null)) as { nodes?: TreeNode[] } | null;
         if (seq !== seqRef.current) return;
         setNodes((tj?.nodes ?? []).filter((n) => n.isDir));
@@ -203,7 +204,7 @@ export function WorkspacePickerBody({
     setBusy(true);
     setErr('');
     try {
-      const r = await fetch('/api/fs/roots/from-path', {
+      const r = await fetch(`${SRV.fs}/roots/from-path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

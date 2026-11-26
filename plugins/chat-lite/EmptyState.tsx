@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { requestCompose } from './index';
 import { ArrowUpRightIcon, PolarisMark, RefreshIcon } from './icons';
 import { CATEGORY_LABEL, sampleSuggestions, SUGGESTIONS, type CategoryId, type Suggestion } from './suggestions';
+import { SRV } from './serverApi';
 
 /** starter-suggestions 插件写入 kv 的池条目（只取渲染所需字段，其余忽略） */
 interface PoolItem {
@@ -16,7 +17,7 @@ interface PoolItem {
 /** 从 kv 池读取可展示建议；任何异常都回退 null（调用方用内置池兜底） */
 async function loadPoolSuggestions(): Promise<{ items: Suggestion[]; builtinEnabled: boolean } | null> {
   try {
-    const resp = await fetch('/api/kv/get?namespace=starter-suggestions&key=pool', { credentials: 'include' });
+    const resp = await fetch(`${SRV.kv}/get?namespace=starter-suggestions&key=pool`, { credentials: 'include' });
     if (!resp.ok) return null;
     const j = (await resp.json()) as { value?: { items?: PoolItem[]; settings?: { builtinEnabled?: boolean } } | null };
     const items = j?.value?.items;

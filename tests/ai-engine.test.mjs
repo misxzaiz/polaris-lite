@@ -127,15 +127,19 @@ test('中断：指定 engineId 单点；缺省扇出到所有引擎', async () =
   assert.equal(fanout.data.found, true); // 两个引擎里至少一个有在途流
 });
 
-test('核心与消费方源码不得出现具体引擎 id / 厂商写死', () => {
-  const forbidden = ['codebuddy', 'real-engine', 'mock-engine', 'api.anthropic.com'];
+test('核心与服务端不得出现具体引擎 id / 厂商写死', () => {
+  const forbidden = ['codebuddy', 'real-engine', 'mock-engine', 'api.anthropic.com', 'api.openai.com', 'api.deepseek.com'];
+  /** 剥离注释：注释里提到某引擎/厂商属正常文档，不算实现违规（与 server-boundary 同口径） */
+  const stripComments = (src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
   const scan = (dir) => readdirSync(resolve(root, dir))
-    .filter((f) => /\.(ts|tsx)$/.test(f))
+    .filter((f) => /\.(ts|tsx|mjs)$/.test(f))
     .flatMap((f) => {
       const path = resolve(root, dir, f);
-      return readFileSync(path, 'utf8').split('\n').map((line, i) => ({ where: `${dir}/${f}:${i + 1}`, line }));
+      return stripComments(readFileSync(path, 'utf8')).split('\n').map((line, i) => ({ where: `${dir}/${f}:${i + 1}`, line }));
     });
-  const hits = [...scan('src/core'), ...scan('plugins/chat-lite')].filter(({ line }) =>
+  // server/ 是「核心零业务」的服务端一侧：引擎/厂商知识也必须在插件里，故一并纳入扫描。
+  const hits = [...scan('src/core'), ...scan('plugins/chat-lite'), ...scan('server')].filter(({ line }) =>
     forbidden.some((word) => line.toLowerCase().includes(word.toLowerCase())),
   );
   assert.deepEqual(hits.map((h) => h.where), [], `发现写死的具体引擎/厂商：\n  ${hits.map((h) => `${h.where} ${h.line.trim()}`).join('\n  ')}`);

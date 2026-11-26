@@ -56,7 +56,11 @@ function inZone(p, zone) {
   return p === zone || p.startsWith(zone + sep);
 }
 
+import { registerFilesWriteTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 files_write 工具；禁用即消失。
+  if (options.registry) registerFilesWriteTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');

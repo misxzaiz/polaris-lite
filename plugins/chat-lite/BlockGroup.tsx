@@ -13,7 +13,7 @@
  *   items → 整页白屏；含多次自动续写的长工具轮次会话打开即崩）。
  */
 import { Fragment, useEffect, useState } from 'react';
-import { CHANNEL_ARTIFACT_RENDERERS } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS, CHANNEL_ARTIFACT_TOOL_NAMES } from '@sdk';
 import { Markdown } from './markdown';
 import type { AsstBlock, ArtifactCardData, ToolCardData, ToolCardMessage } from './store';
 import { ToolCard } from './ToolCard';
@@ -26,6 +26,12 @@ function CardShim({ card }: { card: ToolCardData }) {
 
 type ToolBlock = Extract<AsstBlock, { type: 'tool' }>;
 type GroupItem = { kind: 'tool'; block: ToolBlock } | { kind: 'thinking'; block: Extract<AsstBlock, { type: 'thinking' }> };
+
+/** 已登记的产物型工具名（小写集合）。产物插件 setup 时写入；未登记时为空集合。 */
+function readArtifactToolNames(): Set<string> {
+  const raw = (window as unknown as Record<string, unknown>)[CHANNEL_ARTIFACT_TOOL_NAMES];
+  return raw instanceof Set ? (raw as Set<string>) : new Set<string>();
+}
 
 /** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text / interactive / notice / truncated 打断 */
 function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[] }[] {
@@ -108,12 +114,12 @@ function GroupSummary({ count, anyFail, streaming, onExpand }: {
  * 流结束统一折叠为汇总条，点开回看全程。
  */
 function ProcessGroup({ items, streaming, artifacts = [] }: { items: GroupItem[]; streaming: boolean; artifacts?: ArtifactCardData[] }) {
-  // 组内含「产物型工具卡」（截图/预览等，卡片 data 带 artifact 引用）时不自动收拢：
-  // 产物是结果而非过程，折叠进汇总条会让用户找不到截图（用户反馈：截图在思考/正文出现后消失）。
-  // 识别口径：html-preview/browser-lite 的工具名 + 本组挂着 artifact 产物——
-  // 有产物随组渲染时折叠会连产物一起藏掉，故这类组保持平铺。
+  // 组内含「产物型工具卡」（截图/预览等）时不自动收拢：产物是结果而非过程，折叠进
+  // 汇总条会让用户找不到截图。工具名不写死：产物插件在 setup 时经
+  // CHANNEL_ARTIFACT_TOOL_NAMES 登记自己的工具名（第二个产物插件起零改这里）。
+  const artifactNames = readArtifactToolNames();
   const hasArtifactTool = artifacts.length > 0 || items.some(
-    (it) => it.kind === 'tool' && /^(render|browser|screenshot)$/i.test(it.block.card.name || ''),
+    (it) => it.kind === 'tool' && artifactNames.has((it.block.card.name || '').toLowerCase()),
   );
   const collapsible = items.length > 1 && !hasArtifactTool;
   const [expanded, setExpanded] = useState(streaming || !collapsible); // 流式=平铺；结束后收拢（产物组除外）

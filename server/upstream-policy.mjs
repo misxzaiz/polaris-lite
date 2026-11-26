@@ -4,19 +4,14 @@
  * 2026-11-22 起默认**不限制**（用户决定：个人部署，http/局域网/私网网关直接可用，
  * 生产同样允许）：assertAllowedUrl 仅校验 URL 可解析。
  * 旧行为（https-only + 白名单 + 私网拦截）可通过 PLITE_UPSTREAM_STRICT=1
- * 或 options.strict 恢复——防线逻辑保留在 strict 分支，随时可切回。
+ * 或 options.strict 恢复——白名单完全来自 `plugins/relay-hosts.json`
+ * （业务数据），本文件不含任何厂商主机名：核心不认识具体供应商。
  * 不跟随重定向（relay 用 redirect:'manual'）依旧成立。
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export const DEFAULT_HOSTS = [
-  'api.openai.com', 'api.deepseek.com', 'api.moonshot.cn',
-  'api.anthropic.com', 'dashscope.aliyuncs.com', 'open.bigmodel.cn',
-  'api.mosi.cn',
-];
-
-/** 读取自定义白名单（plugins/relay-hosts.json，面板新增供应商时追加） */
+/** 读取白名单（plugins/relay-hosts.json；面板新增供应商时追加）。核心不含默认厂商列表。 */
 export function loadExtraHosts() {
   try {
     const file = resolve(process.cwd(), 'plugins/relay-hosts.json');
@@ -29,7 +24,7 @@ export function loadExtraHosts() {
 }
 
 export function createHostPolicy(extraHosts = loadExtraHosts(), options = {}) {
-  const allowed = new Set([...DEFAULT_HOSTS, ...extraHosts].map((h) => h.toLowerCase()));
+  const allowed = new Set(extraHosts.map((h) => h.toLowerCase()));
   /** 仅供本地联调/测试放行环回地址；生产形态永远保持 false */
   const allowPrivate = options.allowPrivate === true;
   /**

@@ -14,25 +14,32 @@
  * - namespace 由插件自报（建议用插件 id），key ≤ 200 字符，value ≤ 1MB；
  * - sqlite 预编译语句，无 SQL 拼接；写入同步落盘（WAL）。
  *
+ * 跨插件访问（2026-11-26）：除了 HTTP 端点，本插件还把**领域操作**注册进
+ * server/adapter-registry 的 service 表（id='kv-store'）。其它插件的 server 半边
+ * （agent-runner 的 ledger 工具等）经 `registry.getService('kv-store')` 使用，
+ * 不再自己 new DatabaseSync 复制本插件的表结构——换存储实现时消费方零改动。
+ *
  * 端点：
  *   GET  /api/kv/get?namespace=&key=     → { value } | { value: null }
  *   POST /api/kv/set   { namespace, key, value }
  *   POST /api/kv/delete{ namespace, key }
  *   GET  /api/kv/list?namespace=       → { keys: string[] }
  */
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const MAX_KEY_LEN = 200;
 const MAX_VALUE_BYTES = 1024 * 1024; // 1MB/键（记账日键、设置等远小于此）
 
-export function createServerPart(options = {}) {
-  const getSession = options.getSession;
-  const dataDir = resolve(options.dataDir ?? '.polaris-lite');
-  const dbPath = resolve(dataDir, 'stores', 'kv-store.db');
-  const hardOff = process.env.PLITE_KV === '0';
-
+/**
+ * KV 存储访问器（同步）：HTTP 半边与其它插件 server 半边共用。
+ *
+ * 建库延迟到首次读写：createHost 阶段不持 sqlite 句柄，避免 Windows 下
+ * 测试/热重启 rmSync 数据目录时 EPERM（WAL 文件被锁）。
+ */
+export function createKvAccess({ dataDir }) {
+  const dbPath = resolve(resolve(dataDir ?? '.polaris-lite'), 'stores', 'kv-store.db');
   let db = null;
   let stmtGet = null;
   let stmtSet = null;
@@ -57,10 +64,6 @@ export function createServerPart(options = {}) {
     return db;
   }
 
-  // 建库延迟到首个请求：createHost 阶段不持 sqlite 句柄，避免 Windows 下
-  // 测试/热重启 rmSync 数据目录时 EPERM（WAL 文件被锁）。
-  // fail-fast 语义保留：首个请求即建库，库打不开该请求 500 暴露问题。
-
   function fullId(namespace, key) {
     const ns = String(namespace ?? '').trim();
     const k = String(key ?? '').trim();
@@ -70,6 +73,52 @@ export function createServerPart(options = {}) {
     if (id.length > MAX_KEY_LEN + ns.length + 1) throw new Error('key 过长');
     return id;
   }
+
+  return {
+    /** 读一个键；不存在返回 null。JSON 损坏视为不存在（不 brick 调用方）。 */
+    get(namespace, key) {
+      ensureDb();
+      const row = stmtGet.get(fullId(namespace, key));
+      if (!row) return null;
+      try { return JSON.parse(row.data); } catch { return null; }
+    },
+    /** 写一个键；value 超过 1MB 抛错（调用方转业务错误）。 */
+    set(namespace, key, value) {
+      ensureDb();
+      const id = fullId(namespace, key);
+      const json = JSON.stringify(value ?? null);
+      if (Buffer.byteLength(json, 'utf8') > MAX_VALUE_BYTES) {
+        throw new Error(`value 过大（> ${MAX_VALUE_BYTES} bytes）`);
+      }
+      stmtSet.run(id, json, Date.now());
+    },
+    del(namespace, key) {
+      ensureDb();
+      stmtDel.run(fullId(namespace, key));
+    },
+    /** 某 namespace 下的全部键（去掉 `ns.` 前缀） */
+    keys(namespace) {
+      ensureDb();
+      const ns = String(namespace ?? '').trim();
+      if (!ns) return [];
+      return stmtList.all(`${ns}.`).map((r) => String(r.id).slice(ns.length + 1));
+    },
+    /** 某 namespace 下匹配前缀的键（去掉 `ns.` 前缀），升序 */
+    keysWithPrefix(namespace, prefix) {
+      ensureDb();
+      const ns = String(namespace ?? '').trim();
+      if (!ns) return [];
+      return stmtList.all(`${ns}.${String(prefix ?? '')}`).map((r) => String(r.id).slice(ns.length + 1));
+    },
+  };
+}
+
+export function createServerPart(options = {}) {
+  const getSession = options.getSession;
+  const hardOff = process.env.PLITE_KV === '0';
+  const access = createKvAccess({ dataDir: options.dataDir });
+  // 跨插件服务注册（consumer 见 agent-runner 的 kv 适配）
+  options.registry?.registerService?.('kv-store', access);
 
   return async function kvApi(req, res, next) {
     if (hardOff) return next?.();
@@ -94,38 +143,29 @@ export function createServerPart(options = {}) {
     });
 
     try {
-      ensureDb();
       const url = new URL(req.url, 'http://x');
 
       if (pathname === '/api/kv/get' && req.method === 'GET') {
-        const id = fullId(url.searchParams.get('namespace'), url.searchParams.get('key'));
-        const row = stmtGet.get(id);
-        return sendJson(200, { value: row ? JSON.parse(row.data) : null });
+        const value = access.get(url.searchParams.get('namespace'), url.searchParams.get('key'));
+        return sendJson(200, { value });
       }
 
       if (pathname === '/api/kv/set' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
-        const id = fullId(body.namespace, body.key);
-        const json = JSON.stringify(body.value ?? null);
-        if (Buffer.byteLength(json, 'utf8') > MAX_VALUE_BYTES) {
-          return sendJson(400, { error: `value 过大（> ${MAX_VALUE_BYTES} bytes）` });
-        }
-        stmtSet.run(id, json, Date.now());
+        access.set(body.namespace, body.key, body.value);
         return sendJson(200, { ok: true });
       }
 
       if (pathname === '/api/kv/delete' && req.method === 'POST') {
         const body = JSON.parse((await readBody()) || '{}');
-        const id = fullId(body.namespace, body.key);
-        stmtDel.run(id);
+        access.del(body.namespace, body.key);
         return sendJson(200, { ok: true });
       }
 
       if (pathname === '/api/kv/list' && req.method === 'GET') {
         const ns = String(url.searchParams.get('namespace') ?? '').trim();
         if (!ns) return sendJson(400, { error: 'namespace required' });
-        const rows = stmtList.all(`${ns}.`);
-        return sendJson(200, { keys: rows.map((r) => r.id.slice(ns.length + 1)) });
+        return sendJson(200, { keys: access.keys(ns) });
       }
 
       return sendJson(404, { error: 'not found' });

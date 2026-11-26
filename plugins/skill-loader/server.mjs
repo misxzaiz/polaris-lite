@@ -25,7 +25,11 @@ const MAX_INDEX_DESC = 200;
 const MAX_SKILL_BYTES = 16 * 1024;
 const MAX_DOC_BYTES = 32 * 1024;
 
+import { registerReadSkillTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 read_skill 工具；禁用即消失。
+  if (options.registry) registerReadSkillTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');

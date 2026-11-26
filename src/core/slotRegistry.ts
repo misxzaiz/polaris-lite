@@ -41,6 +41,25 @@ export function orderEntriesByUserOrder(entries: SlotEntry[], orderKey: string[]
   return [...inOrder.map((x) => x.e), ...rest.map((x) => x.e)];
 }
 
+/**
+ * 槽位是否按「多贡献者 → tab 组」渲染。
+ *
+ * 这是**槽位自身的语义声明**，不是渲染组件里的硬编码条件：此前 SlotOutlet 写
+ * `slot === 'panel'`，想让 sidebar 也 tab 化必须改核心渲染逻辑。新增可 tab 化的
+ * 槽位只改这张表；契约（contributes.slots）不变。
+ */
+export const SLOT_TABS: Readonly<Record<SlotId, boolean>> = {
+  sidebar: false,
+  stream: false,
+  input: false,
+  panel: true,
+  auth: false,
+};
+
+export function slotSupportsTabs(slot: SlotId): boolean {
+  return SLOT_TABS[slot] === true;
+}
+
 export interface ContainerEntry extends ContainerDescriptor {
   pluginId: string;
 }

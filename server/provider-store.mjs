@@ -71,16 +71,34 @@ function normalize(input, prev) {
         .filter((m) => m.id)
     : [];
   const apiKey = typeof input.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : (prev?.apiKey ?? '');
+  // 供应商自定义请求头（非密钥；如 Anthropic 的 anthropic-version、某些网关的租户头）。
+  // 这类「某个上游要什么头」是**业务知识**，因此留在供应商配置里，而不是写进中继代码。
+  const headers = normalizeHeaders(input.headers ?? prev?.headers);
   return {
     id: String(input.id ?? prev?.id ?? `prov-${randomBytes(4).toString('hex')}`),
     name: String(input.name ?? prev?.name ?? '未命名供应商').trim() || '未命名供应商',
     baseURL,
     apiKey,
+    headers,
     models,
     activeModel: String(input.activeModel ?? prev?.activeModel ?? models[0]?.id ?? ''),
     enabled: input.enabled !== false,
     isDefault: input.isDefault === true,
   };
+}
+
+/** 规整自定义请求头：只保留字符串键值，过滤危险头（Authorization/Content-Type 由中继自管） */
+function normalizeHeaders(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const blocked = new Set(['authorization', 'content-type', 'host', 'content-length']);
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = String(k).trim();
+    if (!key || blocked.has(key.toLowerCase())) continue;
+    if (typeof v !== 'string' && typeof v !== 'number') continue;
+    out[key] = String(v);
+  }
+  return out;
 }
 
 export function createProviderStore({ dataDir = '.polaris-lite' } = {}) {
@@ -113,6 +131,8 @@ export function createProviderStore({ dataDir = '.polaris-lite' } = {}) {
     id: c.id,
     name: c.name,
     baseURL: c.baseURL,
+    /** 自定义请求头（非密钥）——面板可见/可编辑，供中继转发时合并 */
+    headers: c.headers ?? {},
     keyMasked: maskKey(c.apiKey),
     hasKey: !!c.apiKey,
     models: c.models ?? [],

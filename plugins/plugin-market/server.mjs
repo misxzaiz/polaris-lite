@@ -32,7 +32,11 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
+import { registerMarketTools } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 market_* 三连；禁用即消失。
+  if (options.registry) registerMarketTools(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const policy = options.policy; // 上游策略（http 源地址过闸；默认不限制，PLITE_UPSTREAM_STRICT=1 恢复白名单）
@@ -270,6 +274,9 @@ export function createServerPart(options = {}) {
       return { error: `插件 id 与已注册插件冲突：${id}` };
     }
     // 落盘到外部插件目录
+    // 注意（信任边界，刻意为之）：外部插件只装 UI 半边（plugin.js / style.css）。
+    // server.mjs 属于「在宿主进程里执行任意 Node 代码」，只对随仓库评审的内置插件开放；
+    // 运行时安装的包即使带了 server.mjs 也不复制、不加载。
     const dest = join(extPluginsDir, id);
     try { rmSync(dest, { recursive: true, force: true }); } catch { /* 无旧版 */ }
     mkdirSync(dest, { recursive: true });

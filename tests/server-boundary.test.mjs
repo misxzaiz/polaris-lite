@@ -19,13 +19,21 @@ import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHost } from '../server/host.mjs';
-import { SERVER_PLUGINS } from '../plugins/server-registry.mjs';
+import { SERVER_PLUGINS, mergeRuntimeEnabled } from '../plugins/server-registry.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const serverDir = resolve(root, 'server');
 
-/** 领域端点前缀白名单：这些只能出现在 plugins/<id>/server.mjs，不得出现在 server/ */
-const DOMAIN_ENDPOINTS = ['/api/fs/', '/api/tool/'];
+/** 领域端点前缀白名单：这些只能出现在 plugins/<id>/server.mjs，不得出现在 server/。
+ *  平台层自身允许的端点只有 /api/auth、/api/providers、/api/model-relay（见 host.mjs）。 */
+const DOMAIN_ENDPOINTS = [
+  '/api/fs/', '/api/tool/', '/api/files-write/',
+  '/api/agent/', '/api/preview/', '/api/share/', '/api/kv/',
+  '/api/browser/', '/api/mcp/', '/api/skills/', '/api/hooks/',
+  '/api/git/', '/api/market/', '/api/phone/', '/api/translate/',
+  '/api/voice-radio/', '/api/chat/', '/api/plugin-admin/',
+  '/api/compat/', '/api/app-updater/', '/api/codebuddy/',
+];
 /** 已迁移到插件的领域模块文件名（防止有人重新在 server/ 下建同名文件） */
 const DOMAIN_MODULES = ['fs-api.mjs', 'tool-exec.mjs'];
 
@@ -78,4 +86,80 @@ test('注册表的每个 server 半边存在、签名正确，宿主可装配出
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('服务端工具由各插件自注册：runner 不再硬编码工具表', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'plite-tools-'));
+  try {
+    const host = createHost({ dataDir });
+    const names = host.registry.listTools().map((t) => t.name).sort();
+    // 每个领域工具由它的宿主插件注册（禁用该插件 → 该工具消失，模型也看不到）。
+    for (const expected of [
+      'bash', 'files', 'files_write', 'render', 'browser', 'read_skill',
+      'interactive', 'ledger', 'translate', 'suggestions', 'transcript', 'phone',
+      'market_list', 'market_install', 'market_uninstall',
+    ]) {
+      assert.ok(names.includes(expected), `工具 ${expected} 未注册（插件 server 半边未装配？）`);
+    }
+    // mcp_ 前缀适配器（动态工具，不进 listTools 的精确表）
+    assert.ok(host.registry.getTool('mcp_server_list'), 'mcp_ 前缀适配器未注册');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('跨插件存储访问经 service 表：不直读写别人的文件 / sqlite', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'plite-svc-'));
+  try {
+    const host = createHost({ dataDir });
+    const services = host.registry.listServices();
+    assert.ok(services.includes('chat-store'), 'chat-store 未注册 service');
+    assert.ok(services.includes('kv-store'), 'kv-store 未注册 service');
+
+    // chat-store：合并消息（版本递增 / 幂等由服务实现保证，消费方不碰文件布局）
+    const chat = host.registry.getService('chat-store');
+    const wrote = chat.mergeMessages('s-svc', null, [
+      { id: 'u-1', role: 'user', content: '你好', createdAt: Date.now() },
+    ]);
+    assert.equal(wrote, true);
+    const rec = chat.readRecord('s-svc');
+    assert.equal(rec.version, 1);
+    assert.equal(rec.session.messages.length, 1);
+    assert.equal(chat.mergeMessages('s-svc', null, [{ id: 'u-1', role: 'user', content: '你好' }]), false, '重复消息不应空转版本');
+
+    // kv-store：读写与前缀枚举
+    const kv = host.registry.getService('kv-store');
+    kv.set('demo', 'k', { a: 1 });
+    assert.deepEqual(kv.get('demo', 'k'), { a: 1 });
+    assert.deepEqual(kv.keysWithPrefix('demo', 'k'), ['k']);
+  } finally {
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows 上 sqlite 句柄可能未释放 */ }
+  }
+});
+
+test('agent-runner 不再直连别人的存储（chat-store 文件 / kv-store sqlite）', () => {
+  const src = readFileSync(resolve(root, 'plugins/agent-runner/server.mjs'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.ok(!src.includes('kv-store.db'), 'runner 不应再自己打开 kv-store 的 sqlite');
+  assert.ok(!/new DatabaseSync|node:sqlite/.test(src), 'runner 不应再持有 sqlite 句柄');
+  assert.ok(!/resolve\([^)]*'chat-store'\)/.test(src), 'runner 不应再拼 chat-store 目录路径');
+});
+
+test('运行时 enabled 合并：registry.json 的开关覆盖构建期默认值', () => {
+  const base = [
+    { id: 'a', enabled: true },
+    { id: 'b', enabled: true },
+    { id: 'c', enabled: false },
+    { id: 'server-only', enabled: true },
+  ];
+  const merged = mergeRuntimeEnabled(base, [
+    { id: 'b', enabled: false }, // 用户面板禁用
+    { id: 'c', enabled: true }, // 运行时重新启用（registry.json 是运行时事实源）
+  ]);
+  const byId = Object.fromEntries(merged.map((p) => [p.id, p.enabled]));
+  assert.equal(byId.a, true, '无运行时记录时保留默认值');
+  assert.equal(byId.b, false, '运行时禁用应生效');
+  assert.equal(byId.c, true, '运行时启用应覆盖默认');
+  assert.equal(byId['server-only'], true, '纯服务端插件（registry 无条目）保留默认值');
 });

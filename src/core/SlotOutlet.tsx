@@ -21,7 +21,7 @@ import type { SlotId } from './types';
 import { host } from './hostRuntime';
 import { getRuntimeComponent } from './externalPlugins';
 import type { TabChromeProps } from './types';
-import { orderEntriesByUserOrder, orderEntriesWithPins } from './slotRegistry';
+import { orderEntriesByUserOrder, orderEntriesWithPins, slotSupportsTabs } from './slotRegistry';
 
 const ACTIVE_KEY_PREFIX = 'plite.slot.active.';
 /** 面板直达意图事件名（与 @sdk CHANNEL_PANEL_INTENT 值对齐；核心不 import 插件，就地字面量） */
@@ -141,7 +141,7 @@ export function SlotOutlet({ slot }: { slot: SlotId }) {
   // 多面板槽：Tab 切换（tab 名 = SlotDescriptor.title ?? 插件 manifest.name）。
   // chrome（tab 条形态）由容器贡献决定：插件注册了 slot-tabs 容器 → 用插件组件；
   // 否则回退内置简版（裸 tab 按钮）。状态权威恒在宿主（本组件）。
-  const useTabs = slot === 'panel' && entries.length > 1;
+  const useTabs = slotSupportsTabs(slot) && entries.length > 1;
   const container = useTabs ? host.slots.resolveContainer('slot-tabs') : undefined;
   const ChromeComp = container
     ? (getRuntimeComponent(container.pluginId, container.component) as

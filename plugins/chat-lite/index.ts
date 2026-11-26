@@ -10,7 +10,7 @@
  * - 任何收敛路径都必须补发 settle，否则输入框永远停在「停止」态；
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
-import { CHANNEL_FILE_BROWSER_COMPOSE, KEY_MOCK_AUTH_SESSION, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
+import { CHANNEL_FILE_BROWSER_COMPOSE, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
 import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, CARD_STORE_CAP, type StoreMessage, type ToolCardData, type ToolCardMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
@@ -26,6 +26,7 @@ import type { StreamEnvelope } from './runnerTypes';
 import './chat.css';
 // 上下文透视：状态条 + 详情抽屉样式（spec docs/context-insight-plan.md）
 import './context.css';
+import { SRV } from './serverApi';
 
 /** 与 mock-auth 的会话镜像键：经 @sdk 契约登记（暗通道收编） */
 
@@ -111,7 +112,7 @@ export const chatLitePlugin: LitePlugin = {
     id: 'chat-lite',
     name: '对话',
     version: '0.3.0',
-    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.ai.engine', 'cap.meta', 'cap.hook.bridge'],
+    capabilities: ['cap.ai.chat', 'cap.ai.chat.interrupt', 'cap.ai.engine', 'cap.meta', 'cap.hook.bridge', 'cap.auth'],
     /** 依赖 AI 引擎提供的流式能力：宿主据此让引擎先于对话 UI 装配 */
     requires: ['cap.ai.chat'],
     // user.prompt：发送时对外广播用户输入原文，供 ai-events 等旁听插件按 messageId 归到同一轮
@@ -434,7 +435,7 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
       // 技能存在性由 skill-loader 的 /api/skills/read 校验（404=不存在）。
       const skillName = slashMatch[1];
       const args = (slashMatch[2] ?? '').trim();
-      const resp = await fetch(`/api/skills/read?name=${encodeURIComponent(skillName)}`, { credentials: 'include' });
+      const resp = await fetch(`${SRV.skills}/read?name=${encodeURIComponent(skillName)}`, { credentials: 'include' });
       if (resp.ok) {
         const j = (await resp.json().catch(() => null)) as { ok?: boolean } | null;
         if (j?.ok) {
@@ -717,10 +718,10 @@ export async function sendUserMessage(text: string, attachments?: Attachment[]):
     } else if (envelope.kind === 'stream.error') {
       flushDelta();
       const detail = (inner as { message?: string }).message ?? '';
-      // 会话过期（服务端 401）：清本地镜像并回到登录视图（自动跳登录，无需手动登出）
+      // 会话过期（服务端 401）：经 cap.auth 登出（权限插件清理自己的会话镜像），
+      // 再回登录视图——不再直接清别的插件的私有 storage 键。
       if (detail.includes('登录已过期') || detail.includes('SESSION_REQUIRED')) {
-        sessionStorage.removeItem(KEY_MOCK_AUTH_SESSION);
-        window.location.reload();
+        void api.dispatch({ target: 'cap.auth', action: 'logout' }).finally(() => window.location.reload());
         return;
       }
       // 错误信息作为独立 text 块追加（blocks 模式渲染以块为准）

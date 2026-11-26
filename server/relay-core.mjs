@@ -64,8 +64,9 @@ export function createRelayMiddleware({ store, policy, getSession }) {
     const headers = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${provider.apiKey}`,
-      // Anthropic 直连需要显式声明版本
-      ...(upstreamUrl.includes('api.anthropic.com') ? { 'anthropic-version': '2023-06-01' } : {}),
+      // 供应商自定义请求头（如 anthropic-version、网关租户头）：由配置声明，
+      // 中继只做透传——核心不认识任何具体厂商。
+      ...(provider.headers && typeof provider.headers === 'object' ? provider.headers : {}),
     };
 
     const abort = new AbortController();

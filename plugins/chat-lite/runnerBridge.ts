@@ -14,6 +14,7 @@
  * 独立档（无服务端）走引擎直达 cap.ai.chat。探活仅用于判定服务端是否可达。
  */
 import type { StreamEnvelope } from './runnerTypes';
+import { SRV } from './serverApi';
 
 interface RunHandle {
   runId: string;
@@ -53,7 +54,7 @@ export function setRunnerEndedHook(fn: ((sessionId: string) => void) | null): vo
 export async function probeRunner(): Promise<boolean> {
   if (runnerAvailable !== null) return runnerAvailable;
   try {
-    const resp = await fetch('/api/agent/state?sessionId=__probe__', { credentials: 'include' });
+    const resp = await fetch(`${SRV.agent}/state?sessionId=__probe__`, { credentials: 'include' });
     // 404=旧服务端无此端点；401=未登录（登录后可用）；403=PLITE_AGENT_RUNNER=0
     runnerAvailable = resp.ok || resp.status === 401;
   } catch {
@@ -100,7 +101,7 @@ export async function startRunnerRun(payload: {
   }
   let resp: Response;
   try {
-    resp = await fetch('/api/agent/start', {
+    resp = await fetch(`${SRV.agent}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -130,7 +131,7 @@ function isClosed(h: RunHandle): boolean {
 /** 建立 SSE 订阅；断线自动重连（EventSource 原生）+ Last-Event-Id 续传 */
 function subscribe(handle: RunHandle): void {
   if (handle.es) { try { handle.es.close(); } catch { /* 已断 */ } }
-  const url = `/api/agent/events?runId=${encodeURIComponent(handle.runId)}&lastEventId=${handle.lastSeq}`;
+  const url = `${SRV.agent}/events?runId=${encodeURIComponent(handle.runId)}&lastEventId=${handle.lastSeq}`;
   const es = new EventSource(url);
   handle.es = es;
   es.addEventListener('agent', (ev) => {
@@ -166,7 +167,7 @@ export async function resolveRunnerApproval(sessionId: string, callId: string, d
   const handle = active.get(sessionId);
   if (!handle) return false;
   try {
-    const resp = await fetch('/api/agent/approve', {
+    const resp = await fetch(`${SRV.agent}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -181,7 +182,7 @@ export async function answerRunnerInteractive(sessionId: string, callId: string,
   const handle = active.get(sessionId);
   if (!handle) return false;
   try {
-    const resp = await fetch('/api/agent/interactive', {
+    const resp = await fetch(`${SRV.agent}/interactive`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -194,7 +195,7 @@ export async function answerRunnerInteractive(sessionId: string, callId: string,
 /** 截断「继续」：服务端接续上一 run 的 shadow（返回 runId 供 SSE 订阅；事件流与原 run 同构） */
 export async function resumeRunnerRun(sessionId: string, messageId: string): Promise<string | null> {
   try {
-    const resp = await fetch('/api/agent/resume', {
+    const resp = await fetch(`${SRV.agent}/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -215,7 +216,7 @@ export async function interruptRunnerRun(sessionId: string): Promise<boolean> {
   const handle = active.get(sessionId);
   if (!handle) return false;
   try {
-    const resp = await fetch('/api/agent/interrupt', {
+    const resp = await fetch(`${SRV.agent}/interrupt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -236,7 +237,7 @@ export async function restoreRunnerRuns(sessionIds: string[]): Promise<void> {
   for (const sessionId of sessionIds) {
     if (active.has(sessionId)) continue;
     try {
-      const resp = await fetch(`/api/agent/state?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'include' });
+      const resp = await fetch(`${SRV.agent}/state?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'include' });
       if (!resp.ok) continue;
       const data = (await resp.json().catch(() => null)) as { running?: boolean; runId?: string; assistantId?: string } | null;
       if (!data?.running || !data.runId) continue;

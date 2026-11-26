@@ -13,7 +13,7 @@
  *   不可达判定保守（连续 2 次失败才切 standalone，防 Wi-Fi 抖动误切）。
  */
 import { useEffect, useState } from 'react';
-import { CHANNEL_REAL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
+import { CHANNEL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 
 type ModeStatus = 'connected' | 'standalone' | 'unknown';
 
@@ -109,7 +109,8 @@ export function ModeBanner() {
   return null;
 }
 
-/** 独立档直连配置操作（real-engine 暴露的受限桥；面板按钮触发） */
+/** 独立档直连配置操作（引擎插件登记在 CHANNEL_ENGINE_DIRECT[engineId]；面板按钮触发）。
+ *  引擎无关：取第一个登记了直连档的引擎桥（独立档只可能有一个引擎提供直连配置）。 */
 interface DirectBridge {
   save: () => Promise<{ ok: boolean; message: string }>;
   clear: () => void;
@@ -117,8 +118,12 @@ interface DirectBridge {
 }
 function directBridge(): DirectBridge | null {
   if (typeof window === 'undefined') return null;
-  const b = (window as unknown as Record<string, unknown>)[CHANNEL_REAL_ENGINE_DIRECT];
-  return typeof b === 'object' && b !== null ? (b as DirectBridge) : null;
+  const all = (window as unknown as Record<string, unknown>)[CHANNEL_ENGINE_DIRECT];
+  if (!all || typeof all !== 'object') return null;
+  for (const b of Object.values(all as Record<string, unknown>)) {
+    if (b && typeof b === 'object' && typeof (b as DirectBridge).save === 'function') return b as DirectBridge;
+  }
+  return null;
 }
 
 /** panel 槽主面板：当前模式 + 说明 + 独立档直连配置管理 */

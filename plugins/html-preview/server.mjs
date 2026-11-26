@@ -59,7 +59,11 @@ function scanHtml(html) {
   }
 }
 
+import { registerRenderTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 render 工具；禁用即消失。
+  if (options.registry) registerRenderTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');

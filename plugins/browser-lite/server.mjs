@@ -117,7 +117,11 @@ export function pruneShots(shotsDir) {
   } catch { /* 目录不存在等：忽略 */ }
 }
 
+import { registerBrowserTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 browser 工具；禁用即消失。
+  if (options.registry) registerBrowserTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? (() => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');

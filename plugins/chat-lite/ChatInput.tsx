@@ -29,6 +29,7 @@ import { loadSessionDefaults, saveSessionDefaults, clearSessionDefaults } from '
 import { getEngines, loadEngines } from './engineCatalog';
 import { ContextMeter } from './ContextMeter';
 import './chat-input.css';
+import { SRV } from './serverApi';
 
 const MAX_CHARS = 200_000;
 // 增高的 min/max 不再在 JS 里硬编码：直接读 textarea 的计算样式（CSS 里用 dvh 做视口自适应，
@@ -83,7 +84,7 @@ export function ChatInput() {
   const [trustMode, setTrustMode] = useState<boolean | null>(null);
   const refreshTrust = useCallback(async () => {
     try {
-      const r = await fetch('/api/tool/config', { credentials: 'include' });
+      const r = await fetch(`${SRV.tool}/config`, { credentials: 'include' });
       if (!r.ok) { setTrustMode(null); return; }
       const j = (await r.json()) as { mode?: string };
       setTrustMode(j.mode === 'yolo');
@@ -91,7 +92,7 @@ export function ChatInput() {
   }, []);
   const toggleTrust = useCallback(async () => {
     try {
-      const r = await fetch('/api/tool/config', {
+      const r = await fetch(`${SRV.tool}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -256,7 +257,7 @@ export function ChatInput() {
     let alive = true;
     void (async () => {
       try {
-        const r = await fetch('/api/fs/roots', { credentials: 'include' });
+        const r = await fetch(`${SRV.fs}/roots`, { credentials: 'include' });
         const j = (await r.json()) as { roots?: { id: string; label: string }[] };
         const match = j.roots?.find((x) => x.id === sessionWorkspaceId);
         if (!alive) return;

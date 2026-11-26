@@ -16,10 +16,11 @@
  *   POST /api/share/revoke  { token }                    → 吊销
  *   POST /api/share/refresh { token, ttlMs? }            → 续期
  *
- * 数据源：chat-store 的持久化格式是跨插件公开约定（<dataDir>/chat-store/<id>.json =
- * { version, updatedAt, session }）。本插件直接读该文件取"含工具卡的最全快照"：
- * 工具卡 stdout/stderr 为 16KB/卡截断版、args 为 command 摘要——这是当前持久化形态
- * 的上限，超出部分需先动 chat-lite/agent-loop（明确不在本插件边界内）。
+ * 数据源：chat-store 的**领域接口**（server/adapter-registry 的 service 表，
+ * id='chat-store' 的 readRecord）——本插件不认识 <dataDir>/chat-store 的文件布局。
+ * 取到的是"含工具卡的最全快照"：工具卡 stdout/stderr 为 16KB/卡截断版、args 为
+ * command 摘要——这是当前持久化形态的上限，超出部分需先动 chat-lite/agent-loop
+ * （明确不在本插件边界内）。
  *
  * 安全模型（对齐全仓 server 半边惯例）：
  * - 管理面未登录 401；PLITE_SHARE=0 一键禁用；
@@ -93,11 +94,14 @@ const OUT_CAP = 16 * 1024;
 /** tokens.json 体积护栏（防失控膨胀） */
 const TOKENS_FILE_CAP = 4 * 1024 * 1024;
 
+import { registerTranscriptTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 transcript 工具；禁用即消失。
+  if (options.registry) registerTranscriptTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
-  const chatStoreDir = resolve(dataDir, 'chat-store');
   const shareDir = resolve(dataDir, 'transcript-share');
   const tokensFile = join(shareDir, 'tokens.json');
   // 三个采集面：模型 API 轨迹 / 编排事件时间线（live-event 镜像）/ 逐跳轮次（ai-events TurnRecord）
@@ -139,14 +143,16 @@ export function createServerPart(options = {}) {
     return map;
   }
 
-  // ---------------- 会话快照（读 chat-store 持久化文件） ----------------
+  // ---------------- 会话快照（经 service 表读 chat-store，不碰它的文件布局） ----------------
 
   function readChatRecord(sessionId) {
     if (!ID_RE.test(sessionId)) return null;
-    const file = join(chatStoreDir, `${sessionId}.json`);
-    if (!existsSync(file)) return null;
+    // chat-store 是本插件的上游数据源：经 server/adapter-registry 的 service 表取
+    // 它的领域接口（readRecord），不自己拼 <dataDir>/chat-store/<id>.json 路径。
+    // 换存储实现时这里零改动；服务缺失（插件被禁用）则分享降级为 404。
+    const chatStore = options.registry?.getService?.('chat-store') ?? null;
     try {
-      return JSON.parse(readFileSync(file, 'utf8'));
+      return chatStore?.readRecord?.(sessionId) ?? null;
     } catch {
       return null;
     }

@@ -10,6 +10,7 @@
  */
 import { useSessionStore, pullNow } from './store';
 import { isToolCard, type StoreMessage, type AssistantBlockMessage, type ToolCardData } from './store';
+import { SRV } from './serverApi';
 
 /** SSE 静默超时：超此无任何 live 事件/ping 即放弃 overlay（对齐服务端 GC 余量） */
 const OVERLAY_WATCHDOG_MS = 60_000;
@@ -136,7 +137,7 @@ export async function openLiveIfNeeded(sessionId: string): Promise<boolean> {
   // 先拉最新落盘全文（overlay 之前的前置消息），再订阅事件流
   await pullNow();
   if (active.has(sessionId)) return true;
-  const es = new EventSource(`/api/chat/sessions/${encodeURIComponent(sessionId)}/events`);
+  const es = new EventSource(`${SRV.chat}/sessions/${encodeURIComponent(sessionId)}/events`);
   const entry = { es, wd: setTimeout(() => { void closeOverlay(sessionId, true); }, OVERLAY_WATCHDOG_MS), msgId: '' };
   active.set(sessionId, entry);
   es.addEventListener('live', (ev) => {

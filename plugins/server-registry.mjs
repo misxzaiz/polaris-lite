@@ -18,6 +18,8 @@
  * 而不是静默 404。理由同前端——「插件说装了但端点不存在」是最难排查的一类故障。
  */
 import { isPluginEnabled } from './plugin-list.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 
 const RAW_SERVER_PLUGINS = [
   { id: 'file-browser', entry: './file-browser/server.mjs' },
@@ -50,12 +52,51 @@ const RAW_SERVER_PLUGINS = [
   { id: 'voice-radio', entry: './voice-radio/server.mjs' },
   // translate：百度翻译代理（签名 + 错误码中文化 + LRU 缓存；SecretKey 只在服务端）
   { id: 'translate', entry: './translate/server.mjs' },
+  // pocket-ledger / starter-suggestions：无自有 HTTP 路由，仅注册各自的 AI 工具声明
+  // （ledger / suggestions）。工具实现留在插件内，runner 不认识具体工具。
+  { id: 'pocket-ledger', entry: './pocket-ledger/server.mjs' },
+  { id: 'starter-suggestions', entry: './starter-suggestions/server.mjs' },
 ];
 
 /** 与前端清单共享 enabled：前端关掉的插件，server 半边也不挂载。
  *  以前 codebuddy-engine 前端停用却无条件挂载 /api/codebuddy/stream，
- *   chat-lite 才能绕过插件生命周期直连它——这条暗通道已随引擎注册化移除。 */
+ *   chat-lite 才能绕过插件生命周期直连它——这条暗通道已随引擎注册化移除。
+ *
+ *  注意：这里是**构建期默认值**。运行时真实开关由 server/host.mjs 读取
+ *  registry.json（plugin-manager 写盘 + build 保留）后经 loadServerParts({ isEnabled })
+ *  覆盖——否则「面板禁用 → 服务端端点仍在跑」会一直存在。 */
 export const SERVER_PLUGINS = RAW_SERVER_PLUGINS.map((p) => ({ ...p, enabled: isPluginEnabled(p.id) }));
+
+/** 纯函数：把 registry.json 的运行时 enabled 合并到构建期默认值上（供测试与宿主复用）。
+ *  registry 里没有的条目（纯服务端插件如 agent-runner）保留默认值。 */
+export function mergeRuntimeEnabled(basePlugins, registryPlugins) {
+  const runtime = new Map();
+  for (const p of registryPlugins ?? []) {
+    if (p && typeof p.id === 'string') runtime.set(p.id, p.enabled !== false);
+  }
+  return basePlugins.map((p) => ({
+    ...p,
+    enabled: runtime.has(p.id) ? runtime.get(p.id) : p.enabled,
+  }));
+}
+
+
+/** 读取运行时插件清单（plugin-manager 写盘、build 保留用户开关）。
+ *
+ *  放在本文件而不是 server/host.mjs：这是「清单」的职责（前端清单、server 清单、
+ *  运行时开关都在 plugins/ 下），宿主只做装配。读不到时返回 null → 用构建期默认值。
+ */
+export function readRuntimePlugins(repoRoot) {
+  for (const rel of ['dist/plugins/registry.json', 'public/plugins/registry.json']) {
+    const file = resolvePath(repoRoot, rel);
+    if (!existsSync(file)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      if (parsed && Array.isArray(parsed.plugins)) return parsed.plugins;
+    } catch { /* 坏文件回退下一份 */ }
+  }
+  return null;
+}
 
 /**
  * 加载清单里的所有 server 模块，返回工厂清单 [{ id, createServerPart }]。
@@ -64,9 +105,9 @@ export const SERVER_PLUGINS = RAW_SERVER_PLUGINS.map((p) => ({ ...p, enabled: is
  *
  * importModule / base 可注入，便于测试用桩模块验证 fail-fast 行为。
  */
-export async function loadServerParts({ importModule = (p) => import(p), base = import.meta.url } = {}) {
+export async function loadServerParts({ importModule = (p) => import(p), base = import.meta.url, plugins = SERVER_PLUGINS } = {}) {
   const loaded = [];
-  for (const { id, entry, enabled } of SERVER_PLUGINS) {
+  for (const { id, entry, enabled } of plugins) {
     if (enabled === false) continue;
     const spec = new URL(entry, base).href;
     const mod = await importModule(spec);

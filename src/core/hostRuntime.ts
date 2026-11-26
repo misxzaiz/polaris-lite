@@ -14,6 +14,8 @@ import { SlotRegistry } from './slotRegistry';
 import type { CapResponse, LiteManifest, LitePlugin, SlotHostApi, WorkspaceApi } from './types';
 import { resolvePolicy, type EffectivePolicy } from './policy';
 import { setDrawer } from './shellState';
+import { t as translate } from './i18n';
+import { THEME_COLORS } from './theme';
 import { CAP_UI_LAYOUT, viewRegistry } from './workspace/contract';
 
 interface RegisteredPlugin {
@@ -51,7 +53,7 @@ export class HostRuntime {
   private static applyTheme(mode: 'light' | 'dark'): void {
     document.documentElement.dataset.theme = mode;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', mode === 'dark' ? '#0b0b0d' : '#ffffff');
+    if (meta) meta.setAttribute('content', THEME_COLORS[mode]);
   }
 
   private static readonly THEME_KEY = 'plite.theme';
@@ -187,7 +189,7 @@ export class HostRuntime {
           runtime.notifyTheme(mode);
         },
       },
-      t: (key) => key,
+      t: (key) => translate(key),
       layout: {
         get isMobile() {
           return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;

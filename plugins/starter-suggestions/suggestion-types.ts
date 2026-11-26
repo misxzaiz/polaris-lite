@@ -1,4 +1,4 @@
-/** 开场建议共享类型与分类标签（chat-lite 与 starter-suggestions 两处消费，放 shared 避免插件互引）。 */
+/** 开场建议的类型与内置种子池（**归属 starter-suggestions 插件**）。 */
 
 export type CategoryId = 'explore' | 'tools' | 'code' | 'write' | 'think' | 'play';
 

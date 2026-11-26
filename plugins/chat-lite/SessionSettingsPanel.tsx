@@ -17,6 +17,7 @@ import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE, type 
 import { type PendingSend } from './store';
 import { ShareDrawerRows } from './ShareDrawer';
 import { ChevronRightIcon } from './icons';
+import { SRV } from './serverApi';
 
 // ---- 抽屉状态桥（与 workspace-layout/stateBridge 同纪律，chat-lite 就地轻量实现）----
 // 通道名经 @sdk 登记；防环纪律：监听方只同步本地订阅者，**不得**再派发。
@@ -174,7 +175,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     setProviders(null);
     setProvidersErr(false);
     try {
-      const r = await fetch('/api/providers/list', { credentials: 'include', cache: 'no-store' });
+      const r = await fetch(`${SRV.providers}/list`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { configs?: ProviderEntry[]; activeId?: string | null };
       setProviders((j.configs ?? []).filter((c) => c.enabled && c.hasKey));
@@ -209,7 +210,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
       try {
         const raw = localStorage.getItem('plite.slot.active.panel');
         void raw; // 激活键与本行无关；读 inbox 走 kv HTTP（与面板同源）
-        const r = await fetch('/api/kv/get?namespace=notification-center&key=inbox', { credentials: 'include' });
+        const r = await fetch(`${SRV.kv}/get?namespace=notification-center&key=inbox`, { credentials: 'include' });
         if (!r.ok) return;
         const j = (await r.json()) as { value?: { read?: boolean }[] | null };
         const list = Array.isArray(j.value) ? j.value : [];

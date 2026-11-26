@@ -12,7 +12,7 @@
  *
  * 服务端半边在 server.mjs（/api/preview/*），双入口由 server-registry 登记。
  */
-import { CHANNEL_ARTIFACT_RENDERERS, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS, CHANNEL_ARTIFACT_TOOL_NAMES, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 import { PreviewCard } from './PreviewCard';
 import { HtmlPreviewPanel } from './Panel';
 import './panel.css';
@@ -114,6 +114,10 @@ export const htmlPreviewPlugin: LitePlugin = {
     const registry = (w[CHANNEL_ARTIFACT_RENDERERS] ?? {}) as Record<string, unknown>;
     registry['html-preview'] = PreviewCard;
     w[CHANNEL_ARTIFACT_RENDERERS] = registry;
+    // 产物型工具名登记：render 产生的 artifact 让过程块组保持平铺（chat-lite 不写死工具名）
+    const names = (w[CHANNEL_ARTIFACT_TOOL_NAMES] instanceof Set ? w[CHANNEL_ARTIFACT_TOOL_NAMES] : new Set()) as Set<string>;
+    names.add('render');
+    w[CHANNEL_ARTIFACT_TOOL_NAMES] = names;
   },
 };
 

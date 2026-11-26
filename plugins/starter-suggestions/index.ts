@@ -14,8 +14,8 @@
  * - 渲染纯文本，无 HTML 注入面。
  */
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
-import { SUGGESTIONS } from '../shared/suggestion-types';
-import type { CategoryId, StarterSuggestion, SuggestionPool } from '../shared/suggestion-types';
+import { SUGGESTIONS } from './suggestion-types';
+import type { CategoryId, StarterSuggestion, SuggestionPool } from './suggestion-types';
 import { StarterSuggestionsPanel } from './Panel';
 import './panel.css';
 

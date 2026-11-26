@@ -20,6 +20,7 @@
  */
 
 import type { StoreMessage, ChatSessionShape } from './store';
+import { SRV } from './serverApi';
 
 /** 与服务端对齐的会话记录（不含 pending 等本机交互态） */
 export interface SessionSnapshot {
@@ -62,7 +63,7 @@ export interface ConflictInfo {
   serverUpdatedAt: number;
 }
 
-const BASE = '/api/chat/sessions';
+const BASE = `${SRV.chat}/sessions`;
 const POLL_MS = 30_000;
 
 // ---------------------------------------------------------------- HTTP

@@ -29,18 +29,16 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, ren
 import { once } from 'node:events';
 import { resolve, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { createRequire } from 'node:module';
 // 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
 // 零 DOM/零副作用：UsageAccumulator/estimateTokens/compactShadow 均可服务端复用。
 import { UsageAccumulator, estimateTokens, compactShadow } from '../shared/context-compact.ts';
 import { buildUsagePayload } from '../shared/usage.ts';
 import { summarizeToolCall } from '../shared/tool-summary.ts';
-// 工具适配器：工具在服务端执行域的「插件化声明」（descriptor + invoke），runner 按名查表派发。
-import { registerBuiltinTools } from './tool-adapters.mjs';
-// pocket-ledger 计算内核（纯 CJS vendor；与面板/MCP server 共用同一权威实现）。
-// 由本文件（server 半边）加载后注入适配器，避免 tool-adapters.mjs 依赖 node:*。
-const require = createRequire(import.meta.url);
-const ledgerCore = require('../pocket-ledger/ledger-core.cjs');
+// 编排协议工具：仅 `interactive`（向用户提问的编排原语，依赖 run 的挂起回填表）。
+// 所有**领域工具**（bash/files/files_write/render/browser/read_skill/ledger/translate/
+// suggestions/transcript/phone/market_*/mcp_*）由各自插件的 server 半边在
+// createServerPart 里经 registry.registerTool 自注册——runner 不认识任何具体工具。
+import { registerOrchestrationTools } from './orchestration-tools.mjs';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const RUNS_DIR = 'agent-runs';
@@ -124,87 +122,32 @@ export function createServerPart(options = {}) {
   function runStatePath(runId) { return join(runsDir, `${runId}.state.json`); }
 
   // ------------------------------------------------------------------
-  // 会话档服务端直写（消除「发消息后关页面 → 对话消失」的易失窗口）
+  // 会话档服务端合并（消除「发消息后关页面 → 对话消失」的易失窗口）
   // ------------------------------------------------------------------
   // 背景：会话消息的持久化此前完全依赖客户端（chat-lite 消费事件后防抖 PUT
   // chat-store）。发起端在防抖窗口内被杀（关 App/浏览器/切后台被冻结）时，
   // 用户消息与 AI 回复都不会进入服务端会话档——任务虽在服务端跑完，重开页面
   // 却看不到这条对话。
   //
-  // 做法：编排器在服务端把「用户消息 + 本轮 AI 产出」直接写进 chat-store 的
-  // 会话文件（<dataDir>/chat-store/<sessionId>.json，与 chat-store 插件的
-  // readRecord/writeRecord 同构：{version,updatedAt,session}）。跨插件直写
-  // 文件先例：本文件已直连 kv-store sqlite（kvDb/readKvSync）。
-  //
-  // 合并语义（幂等键 = 消息 id）：
-  // - 写前必重读文件（客户端/其他端可能并发 PUT 过）——服务端档是权威，
-  //   本地有的消息不重复、不覆盖，只补缺失的本 run 消息；
-  // - version 取 max(现有+1, 1) 递增，updatedAt 刷新——与 PUT 通道的版本
-  //   语义一致，客户端 409 对账后 pull 即拿到含本轮消息的完整档；
-  // - 失败只审计不阻断编排（会话档写失败 ≠ 任务失败）。
-  const chatStoreDir = resolve(dataDir, 'chat-store');
-
-  function readChatRecord(sessionId) {
-    const file = join(chatStoreDir, `${sessionId}.json`);
-    if (!existsSync(file)) return null;
-    try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
-  }
-
-  function writeChatRecord(sessionId, record) {
-    mkdirSync(chatStoreDir, { recursive: true });
-    const file = join(chatStoreDir, `${sessionId}.json`);
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(record), 'utf8');
-    renameSync(tmp, file);
-  }
+  // 做法：编排器在服务端把「用户消息 + 本轮 AI 产出」合并进服务端会话档。
+  // **不直写文件**：经 server/adapter-registry 的 service 表取 chat-store 注册的
+  // 访问器（mergeMessages 内部保证版本递增、索引广播、审计）——runner 不认识
+  // <dataDir>/chat-store 的文件版式，换存储实现时这里零改动。
+  const chatStoreService = () => options.registry?.getService?.('chat-store') ?? null;
 
   /**
    * 把消息合并进服务端会话档（幂等：按消息 id 去重；缺会话则建壳）。
-   * messages: 追加的完整消息对象（ChatMessage / AssistantBlockMessage 形状）。
-   * mergeBlocks: true 时对已存在的 assistant 消息做块级合并（同一 assistantId
-   * 跨多轮增量落档——后到的 blocks 追加到既有消息，content 取最长正文）。
-   * 返回是否实际写入（无可新增内容时 false，不空转版本号）。
+   * 语义由 chat-store 的 mergeMessages 定义（本文件不再复制第二份）。
+   * 返回是否实际写入（无新增内容时 false，不空转版本号）。
    */
-  function mergeChatMessages(sessionId, title, messages, { createdAt, mergeBlocks = false } = {}) {
-    if (!sessionId || !ID_RE.test(sessionId) || !messages?.length) return false;
+  function mergeChatMessages(sessionId, title, messages, opts = {}) {
+    const svc = chatStoreService();
+    if (!svc?.mergeMessages) {
+      audit({ op: 'chat-sync-skip', sessionId, reason: 'chat-store service unavailable' });
+      return false;
+    }
     try {
-      const rec = readChatRecord(sessionId);
-      const session = rec?.session ?? {
-        id: sessionId,
-        title: typeof title === 'string' && title ? title : '新会话',
-        messages: [],
-        createdAt: Number(createdAt) || Date.now(),
-      };
-      if (!Array.isArray(session.messages)) session.messages = [];
-      const known = new Map(session.messages.map((m) => [m?.id, m]).filter(([id]) => !!id));
-      const fresh = [];
-      let changed = false;
-      for (const m of messages) {
-        if (!m?.id) continue;
-        const exist = known.get(m.id);
-        if (!exist) { fresh.push(m); known.set(m.id, m); continue; }
-        if (!mergeBlocks) continue;
-        // 块级合并：同一 assistant 消息的后续轮次产出追加（工具卡/正文/思考保序），
-        // content 镜像取累计最长文本；endedAt 以最后一次为准。
-        const before = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
-        exist.blocks = [...(exist.blocks ?? []), ...(m.blocks ?? [])];
-        if ((m.content ?? '').length > (exist.content ?? '').length) exist.content = m.content;
-        if (m.endedAt) exist.endedAt = m.endedAt;
-        const after = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
-        if (after > before) changed = true;
-      }
-      if (fresh.length === 0 && !changed) return false;
-      session.messages.push(...fresh);
-      // 自动命名（对齐前端 ensureAutoTitle 口径）：仍是「新会话」才用首条用户消息前 40 字
-      if (session.title === '新会话') {
-        const firstUser = [...messages].reverse().find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
-        const t = firstUser ? firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
-        if (t) session.title = t;
-      }
-      const version = (Number(rec?.version) || 0) + 1;
-      writeChatRecord(sessionId, { version, updatedAt: Date.now(), session });
-      audit({ op: 'chat-sync', sessionId, version, added: fresh.length, merged: changed ? 1 : 0 });
-      return true;
+      return svc.mergeMessages(sessionId, title, messages, opts) === true;
     } catch (e) {
       audit({ op: 'chat-sync-fail', sessionId, error: String(e?.message ?? e).slice(0, 120) });
       return false;
@@ -388,15 +331,10 @@ export function createServerPart(options = {}) {
   // ------------------------------------------------------------------
   const registry = options.registry;
 
-  // 注册内建工具适配器（descriptor + invoke 由适配器声明；runner 只查表派发）。
-  // 所有 helper 均为函数声明（提升），此处调用安全；重复注册由 registry fail-fast。
+  // 注册编排协议工具（仅 interactive：它依赖 run.interactives 挂起表，属编排层原语）。
+  // 领域工具由各插件 server 半边自注册；重复注册由 registry fail-fast。
   if (registry) {
-    registerBuiltinTools(registry, {
-      callToolEndpoint, fsGet, emitEvent, askInteractive,
-      readKvSync, writeKvSync, kvKeys,
-      selfPort: Number(process.env.PORT ?? 5000),
-      ledgerCore,
-    });
+    registerOrchestrationTools(registry, { askInteractive });
   }
 
   function engineTurn(run, args) {
@@ -456,41 +394,20 @@ export function createServerPart(options = {}) {
   }
 
   // ------------------------------------------------------------------
-  // kv 读写直连 kv-store 的 sqlite（表 items，id=`${namespace}.${key}`，与插件同构）。
-  // 单例连接（P0：去掉每次 read/write 的 new Database + PRAGMA + close）。
+  // kv 访问：经 service 表取 kv-store 注册的实现（不自己开 sqlite、不复制表结构）。
   // ledger 适配器复用这些 helper；ledger-core.cjs 仍是计算单一权威。
   // ------------------------------------------------------------------
-  let _kvDb = null;
-  function kvDb() {
-    if (_kvDb) return _kvDb;
-    const dbFile = resolve(dataDir, 'stores', 'kv-store.db');
-    mkdirSync(resolve(dataDir, 'stores'), { recursive: true });
-    const Database = require('node:sqlite').DatabaseSync;
-    _kvDb = new Database(dbFile);
-    _kvDb.exec('PRAGMA journal_mode = WAL;');
-    _kvDb.exec('CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)');
-    return _kvDb;
-  }
+  const kvService = () => options.registry?.getService?.('kv-store') ?? null;
+
   function readKvSync(ns, key) {
-    try {
-      const row = kvDb().prepare('SELECT data FROM items WHERE id = ?').get(`${ns}.${key}`);
-      return row ? JSON.parse(row.data) : null;
-    } catch { return null; }
+    try { return kvService()?.get(ns, key) ?? null; } catch { return null; }
   }
   function writeKvSync(ns, key, value) {
-    try {
-      kvDb().prepare('INSERT INTO items (id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
-        .run(`${ns}.${key}`, JSON.stringify(value ?? null), Date.now());
-    } catch { /* 写失败按业务错误返回 */ }
+    try { kvService()?.set(ns, key, value); } catch { /* 写失败按业务错误返回 */ }
   }
   /** 返回匹配前缀的 key（去掉 `ns.` 前缀），供 ledger 适配器枚举账目。 */
   function kvKeys(ns, prefix) {
-    const keys = [];
-    try {
-      const rows = kvDb().prepare('SELECT id FROM items WHERE id LIKE ?').all(`${ns}.${prefix}%`);
-      for (const r of rows) keys.push(String(r.id).slice(`${ns}.`.length));
-    } catch { /* 忽略 */ }
-    return keys.sort();
+    try { return kvService()?.keysWithPrefix(ns, prefix) ?? []; } catch { return []; }
   }
 
   /**
@@ -506,6 +423,15 @@ export function createServerPart(options = {}) {
       return await adapter.invoke({
         name, args, run, call, signal,
         capText,
+        // 平台能力注入：领域工具在各自插件里，但 loopback 调用/事件/交互/kv 由 runner
+        // 在调用期提供（工具插件不认识宿主内部实现）。与前端 SlotHostApi 同一原则。
+        host: {
+          callEndpoint: callToolEndpoint,
+          get: fsGet,
+          emit: emitEvent,
+          interactive: askInteractive,
+          kv: { get: readKvSync, set: writeKvSync, keys: kvKeys },
+        },
       });
     } catch (err) {
       if (signal?.aborted) throw new Error('INTERRUPTED');

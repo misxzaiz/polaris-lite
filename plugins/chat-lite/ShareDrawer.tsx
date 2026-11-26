@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSessionStore } from './store';
 import { copyText } from '../shared/copyText';
+import { SRV } from './serverApi';
 
 const TTL_OPTIONS = [
   { label: '1小时', ms: 60 * 60 * 1000 },
@@ -64,7 +65,7 @@ export function ShareDrawerRows() {
   const refreshShares = useCallback(async (): Promise<void> => {
     if (!activeId) return;
     try {
-      const res = await fetch('/api/share/list', { credentials: 'include' });
+      const res = await fetch(`${SRV.share}/list`, { credentials: 'include' });
       if (!res.ok) return;
       const j = await res.json();
       setShares((j?.items ?? []).filter((s: ShareItem) => s.sessionId === activeId).slice(0, 5));
@@ -82,7 +83,7 @@ export function ShareDrawerRows() {
     setBusy(true);
     setNote('');
     try {
-      const res = await fetch('/api/share/create', {
+      const res = await fetch(`${SRV.share}/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -112,7 +113,7 @@ export function ShareDrawerRows() {
 
   const revoke = useCallback(async (token: string): Promise<void> => {
     try {
-      await fetch('/api/share/revoke', {
+      await fetch(`${SRV.share}/revoke`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -128,7 +129,7 @@ export function ShareDrawerRows() {
     setBusy(true);
     setNote('');
     try {
-      const res = await fetch(`/api/share/export?sessionId=${encodeURIComponent(activeId)}&format=${format}`, { credentials: 'include' });
+      const res = await fetch(`${SRV.share}/export?sessionId=${encodeURIComponent(activeId)}&format=${format}`, { credentials: 'include' });
       const base = exportBaseName(session?.title, session?.messages?.[0]?.content);
       if (format === 'ai') {
         const j = await res.json().catch(() => null);
@@ -187,13 +188,13 @@ export function ShareDrawerRows() {
           <button
             className="chat-share-chip"
             disabled={!activeId}
-            onClick={() => { window.open(`/api/share/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=human-html`, '_blank'); }}
+            onClick={() => { window.open(`${SRV.share}/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=human-html`, '_blank'); }}
             title="新开标签页预览个人阅读版排版（渲染后的效果，页面内可下载 .md）"
           >个人版效果</button>
           <button
             className="chat-share-chip"
             disabled={!activeId}
-            onClick={() => { window.open(`/api/share/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=html`, '_blank'); }}
+            onClick={() => { window.open(`${SRV.share}/export?sessionId=${encodeURIComponent(activeId ?? '')}&format=html`, '_blank'); }}
             title="新开标签页预览分享页完整效果（含 API 轨迹与编排事件；会话门禁快照，不创建链接）"
           >网页完整版</button>
         </span>

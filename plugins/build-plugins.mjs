@@ -55,6 +55,29 @@ const hostPublic = resolve(hostRoot, 'public/plugins');
 const grantsFile = resolve(hostRoot, 'public/grants.json');
 const ESM_SHIM = 'esm-shim.mjs';
 
+/**
+ * 保留上一次产物里的运行时 enabled（plugin-manager 面板的启停开关）。
+ *
+ * 问题：以前每次 build 都用 plugin-list 的 enabled 重写 registry.json，用户在面板里
+ * 禁用的插件会被构建悄悄恢复——「面板说禁用、刷新又出现」。这里读取现有 registry，
+ * 除非 plugin-list 显式写 enabled（硬禁/硬开），否则沿用户上次的选择。
+ */
+function readExistingEnabled() {
+  const map = new Map();
+  for (const rel of ['public/plugins/registry.json', 'dist/plugins/registry.json']) {
+    const file = resolve(hostRoot, rel);
+    if (!existsSync(file)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      for (const p of parsed.plugins ?? []) {
+        if (p && typeof p.id === 'string') map.set(p.id, p.enabled !== false);
+      }
+    } catch { /* 坏文件忽略，退回 plugin-list */ }
+  }
+  return map;
+}
+const EXISTING_ENABLED = readExistingEnabled();
+
 const argv = new Set(process.argv.slice(2));
 const SKIP_BUILD = argv.has('--skip-build');
 const CHECK_ONLY = argv.has('--check');
@@ -568,7 +591,8 @@ function preflight() {
     '__PLITE_FILE_BROWSER_COMPOSE__',
     '__PLITE_INTERACTIVE_RESPOND__',
     '__PLITE_ARTIFACT_RENDERERS__',
-    '__PLITE_REAL_ENGINE_DIRECT__',
+    '__PLITE_ARTIFACT_TOOL_NAMES__',
+    '__PLITE_ENGINE_DIRECT__',
     '__PLITE_LAYOUT_WIRE__',
     '__PLITE_DRAWER_STATE__',
     'plite-drawer-changed',
@@ -599,6 +623,24 @@ function preflight() {
     fail(`暗通道违规：以下文件绕过 @sdk 契约直接硬编码跨插件通道名（先在 plugins/sdk/index.ts 登记，再 import 使用）：\n      ${darkHits.join('\n      ')}`);
   }
   ok(`暗通道门禁通过：插件源码无裸跨插件字面量（${DARK_CHANNELS.length} 个受保护通道）`);
+
+  // 跨插件 HTTP 门禁（chat-lite 专项）：端点地址只能登记在 plugins/chat-lite/serverApi.ts。
+  // 背景：这些同源 HTTP 调用没有 per-plugin 授权（chat-lite 明确不走 cap），散落各处时
+  // 改一方端点会静默断另一方。要求新增跨插件依赖先登记（评审可见），而不是裸拼 /api/。
+  {
+    const chatDir = resolve(pluginsRoot, 'chat-lite');
+    const hits = [];
+    for (const rel of readdirSync(chatDir, { recursive: true })) {
+      const f = String(rel).replace(/\\/g, '/');
+      if (!/\.(ts|tsx)$/.test(f) || f === 'serverApi.ts') continue;
+      const src = stripComments(readFileSync(resolve(chatDir, f), 'utf8'));
+      if (/['"`]\/api\//.test(src)) hits.push(`chat-lite/${f}`);
+    }
+    if (hits.length) {
+      fail(`跨插件端点未登记：${hits.join('、')}\n      先写进 plugins/chat-lite/serverApi.ts 的 SRV 再引用（不要裸拼 /api/）`);
+    }
+    ok('跨插件 HTTP 门禁通过：chat-lite 的端点引用集中在 serverApi.ts');
+  }
 
   // 死能力探测（host-slimming-report §3 闸 3）：provides 在 grants 无任何消费者
   // 授权且宿主无引用 → 警告。面板/管理类能力由用户经 UI 调用,不在此列——
@@ -691,7 +733,7 @@ function publishOne(p) {
   // 产物内容 hash 作为缓存破坏版本号：bundle 变了 URL 就变，浏览器不再吃旧缓存
   // （dev 曾因磁盘缓存启发式命中旧 bundle，表现为「改了没生效」的假象；prod 静态服务同受益）
   const bundleVersion = createHash('sha256').update(readFileSync(resolve(distDir, 'plugin.js'))).digest('hex').slice(0, 8);
-  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js?v=${bundleVersion}`, enabled: p.enabled ?? true };
+  const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js?v=${bundleVersion}`, enabled: p.enabled ?? EXISTING_ENABLED.get(p.id) ?? true };
   if (hasStyle) manifest.style = `/plugins/${p.id}/style.css?v=${bundleVersion}`;
   const manifestFile = resolve(dest, 'plugin.json');
   writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);

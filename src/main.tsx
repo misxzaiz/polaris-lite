@@ -13,6 +13,7 @@ import { installMetaCapability } from '@/core/metaCapability';
 import { installAiEngineInfrastructure } from '@/core/aiEngine';
 import { viewRegistry } from '@/core/workspace/viewRegistry';
 import { pushNotice } from '@/core/shellState';
+import { t } from '@/core/i18n';
 import { getRuntimeComponent, loadExternalPlugins } from '@/core/externalPlugins';
 import '@/plite-tokens.css';
 import '@/styles.css';
@@ -60,12 +61,12 @@ async function bootstrap(): Promise<void> {
   );
   if (failed.length) {
     console.warn('[polaris-lite] some plugins failed to load:', failed);
-    showBootNotice('插件加载失败', failed.map((f) => `${f.id}（${f.error}）`));
+    showBootNotice(t('boot.pluginLoadFailed'), failed.map((f) => `${f.id}（${f.error}）`));
   }
   const allWarnings = [...policyWarnings, ...host.getViewWarnings()];
   if (allWarnings.length) {
     console.warn('[polaris-lite] policy warnings:', allWarnings);
-    showBootNotice('权限告警', allWarnings);
+    showBootNotice(t('boot.policyWarning'), allWarnings);
   }
   console.info(`[polaris-lite] ${loaded.length} external plugin(s) loaded:`, loaded);
 
@@ -96,7 +97,7 @@ async function bootstrap(): Promise<void> {
           pluginsFailed: !host.isPluginLoadHealthy,
         });
       } else {
-        showBootNotice('布局容器异常', [
+        showBootNotice(t('boot.layoutBroken'), [
           `${container.pluginId} 声明了 layout-root 容器但 setup 未挂载 wiring 通道——本次启动回退固定四槽`,
         ]);
       }
@@ -140,7 +141,7 @@ function renderBootFailure(err: unknown): void {
   ].join(';');
 
   const title = document.createElement('div');
-  title.textContent = '应用启动失败';
+  title.textContent = t('boot.startFailed');
   title.style.cssText = 'font-size:17px;font-weight:600;letter-spacing:0.02em';
 
   const detail = document.createElement('div');
@@ -149,7 +150,7 @@ function renderBootFailure(err: unknown): void {
 
   const retry = document.createElement('button');
   retry.type = 'button';
-  retry.textContent = '重新加载';
+  retry.textContent = t('boot.reload');
   retry.style.cssText =
     'margin-top:6px;padding:8px 18px;border:1px solid #d8d8d8;border-radius:8px;background:#fff;color:#1a1a1a;font-size:13px;cursor:pointer';
   retry.addEventListener('click', () => window.location.reload());

@@ -15,11 +15,19 @@ import { createProviderStore } from './provider-store.mjs';
 import { createProvidersApi } from './providers-api.mjs';
 import { createRelayMiddleware } from './relay-core.mjs';
 import { createHostPolicy } from './upstream-policy.mjs';
-import { loadServerParts } from '../plugins/server-registry.mjs';
+import { loadServerParts, mergeRuntimeEnabled, readRuntimePlugins, SERVER_PLUGINS } from '../plugins/server-registry.mjs';
 import { createServerAdapterRegistry } from './adapter-registry.mjs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// 真实启停 = 构建期默认 ∩ registry.json 运行时开关。这样「面板禁用插件 → 重启后
+// 服务端端点也消失」，与 ai-engine-contract.md §7 的生命周期一致。
+const RUNTIME_PLUGINS = mergeRuntimeEnabled(SERVER_PLUGINS, readRuntimePlugins(REPO_ROOT));
 
 /** 工厂清单在模块加载期解析一次；每个 createHost 用真实 options 调工厂取独立中间件实例 */
-const SERVER_PARTS = await loadServerParts();
+const SERVER_PARTS = await loadServerParts({ plugins: RUNTIME_PLUGINS });
 
 export function createHost({ dataDir = '.polaris-lite', secureCookies = false, policyOptions } = {}) {
   const store = createProviderStore({ dataDir });
@@ -42,5 +50,5 @@ export function createHost({ dataDir = '.polaris-lite', secureCookies = false, p
   /** 顺序敏感的中间件链（connect 风格：每个 handler 自行决定是否 next） */
   const middlewares = [auth.middleware, providers, relay, ...pluginMiddlewares];
 
-  return { store, policy, auth, middlewares, serverPlugins: SERVER_PARTS.map((p) => p.id) };
+  return { store, policy, auth, middlewares, registry, serverPlugins: SERVER_PARTS.map((p) => p.id) };
 }

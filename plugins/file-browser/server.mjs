@@ -50,7 +50,11 @@ function pathDepth(p) {
   return norm.split(/[\\/]/).filter(Boolean).length;
 }
 
+import { registerFilesTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册只读 files 工具；禁用即消失。
+  if (options.registry) registerFilesTool(options.registry);
   const getSession = options.getSession;
   /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);

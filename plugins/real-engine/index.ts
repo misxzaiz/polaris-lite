@@ -21,7 +21,7 @@
  * - running map 按 sessionId::messageId 精确中断（并发流互不误伤）；
  * - 中断路径必须补发 message.done，否则 UI 的「停止」按钮永远不回位。
  */
-import { CHANNEL_REAL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi, type StreamCapabilityHandler } from '@sdk';
+import { CHANNEL_ENGINE_DIRECT, type CapabilityHandler, type LitePlugin, type SlotHostApi, type StreamCapabilityHandler } from '@sdk';
 import { buildUsagePayload, createSseReader, isUpstreamDisconnectFrame, aggregateToolCallDelta, classifyLimitError, type WireUsage as KitWireUsage } from '../engine-kit';
 
 const RELAY_URL = '/api/model-relay'; // 宿主内嵌中继（同源；会话 cookie 自动携带）
@@ -799,9 +799,11 @@ export const realEnginePlugin: LitePlugin = {
     api.registerCapability.registerStreaming('cap.ai.chat.real', streamHandler);
     api.registerCapability.register('cap.ai.chat.real.interrupt', interruptHandler);
 
-    // 独立档配置操作桥（standalone-mode 面板按钮调用；同 CHANNEL_FILE_BROWSER_COMPOSE(@sdk) 先例：
-    // 经受限 window 通道而非跨插件 cap——这是「数据搬运动作」而非可声明能力）
-    (window as unknown as Record<string, unknown>)[CHANNEL_REAL_ENGINE_DIRECT] = {
+    // 独立档配置操作桥：登记到 engineId 键下（引擎无关的注册表；消费方按引擎取用）。
+    // 同 CHANNEL_FILE_BROWSER_COMPOSE(@sdk) 先例：数据搬运动作走受限 window 通道而非 cap。
+    const w = window as unknown as Record<string, unknown>;
+    const bridges = (w[CHANNEL_ENGINE_DIRECT] ?? {}) as Record<string, unknown>;
+    bridges['real'] = {
       /** 用户显式同意：拉当前供应商直连配置存本机 localStorage */
       save: fetchAndStoreDirectConfig,
       /** 清除本机直连配置 */
@@ -809,6 +811,7 @@ export const realEnginePlugin: LitePlugin = {
       /** 本机是否已有直连配置（面板状态显示） */
       has: () => readStoredDirectConfig() !== null,
     };
+    w[CHANNEL_ENGINE_DIRECT] = bridges;
   },
 };
 

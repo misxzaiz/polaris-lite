@@ -13,6 +13,7 @@ import { useAuthGate } from './useAuthGate';
 import { Brand } from './Brand';
 import { SlotOutlet } from './SlotOutlet';
 import { host } from './hostRuntime';
+import { t } from './i18n';
 import { getRuntimeComponent } from './externalPlugins';
 import { viewRegistry } from './workspace/viewRegistry';
 import type { LayoutRootProps } from './types';
@@ -47,7 +48,7 @@ function Splash() {
   return (
     <div className="shell-splash">
       <Brand />
-      <div className="splash-dots" aria-label="正在载入">
+      <div className="splash-dots" aria-label={t('shell.loading')}>
         <span />
         <span />
         <span />
@@ -200,16 +201,16 @@ export function SlotLayout() {
       <header className="shell-topbar">
         <button
           className={`topbar-btn ${drawer === 'sidebar' ? 'active' : ''}`}
-          aria-label="会话列表"
+          aria-label={t('shell.sessionList')}
           aria-expanded={drawer === 'sidebar'}
           onClick={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
         >
           <MenuIcon />
         </button>
-        <span className="topbar-title">Polaris Lite</span>
+        <span className="topbar-title">{t('shell.appName')}</span>
         <button
           className={`topbar-btn ${drawer === 'panel' ? 'active' : ''}`}
-          aria-label="能力面板"
+          aria-label={t('shell.capabilityPanel')}
           aria-expanded={drawer === 'panel'}
           onClick={() => setDrawer(drawer === 'panel' ? 'none' : 'panel')}
         >

@@ -74,13 +74,16 @@ function summarize(session) {
   };
 }
 
-export function createServerPart(options = {}) {
-  const getSession = options.getSession;
-  const dataDir = resolve(options.dataDir ?? '.polaris-lite');
+/**
+ * 会话存储访问器：本插件 HTTP 半边与**其它插件 server 半边**共用的领域接口。
+ *
+ * 为什么单独导出：agent-runner 需要在服务端把本轮消息合并进会话档（断联续跑），
+ * 但文件版式、版本语义、索引广播都是 chat-store 的私有实现。消费方只经
+ * `mergeMessages / readRecord` 这类**领域操作**使用，不认识存储布局——
+ * 换实现（文件 → sqlite / 远端）时消费方零改动。
+ */
+export function createChatStoreAccess({ dataDir, onAudit = () => {}, onIndexChange = () => {} }) {
   const storeDir = resolve(dataDir, 'chat-store');
-  const auditFile = resolve(dataDir, 'chat-store-audit.log');
-  const hardOff = process.env.PLITE_CHAT_STORE === '0';
-
   /** 每会话互斥锁：sessionId → Promise 链尾（同会话读改写串行化） */
   const locks = new Map();
 
@@ -90,13 +93,6 @@ export function createServerPart(options = {}) {
     // 防止未处理 rejection 累积；错误由调用方在 fn 内自行捕获
     locks.set(key, next.catch(() => undefined));
     return next;
-  }
-
-  function audit(entry) {
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      appendFileSync(auditFile, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
-    } catch { /* 审计失败不阻断业务 */ }
   }
 
   const sessionFile = (id) => join(storeDir, `${id}.json`);
@@ -142,6 +138,82 @@ export function createServerPart(options = {}) {
       }
     }
   }
+
+  /**
+   * 幂等合并消息（键 = 消息 id）：缺会话则建壳，版本递增、索引广播。
+   * mergeBlocks=true 时对已存在的 assistant 消息做块级合并（同一 assistantId
+   * 跨多轮增量落档）。返回是否实际写入（无可新增内容时 false，不空转版本号）。
+   *
+   * 读改写全程同步（Node 单线程内无交错），与 HTTP PUT 的 lock 语义等价。
+   */
+  function mergeMessages(sessionId, title, messages, { createdAt, mergeBlocks = false } = {}) {
+    if (!sessionId || !ID_RE.test(sessionId) || !messages?.length) return false;
+    try {
+      const rec = readRecord(sessionId);
+      const session = rec?.session ?? {
+        id: sessionId,
+        title: typeof title === 'string' && title ? title : '新会话',
+        messages: [],
+        createdAt: Number(createdAt) || Date.now(),
+      };
+      if (!Array.isArray(session.messages)) session.messages = [];
+      const known = new Map(session.messages.map((m) => [m?.id, m]).filter(([id]) => !!id));
+      const fresh = [];
+      let changed = false;
+      for (const m of messages) {
+        if (!m?.id) continue;
+        const exist = known.get(m.id);
+        if (!exist) { fresh.push(m); known.set(m.id, m); continue; }
+        if (!mergeBlocks) continue;
+        // 块级合并：同一 assistant 消息的后续轮次产出追加（工具卡/正文/思考保序），
+        // content 镜像取累计最长文本；endedAt 以最后一次为准。
+        const before = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
+        exist.blocks = [...(exist.blocks ?? []), ...(m.blocks ?? [])];
+        if ((m.content ?? '').length > (exist.content ?? '').length) exist.content = m.content;
+        if (m.endedAt) exist.endedAt = m.endedAt;
+        const after = JSON.stringify(exist.blocks ?? []).length + (exist.content ?? '').length;
+        if (after > before) changed = true;
+      }
+      if (fresh.length === 0 && !changed) return false;
+      session.messages.push(...fresh);
+      // 自动命名（对齐前端 ensureAutoTitle 口径）：仍是「新会话」才用首条用户消息前 40 字
+      if (session.title === '新会话') {
+        const firstUser = [...messages].reverse().find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
+        const t = firstUser ? firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+        if (t) session.title = t;
+      }
+      const version = (Number(rec?.version) || 0) + 1;
+      writeRecord(sessionId, { version, updatedAt: Date.now(), session });
+      onIndexChange(sessionId);
+      onAudit({ op: 'merge', sessionId, version, added: fresh.length, merged: changed ? 1 : 0 });
+      return true;
+    } catch (e) {
+      onAudit({ op: 'merge-fail', sessionId, error: String(e?.message ?? e).slice(0, 120) });
+      return false;
+    }
+  }
+
+  return { storeDir, readRecord, writeRecord, listRecords, sweepTombstones, mergeMessages, lock };
+}
+
+export function createServerPart(options = {}) {
+  const getSession = options.getSession;
+  const dataDir = resolve(options.dataDir ?? '.polaris-lite');
+  const auditFile = resolve(dataDir, 'chat-store-audit.log');
+  const hardOff = process.env.PLITE_CHAT_STORE === '0';
+
+  function audit(entry) {
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      appendFileSync(auditFile, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
+    } catch { /* 审计失败不阻断业务 */ }
+  }
+
+  // 存储访问器：本插件 HTTP 半边与其它插件（agent-runner/transcript-share）共用同一实现。
+  // 消费方经 server/adapter-registry 的 service 注册表取用，不认识 <dataDir>/chat-store 布局。
+  const access = createChatStoreAccess({ dataDir, onAudit: audit, onIndexChange: (id) => notifyIndex(id) });
+  const { readRecord, writeRecord, listRecords, sweepTombstones, lock } = access;
+  options.registry?.registerService?.('chat-store', access);
 
   // ---- loop 运行态（内存表；见文件头「loop 运行态与实时推流」注释） ----
   /** sessionId → { startedAt, device, phase, lastBeat }；done/超时即回收 */

@@ -13,7 +13,7 @@
  * 与 UI。跨会话隔离靠服务端归属校验——本半边无法伪造 agentKey（dispatch 的 sessionId
  * 由 agent-loop 注入，面板动作不带 sessionId）。
  */
-import { CHANNEL_ARTIFACT_RENDERERS, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS, CHANNEL_ARTIFACT_TOOL_NAMES, type CapabilityHandler, type LitePlugin, type SlotHostApi } from '@sdk';
 import { BrowserPanel, setPanelApi } from './Panel';
 import { ShotCard } from './ShotCard';
 import './panel.css';
@@ -178,6 +178,11 @@ export const browserLitePlugin: LitePlugin = {
     const registry = (w[CHANNEL_ARTIFACT_RENDERERS] ?? {}) as Record<string, unknown>;
     registry['browser-lite-shot'] = ShotCard;
     w[CHANNEL_ARTIFACT_RENDERERS] = registry;
+    // 产物型工具名登记：browser/screenshot 产生的 artifact 让过程块组保持平铺
+    const names = (w[CHANNEL_ARTIFACT_TOOL_NAMES] instanceof Set ? w[CHANNEL_ARTIFACT_TOOL_NAMES] : new Set()) as Set<string>;
+    names.add('browser');
+    names.add('screenshot');
+    w[CHANNEL_ARTIFACT_TOOL_NAMES] = names;
   },
 };
 

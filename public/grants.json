@@ -17,7 +17,8 @@
         "cap.ai.chat.interrupt",
         "cap.ai.engine",
         "cap.meta",
-        "cap.hook.bridge"
+        "cap.hook.bridge",
+        "cap.auth"
       ],
       "provides": [],
       "events": [

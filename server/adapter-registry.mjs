@@ -14,8 +14,29 @@ export function createServerAdapterRegistry() {
   const engines = new Map();
   const tools = new Map();
   const toolPrefixes = new Map();
+  const services = new Map();
 
   return {
+    /**
+     * 服务接口注册（跨插件读写的唯一合法通道，替代「直读别人的文件/sqlite」）。
+     *
+     * 与工具/引擎同一模式：机制在宿主，行为在插件。存储类插件（chat-store / kv-store）
+     * 在自己的 server 半边把**领域操作**注册进来，消费方（agent-runner / transcript-share）
+     * 按 id 取用，不认识对方的存储布局。换实现（文件→sqlite→远端）时消费方零改动。
+     */
+    registerService(id, impl) {
+      if (typeof id !== 'string' || !id) throw new Error('service 必须有非空 id');
+      if (!impl || typeof impl !== 'object') throw new Error(`service ${id} 必须提供实现对象`);
+      if (services.has(id)) throw new Error(`重复的 service: ${id}`);
+      services.set(id, impl);
+    },
+    getService(id) {
+      return services.get(id) ?? null;
+    },
+    listServices() {
+      return [...services.keys()];
+    },
+
     registerEngine(adapter) {
       if (!adapter || typeof adapter.id !== 'string' || !adapter.id) {
         throw new Error('engine adapter 必须有非空 id');

@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { loadPool, savePool, savePoolSettings, getPanelHostApi } from './index';
-import { SUGGESTIONS, CATEGORY_LABEL, type CategoryId, type StarterSuggestion } from '../shared/suggestion-types';
+import { SUGGESTIONS, CATEGORY_LABEL, type CategoryId, type StarterSuggestion } from './suggestion-types';
 
 /**
  * cap.ai.chat 一次性调用：dispatch 只回「投递成功」，正文走 cap.ai.chat:event 流式收集

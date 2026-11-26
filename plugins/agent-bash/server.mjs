@@ -141,7 +141,11 @@ function decodeOutput(buf) {
   }
 }
 
+import { registerBashTool } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即向服务端执行域注册 bash 工具；禁用即消失。
+  if (options.registry) registerBashTool(options.registry);
   /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
   const tempTokens = options.tempTokens ?? new Map();
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);

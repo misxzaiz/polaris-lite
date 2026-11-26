@@ -28,7 +28,11 @@ const PROTOCOL_VERSION = '2024-11-05';
 const START_TIMEOUT_MS = 15_000;
 const AUDIT_PREVIEW = 400;
 
+import { registerMcpTools } from './tool.mjs';
+
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册 mcp_* 前缀适配器；禁用即消失。
+  if (options.registry) registerMcpTools(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');

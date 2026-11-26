@@ -75,6 +75,11 @@ export const CHANNEL_INTERACTIVE_RESPOND = '__PLITE_INTERACTIVE_RESPOND__';
 /** 产物渲染器注册表：产物插件登记 rendererType → 组件，chat-lite BlockGroup 查表渲染 */
 export const CHANNEL_ARTIFACT_RENDERERS = '__PLITE_ARTIFACT_RENDERERS__';
 
+/** 产物型工具名登记表（Set<string>）：产物插件在 setup 时把「会产生 artifact 的工具名」
+ *  加进来；chat-lite 折叠过程块时据此判断该组是否平铺（不写死 render/browser/…）。
+ *  第二个产物插件起零改 chat-lite。 */
+export const CHANNEL_ARTIFACT_TOOL_NAMES = '__PLITE_ARTIFACT_TOOL_NAMES__';
+
 /** 布局容器 wiring 通道：核心壳层把 viewRegistry 查表能力注入 workspace-layout 插件 */
 export const CHANNEL_LAYOUT_WIRE = '__PLITE_LAYOUT_WIRE__';
 
@@ -90,8 +95,10 @@ export const CHANNEL_DRAWER_EVENT = 'plite-drawer-changed';
  *  tab 并切换激活），派发方通常同时经 CHANNEL_DRAWER_STATE/EVENT 打开对应抽屉。 */
 export const CHANNEL_PANEL_INTENT = 'plite-panel-intent';
 
-/** real-engine 独立档直连配置操作桥：standalone-mode 面板调用（读/存/清除直连配置） */
-export const CHANNEL_REAL_ENGINE_DIRECT = '__PLITE_REAL_ENGINE_DIRECT__';
+/** 引擎「独立档直连配置」操作桥注册表：Record<engineId, { save, clear, has }>。
+ *  引擎插件在 setup 时登记自己的实现；消费方（standalone-mode）按当前引擎取用，
+ *  不绑定任何具体引擎——第二个提供直连档的引擎零改消费方。 */
+export const CHANNEL_ENGINE_DIRECT = '__PLITE_ENGINE_DIRECT__';
 
 /** 会话镜像存储键：chat-lite 独立档本地会话 ↔ mock-auth 会话状态共享（sessionStorage） */
 export const KEY_MOCK_AUTH_SESSION = 'mock-auth.session.v1';

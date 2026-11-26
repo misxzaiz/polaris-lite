@@ -110,11 +110,15 @@ test('插件只允许依赖声明过的外部包', () => {
   for (const file of pluginFiles) {
     // server 半边跑在 Node 而非浏览器：node:* 内置模块是平台能力，不需要进 import map。
     // 它仍受上面两条约束（不得引用宿主实现 / 其它插件）——这里只放开内置模块。
-    const isServerHalf = /(^|\/)server\.mjs$/.test(file);
+    // 同类：server-registry / plugin-list / build-plugins 是**装配期**的宿主侧清单与
+    // 构建脚本（跑在 Node），不是插件运行时 bundle，读 registry.json 属其职责。
+    const isNodeSide =
+      /(^|\/)server\.mjs$/.test(file) ||
+      /(^|\/)(server-registry|plugin-list|build-plugins)\.mjs$/.test(file);
     for (const spec of specifiers(readFileSync(resolve(root, file), 'utf8'))) {
       if (spec.startsWith('.') || spec.startsWith('/')) continue; // 自身相对/绝对
-      if (isServerHalf && spec.startsWith('node:')) continue;
-      if (isServerHalf && SERVER_ALLOWED.has(spec)) continue;
+      if (isNodeSide && spec.startsWith('node:')) continue;
+      if (isNodeSide && SERVER_ALLOWED.has(spec)) continue;
       const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
       if (!ALLOWED.has(pkg) && !ALLOWED.has(spec)) violations.push(`${file} → ${spec}`);
     }
