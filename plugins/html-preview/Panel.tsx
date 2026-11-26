@@ -11,7 +11,7 @@
  * 全屏态 reparent 到 .slot-tabpanel（满高 positioned 祖先，见 panel.css 注释）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { enterFullscreenKeepingOrientation, exitFullscreenAndUnlock, releaseOrientationLock } from './fullscreen';
+import { enterPseudoFullscreen, exitPseudoFullscreen, onPseudoFullscreenChange } from './fullscreen';
 
 interface PreviewItem {
   previewId: string;
@@ -54,28 +54,28 @@ export function HtmlPreviewPanel() {
 
   const current = items.find((i) => i.previewId === selected) ?? items[0] ?? null;
 
-  // 全屏（面板侧）：同卡片——浏览器原生 requestFullscreen（应用级全屏），
-  // 面板根（列表 + 运行 iframe）整体进全屏层，iframe 原元素零重载。
-  // 旧 reparent 方案废弃（只能盖 tabpanel，且回退路径分裂）。
+  // 全屏（面板侧，2026-11-26 重写）：伪全屏——面板根挂 data-plite-ufs，
+  // 宿主 CSS 让抽屉让位（:has 检测）+ 视口级 fixed 锚定，iframe 原元素零重载。
+  // 旧 reparent 方案废弃（只能盖 tabpanel，且回退路径分裂）；原生 requestFullscreen
+  // 方案亦弃（Android WebView 退出触发焦点周期，某 ROM 重放沉浸态，见 fullscreen.ts）。
   useEffect(() => {
-    const onFsChange = () => {
-      setFullscreen(document.fullscreenElement === boxRef.current);
-      if (!document.fullscreenElement) releaseOrientationLock();
-    };
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    return onPseudoFullscreenChange((el) => setFullscreen(el === boxRef.current));
   }, []);
 
   const enterFullscreen = (): void => {
-    void enterFullscreenKeepingOrientation(boxRef.current);
+    if (boxRef.current) enterPseudoFullscreen(boxRef.current);
   };
 
   const exitFullscreen = (): void => {
-    exitFullscreenAndUnlock();
+    exitPseudoFullscreen();
   };
 
   return (
-    <div ref={boxRef} className="hp-panel cap-panel html-preview" data-testid="html-preview">
+    <div
+      ref={boxRef}
+      className={`hp-panel cap-panel html-preview ${fullscreen ? 'hp-panel-fullscreen' : ''}`}
+      data-testid="html-preview"
+    >
       <div className="hp-panel-head">
         <span className="hp-panel-title">预览应用架</span>
         <span className="hp-panel-meta">{items.length ? `${items.length} 个` : ''}</span>

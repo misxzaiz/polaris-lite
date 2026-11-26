@@ -74,33 +74,25 @@
  * 全屏层内的尺寸由 :fullscreen 伪类接管（脱离原布局上下文，flex 纵向铺满）。
  * 旧方案（absolute inset:0 原地盖 stream 槽）已废弃：那只能盖住对话区。
  * 退出钮醒目化：hp-exit 主色反白，全屏场景它是唯一出口，弱化等于不可见。 */
-.hp-card:fullscreen {
+/* ===== 全屏态（伪全屏：class 驱动，宿主 [data-plite-ufs] 提供视口级 fixed 锚定）
+ * 2026-11-26 重写：弃 requestFullscreen（Android WebView 退出触发焦点周期，
+ * 某 ROM 重放沉浸模式 → 「退出后又变回全屏」，无页面层解法，见 fullscreen.ts）。
+ * .hp-fullscreen/.hp-panel-fullscreen 与 data-plite-ufs 同挂（组件里成对出现），
+ * 本段只负责内部布局：flex 纵向铺满 + safe-area 让位。 */
+.hp-card.hp-fullscreen {
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  border: none;
-  border-radius: 0;
-  margin: 0;
-  /* 2026-11-26 移动端修复：viewport-fit=cover 下状态栏悬浮在视口之上，
-     全屏层盖满视口顶到 y=0，退出按钮（全屏唯一出口）会被物理遮挡。
-     顶行让位与宿主顶栏/抽屉的 safe-area 纪律对齐；桌面端 inset=0 无副作用。 */
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  height: 100dvh;
 }
-.hp-card:fullscreen .hp-body { height: auto; flex: 1; min-height: 0; }
-.hp-panel:fullscreen {
+.hp-card.hp-fullscreen .hp-body { height: auto; flex: 1; min-height: 0; }
+.hp-panel.hp-panel-fullscreen {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  background: var(--bg);
-  border: none;
-  border-radius: 0;
-  /* 2026-11-26 移动端修复：同 .hp-card:fullscreen，safe-area 让位（见上） */
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  height: 100dvh;
 }
-.hp-panel:fullscreen .hp-panel-body { flex: 1; min-height: 0; }
-.hp-panel:fullscreen .hp-panel-run { min-height: 0; }
+.hp-panel.hp-panel-fullscreen .hp-panel-body { flex: 1; min-height: 0; }
+.hp-panel.hp-panel-fullscreen .hp-panel-run { min-height: 0; }
+.hp-panel.hp-panel-fullscreen .hp-panel-head { flex: 0 0 auto; }
 .hp-btn.hp-exit { background: var(--accent); border-color: var(--accent); color: #fff; }
 .hp-btn.hp-exit:hover { background: #6d99ff; }
 

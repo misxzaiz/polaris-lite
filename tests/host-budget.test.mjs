@@ -50,8 +50,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  + 分派器、src/core/types.ts 的 aiEngine 契约类型）。核心只认 cap.ai.chat.<id> 命名
  *  约定与 manifest 元数据，不认识任何具体引擎/厂商；引擎实现全在插件里。
  *  不放进插件的原因：总线单注册位 + assertAllowed 精确匹配，插件路由器要么撕开单注册
- *  语义、要么开 cap.ai.chat.* 通配授权，反而扩大特权面。 */
-const CORE_BUDGET = 5345;
+ *  语义、要么开 cap.ai.chat.* 通配授权，反而扩大特权面。
+ *  2026-11-26 上调 5345 → 5390：宿主级伪全屏机制（styles.css +44 行，data-plite-ufs
+ *  属性规则 + 抽屉 :has() 让位）。移动端根治：Android WebView 原生全屏退出触发窗口
+ *  焦点周期、某 ROM 重放沉浸态（用户实测「退出后又变回全屏」，双击冷却防御无效），
+ *  根治 = 弃 requestFullscreen 改 CSS 覆盖层。fixed 锚定必须宿主持有：构建门禁禁
+ *  插件 CSS 用 position:fixed，宿主是唯一合法位置；抽屉让位需 :has() 选中宿主元素，
+ *  插件侧同理被门禁禁止。属视口/抽屉壳层职责，非业务。 */
+const CORE_BUDGET = 5390;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

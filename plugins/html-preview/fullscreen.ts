@@ -1,121 +1,81 @@
 /**
- * 全屏 + 方向保持（移动端补丁）。
+ * 伪全屏（CSS overlay，2026-11-26 重写）
  *
- * 现象（用户手机实测）：点「全屏」后屏幕被浏览器强制转成横屏。
- * 根因：我们用的是浏览器原生 `requestFullscreen()`，页面没有任何方向锁定
- * （无 manifest orientation、无 screen-orientation meta、无 orientation.lock）。
- * 大量安卓浏览器把「网页全屏」默认当成「看视频」场景，进全屏时直接把屏幕切成
- * landscape；iOS Safari 则保持竖屏。这不是 CSS 造成的。
+ * 背景（为什么放弃 requestFullscreen）：Android WebView 的 DOM 全屏走系统级
+ * custom view，退出时移除 view 会触发窗口焦点周期，实测某 ROM 会把沉浸模式
+ * 重放——表现为「点退出全屏后画面又变回全屏」。双击重入冷却、全屏中禁重入等
+ * 页面层防御全部无效（重放不是页面发起的）。历史结论：该 ROM 的系统栏 hide
+ * 同样会被焦点周期重置（MainActivity 注释），页面层与壳层均无解。
  *
- * 对冲手段是 Screen Orientation API，但有两个坑：
- * 1. `lock('landscape')` 只在全屏态才允许；`lock('portrait')` 通常随时可锁——
- *    所以竖屏场景要在**进全屏之前**就把竖屏锁上（等进全屏再锁，浏览器的强制
- *    翻转已经发生，后锁可能被拒或来不及）；
- * 2. 锁定目标取「点击那一刻的朝向」：竖着点锁竖屏，横着点锁横屏——既不被浏览器
- *    强制翻转，也不夺走用户本来就想要的横屏。横屏锁在全屏确认后补一次（防拒重试）。
+ * 根治 = 不触发：全屏层改为 data-plite-ufs 属性驱动的 fixed 覆盖层
+ * （fixed 锚定由宿主 styles.css 持有——构建门禁禁插件 CSS 用 position:fixed），
+ * 全程不调 requestFullscreen → 系统全屏层/焦点周期重放/强制转横屏（方向锁机制
+ * 存在的唯一理由）一并消失。iframe 原元素原位不动，零重载。
  *
- * 兼容性：lock() 只在移动端全屏态生效；桌面/不支持的环境抛错或被忽略，一律静默
- * 降级，全屏本身照常工作（宁可方向不受控，也不能让全屏按钮失效）。
+ * 退出路径（三条全收口到本模块）：
+ * 1. 「退出全屏」按钮 → exitPseudoFullscreen()
+ * 2. Esc → 模块级 keydown 监听
+ * 3. Android 返回键 → 进入时 pushState 压栈，返回键先弹我们的 state，
+ *    popstate 里 finalize（返回键「先退全屏再退页面」）。
  */
 
-type OrientationLock = 'portrait' | 'landscape';
+let activeEl: HTMLElement | null = null;
+const listeners = new Set<(el: HTMLElement | null) => void>();
 
-interface ScreenOrientationLike {
-  type?: string;
-  lock?: (orientation: string) => Promise<void>;
-  unlock?: () => void;
+function notify(): void {
+  for (const cb of listeners) cb(activeEl);
 }
 
-function getOrientationApi(): ScreenOrientationLike | null {
-  const so = (screen as unknown as { orientation?: ScreenOrientationLike }).orientation;
-  return so && typeof so === 'object' ? so : null;
+/** 摘层收尾（popstate / 直接退出共用）。幂等。 */
+function finalize(): void {
+  if (!activeEl) return;
+  activeEl.removeAttribute('data-plite-ufs');
+  activeEl = null;
+  notify();
 }
 
-/** 当前朝向（优先看用户此刻看到的视口形状，再退回屏幕方向 API） */
-export function currentOrientation(): OrientationLock {
-  if (window.innerWidth && window.innerHeight && window.innerWidth !== window.innerHeight) {
-    return window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
-  }
-  const type = getOrientationApi()?.type;
-  if (typeof type === 'string' && type) {
-    return type.startsWith('landscape') ? 'landscape' : 'portrait';
-  }
-  return 'portrait';
-}
-
-async function tryLock(orientation: OrientationLock): Promise<boolean> {
-  try {
-    await getOrientationApi()?.lock?.(orientation);
-    return true;
-  } catch {
-    return false; // 桌面 / 不支持 / 与浏览器强制策略冲突
-  }
-}
-
-/** 释放方向锁（退出全屏后调用；浏览器多半已自动释放，这里兜底） */
-export function releaseOrientationLock(): void {
-  try {
-    getOrientationApi()?.unlock?.();
-  } catch {
-    /* 不支持就忽略 */
-  }
+/** 进入伪全屏。同一时刻只允许一个全屏层（activeEl 守卫）。 */
+export function enterPseudoFullscreen(el: HTMLElement | null): void {
+  if (!el || activeEl) return;
+  el.setAttribute('data-plite-ufs', '');
+  activeEl = el;
+  history.pushState({ pliteUfs: true }, '');
+  notify();
 }
 
 /**
- * 双击重入防御（2026-11-26 移动端实测 bug：点「退出全屏」后画面又变回全屏）。
- *
- * 根因：退出全屏是异步 + 带动画的过程（exitFullscreen() → 系统移除 custom view
- * → fullscreenchange 派发 → React 才把按钮换回「全屏运行」）。退出动画还在进行、
- * 画面尚未明显缩回时，用户「没看到反馈补点一下」的第二次点按落在已切换为
- * enter 的按钮上 → 重新 requestFullscreen → 再次全屏。
- *
- * 双层防御：
- * 1. 全屏中禁重入——enter 时若 document.fullscreenElement 非空直接 return
- *    （覆盖「全屏中又请求全屏」的边界）；
- * 2. 退出冷却窗口——exit 发起时打时间戳，冷却期内（覆盖退出动画 + fullscreenchange
- *   滞后 + 触屏补点高发段）enter 一律静默忽略。冷却取 600ms：Android WebView 退出
- *   动画约 200-400ms，加上事件循环滞后与手指二次触发的窗口足够；刻意快速重进
- *   全屏的用户点第二次（600ms 后）即可恢复，无可感知损失。
+ * 退出伪全屏。进入时压的 state 还在栈顶 → history.back() 让返回键路径与
+ * 按钮路径共用同一条收敛链；若栈顶已被别人占（罕见：其他浮层后来又压了
+ * state），直接 finalize，宁可留一个无害的孤儿 state 也不误弹别人的栈。
  */
-let exitCooldownUntil = 0;
-
-/**
- * 进入全屏，并尽量保持进入前的朝向。
- * 调用方需在用户手势（click）中直接调用，否则 requestFullscreen 会被拒绝。
- *
- * 顺序很关键：
- * 1. 全屏**前**先按当前朝向锁一次——竖屏场景这一步就足够防翻转；
- * 2. requestFullscreen；
- * 3. 横屏场景（lock('landscape') 多数浏览器要求全屏态）在全屏确认后补锁，
- *    失败再试一次（个别浏览器第一次 lock 在翻转动画里会拒）。
- */
-export async function enterFullscreenKeepingOrientation(el: HTMLElement | null): Promise<void> {
-  if (!el || typeof el.requestFullscreen !== 'function') return;
-  if (document.fullscreenElement) return; // 防御 1：已在全屏中，禁重入
-  if (Date.now() < exitCooldownUntil) return; // 防御 2：退出冷却期内忽略（触屏补点重入）
-  const want = currentOrientation(); // 全屏前采样，全屏后读到的可能已经被浏览器翻过去了
-  if (want === 'portrait') {
-    await tryLock('portrait'); // 竖屏锁不依赖全屏态：进全屏前先钉住，防浏览器强制横屏
-  }
-  try {
-    await el.requestFullscreen();
-  } catch {
-    return; // 无权限 / 不支持（如 iPhone Safari 上的非视频元素）→ 静默
-  }
-  if (want === 'landscape') {
-    // 横屏锁需要全屏态；刚进全屏可能还在翻转动画里，补一次重试
-    if (!(await tryLock('landscape'))) {
-      await new Promise((r) => setTimeout(r, 300));
-      await tryLock('landscape');
-    }
-  }
+export function exitPseudoFullscreen(): void {
+  if (!activeEl) return;
+  const st = history.state as { pliteUfs?: boolean } | null;
+  if (st && st.pliteUfs) history.back(); // popstate → finalize
+  else finalize();
 }
 
-/** 退出全屏并释放可能存在的方向锁 */
-export function exitFullscreenAndUnlock(): void {
-  if (document.fullscreenElement) {
-    exitCooldownUntil = Date.now() + 600; // 见 enterFullscreenKeepingOrientation 注释：双击重入防御
-    void document.exitFullscreen?.().catch(() => undefined);
-  }
-  releaseOrientationLock();
+export function isPseudoFullscreen(el: HTMLElement | null): boolean {
+  return !!el && el.hasAttribute('data-plite-ufs');
+}
+
+/** 订阅全屏层变化（进入/退出都通知；回调参数 = 当前的全屏元素或 null）。 */
+export function onPseudoFullscreenChange(cb: (el: HTMLElement | null) => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+// 模块级全局监听，挂一次：
+// - popstate：返回键/浏览器后退弹栈 → 非全屏 state 时收层；
+// - Esc：桌面键盘习惯退出。
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', () => {
+    const st = history.state as { pliteUfs?: boolean } | null;
+    if (!(st && st.pliteUfs)) finalize();
+  });
+  window.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape') exitPseudoFullscreen();
+  });
 }

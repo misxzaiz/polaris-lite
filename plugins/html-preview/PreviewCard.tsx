@@ -5,20 +5,18 @@
  * 卡片结构：标题栏（AI 生成徽标 + 标题 + 版本 + 操作钮[全屏/展开]）+ 沙箱 iframe。
  * iframe 源是 /api/preview/:id/raw（服务端 CSP sandbox 头 + 本组件 sandbox 属性双保险）。
  *
- * 全屏方案：**浏览器原生 requestFullscreen()**——盖满整个应用视口（顶栏/tab/侧栏/
- * 输入区全部遮住），卡片容器（标题栏 + iframe）成为全屏层，顶行自然保留
- * 「退出全屏」按钮。要点：
- * - iframe 原元素参与全屏，**零重载**（reparent/portal 都会让 iframe 重启丢
- *   游戏进度——原版 interactive-component 双实例的病根）；
- * - DOM 全屏是浏览器协议而非 CSS 样式逃逸——插件 CSS 门禁禁 position:fixed
- *   （防插件盖宿主层），原生全屏不在其列；全屏层自带 `:fullscreen` 伪类样式；
- * - 进入/退出双向同步：按钮进、Esc/浏览器菜单退（fullscreenchange 监听统一收口，
- *   React 状态不与浏览器脱节）。
- * - 移动端朝向：安卓浏览器进全屏常被当成「看视频」强制转横屏，进全屏后用 Screen
- *   Orientation API 锁回点击那一刻的朝向（见 fullscreen.ts），退出时解锁。
+ * 全屏方案（2026-11-26 重写）：**伪全屏**——容器挂 data-plite-ufs 属性，宿主
+ * styles.css 提供 fixed inset:0 视口级锚定（构建门禁禁插件 CSS 用 position:fixed，
+ * 锚定规则由宿主持有）。要点：
+ * - 弃 requestFullscreen：Android WebView 退出原生全屏会触发窗口焦点周期，
+ *   某 ROM 重放沉浸模式（「退出后又变回全屏」），页面层无解，根治 = 不触发；
+ * - iframe 原元素原位不动：零 reparent、零重载（游戏进度不丢）；
+ * - 不经系统全屏层 → 强制转横屏问题消失，方向锁机制整体退役；
+ * - 退出三路径全收口：按钮 / Esc / Android 返回键（history 压栈 + popstate），
+ *   见 fullscreen.ts。
  */
 import { useEffect, useRef, useState } from 'react';
-import { enterFullscreenKeepingOrientation, exitFullscreenAndUnlock, releaseOrientationLock } from './fullscreen';
+import { enterPseudoFullscreen, exitPseudoFullscreen, onPseudoFullscreenChange } from './fullscreen';
 
 export interface PreviewCardProps {
   callId: string;
@@ -37,25 +35,19 @@ export function PreviewCard({ callId, title, data }: PreviewCardProps) {
 
   const url = data.url ?? (data.previewId ? `/api/preview/${data.previewId}/raw` : null);
 
-  // 全屏状态以浏览器为单一事实源：进入 = 容器 requestFullscreen()；
-  // 退出（Esc / 浏览器菜单 / 按钮）都经 fullscreenchange 收敛回 React。
+  // 全屏状态经 onPseudoFullscreenChange 订阅伪全屏模块（进入/退出都通知，
+  // 覆盖按钮 / Esc / 返回键三条退出路径，React 状态不脱节）。
   useEffect(() => {
-    const onFsChange = () => {
-      setFullscreen(document.fullscreenElement === boxRef.current);
-      // Esc / 浏览器返回退出全屏时也释放方向锁，避免退出后页面被钉死在某个朝向
-      if (!document.fullscreenElement) releaseOrientationLock();
-    };
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    return onPseudoFullscreenChange((el) => setFullscreen(el === boxRef.current));
   }, []);
 
-  // 移动端：浏览器进全屏常把屏幕强制转成横屏，这里在进全屏后按「点击时的朝向」锁回去
+  // 伪全屏：只挂属性，不动 DOM 结构
   const enterFullscreen = (): void => {
-    void enterFullscreenKeepingOrientation(boxRef.current);
+    if (boxRef.current) enterPseudoFullscreen(boxRef.current);
   };
 
   const exitFullscreen = (): void => {
-    exitFullscreenAndUnlock();
+    exitPseudoFullscreen();
   };
 
   if (!url) {
@@ -69,7 +61,7 @@ export function PreviewCard({ callId, title, data }: PreviewCardProps) {
   return (
     <div
       ref={boxRef}
-      className={`hp-card ${expanded ? 'hp-expanded' : ''} ${fullscreen ? 'hp-is-fullscreen' : ''}`}
+      className={`hp-card ${expanded ? 'hp-expanded' : ''} ${fullscreen ? 'hp-fullscreen' : ''}`}
       data-call-id={callId}
       data-testid={`hp-${callId}`}
     >
