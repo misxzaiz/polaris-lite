@@ -189,7 +189,17 @@ export function createServerPart(options = {}) {
         if (last?.type === 'text') last.text += p.delta;
         else blocks.push({ type: 'text', text: p.delta });
       } else if (ev.kind === 'tool.card') {
-        blocks.push({ type: 'tool', card: { callId: p.callId, name: p.name, command: p.command, argsJson: p.argsJson, status: 'running' } });
+        // 同 callId 可能连发两帧（首帧 args 恒为空、收尾帧才带完整参数），也可能
+        // 由引擎在 turn 内实时上报一次、再由 runner 的回放段上报一次：一律按
+        // callId 幂等——已存在则回填非空字段，绝不新建第二个块（否则工具卡重复）。
+        const exist = blocks.find((b) => b.type === 'tool' && b.card?.callId === p.callId);
+        if (exist) {
+          if (p.name) exist.card.name = p.name;
+          if (p.command) exist.card.command = p.command;
+          if (p.argsJson) exist.card.argsJson = p.argsJson;
+        } else {
+          blocks.push({ type: 'tool', card: { callId: p.callId, name: p.name, command: p.command, argsJson: p.argsJson, status: 'running' } });
+        }
       } else if (ev.kind === 'tool.result') {
         const card = blocks.find((b) => b.type === 'tool' && b.card?.callId === p.callId)?.card;
         if (card) {
@@ -562,6 +572,30 @@ export function createServerPart(options = {}) {
       const toolFailStreak = new Map();
       let toolOnlyStreak = 0;
       let autoContinueLeft = 3;
+      // agent 型引擎（CLI 自持工具循环）在 runTurn 内部就执行完工具：工具卡只能由
+      // 引擎帧驱动实时落位——等 turn 收敛再统一发，整轮的工具卡就全堆到正文之后了
+      // （实测现象：CodeBuddy 一轮里 26 次调用全排在回复末尾）。这两张表记下已实时
+      // 流出的 callId，runner 自己的回放段据此去重，保证每个调用只发一次卡/结果。
+      const streamedCards = new Set();
+      const streamedResults = new Set();
+      const onToolCall = (c) => {
+        if (!c?.id) return;
+        streamedCards.add(c.id);
+        emitEvent(run, 'tool.card', {
+          sessionId, messageId: assistantId, callId: c.id, name: c.name || 'tool',
+          command: summarizeCall({ name: c.name || 'tool', arguments: c.arguments ?? '{}' }),
+          argsJson: c.arguments,
+        });
+      };
+      const onToolResult = (r) => {
+        if (!r?.id) return;
+        streamedResults.add(r.id);
+        emitEvent(run, 'tool.result', {
+          sessionId, messageId: assistantId, callId: r.id,
+          status: r.success === false ? 'error' : 'done',
+          stdout: capText(String(r.result ?? '')),
+        });
+      };
       for (; !signal.aborted; turn += 1) {
         run.turnStartedAt = Date.now();
         // 触发压缩（先压再请求；水位达阈值 + 未熔断；失败非破坏回滚）
@@ -588,6 +622,8 @@ export function createServerPart(options = {}) {
           onDelta: (delta) => emitEvent(run, 'message.delta', { sessionId, messageId: assistantId, delta }),
           onReasoning: (delta) => emitEvent(run, 'message.reasoning', { sessionId, messageId: assistantId, delta }),
           onRetry: (attempt, maxAttempts) => emitEvent(run, 'stream.retry', { sessionId, messageId: assistantId, attempt, maxAttempts }),
+          onToolCall,
+          onToolResult,
         });
         if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); syncTurnToSession(run, turn); return; }
         // 本轮 AI 产出落服务端会话档（幂等增量）：发起端被杀也留痕
@@ -657,7 +693,11 @@ export function createServerPart(options = {}) {
           totalToolCalls += 1;
           const callId = call.id || `call-${turn}-${totalToolCalls}`;
           const display = summarizeCall(call);
-          emitEvent(run, 'tool.card', { sessionId, messageId: assistantId, callId, name: call.name, command: display, argsJson: call.arguments });
+          // 引擎已在 turn 内实时发过这张卡（agent 型 CLI）：不再重复发，位置也保持
+          // 引擎帧里的真实顺序。runner 自己执行的引擎（real-engine）没发过，照旧发。
+          if (!streamedCards.has(callId)) {
+            emitEvent(run, 'tool.card', { sessionId, messageId: assistantId, callId, name: call.name, command: display, argsJson: call.arguments });
+          }
           const adapter = registry?.getTool?.(call.name);
           return {
             idx: i, call, callId, display, adapter,
@@ -694,7 +734,7 @@ export function createServerPart(options = {}) {
         for (const pr of parallelResults) {
           const { call, callId } = prepared[pr.idx];
           if (pr.hookFire) fireHook('post-tool-use', { sessionId, toolName: call.name, toolInput: pr.hookInput, success: pr.ok });
-          emitEvent(run, 'tool.result', pr.resultEvent);
+          if (!streamedResults.has(pr.resultEvent.callId)) emitEvent(run, 'tool.result', pr.resultEvent);
           run.shadow.push({ role: 'tool', content: pr.feedback, tool_call_id: call.id, name: call.name });
         }
         if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }

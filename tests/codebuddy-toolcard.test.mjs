@@ -37,3 +37,31 @@ test('codebuddy-engine: tool_call_start 单独透传 argsJson', async () => {
   assert.ok(block.length > 0, '定位 tool_call_start 翻译分支');
   assert.match(block, /argsJson: JSON\.stringify\(frame\.args\)/, '结构化参数需带 argsJson 供 ArgsBlock/悬浮岛/ai-events 消费');
 });
+
+test('codebuddy-engine: runTurn 逐帧实时上报工具事件（工具卡不得堆到正文末尾）', async () => {
+  const src = await read('plugins/codebuddy-engine/server.mjs');
+  // 契约：runTurn 签名必须接受 onToolCall / onToolResult
+  const sig = slice(src, 'async runTurn({ model, messages, signal', '})\n');
+  assert.ok(sig.length > 0, '定位 runTurn 签名');
+  assert.match(sig, /onToolCall/, 'runTurn 必须接受 onToolCall 回调');
+  assert.match(sig, /onToolResult/, 'runTurn 必须接受 onToolResult 回调');
+  // 契约：stdout 帧循环里 start/end 帧要立即回调，而不是只攒进 toolCalls 聚合
+  const startBlock = slice(src, "} else if (t === 'tool_call_start') {", "} else if (t === 'tool_call_end') {");
+  assert.match(startBlock, /onToolCall\?\.\(/, 'tool_call_start 帧需立即上报（CLI 自持工具循环，等 turn 收敛会全堆到末尾）');
+  const endBlock = slice(src, "} else if (t === 'tool_call_end') {", "} else if (t === 'usage') {");
+  assert.match(endBlock, /onToolResult\?\.\(/, 'tool_call_end 帧需立即上报结果');
+});
+
+test('agent-runner: 工具卡/结果按 callId 去重，引擎已实时发过的不再回放', async () => {
+  const src = await read('plugins/agent-runner/server.mjs');
+  // 回调透传给引擎
+  assert.match(src, /onToolCall,\s*\n\s*onToolResult,/, 'engineTurn 需透传 onToolCall / onToolResult');
+  // 回放段去重
+  const emitCard = slice(src, 'const display = summarizeCall(call);', 'const adapter = registry?.getTool?.(call.name);');
+  assert.match(emitCard, /streamedCards\.has\(callId\)/, 'replay 段的 tool.card 需按 streamedCards 去重');
+  assert.match(src, /streamedResults\.has\(pr\.resultEvent\.callId\)/, 'replay 段的 tool.result 需按 streamedResults 去重');
+  // 会话档落块同 callId 幂等（首帧 args 为空、收尾帧回填，不得建两个块）
+  const cardBranch = slice(src, "} else if (ev.kind === 'tool.card') {", "} else if (ev.kind === 'tool.result') {");
+  assert.match(cardBranch, /blocks\.find\(/, '落档的 tool.card 需先按 callId 查已有块');
+  assert.match(cardBranch, /exist\.card\.argsJson = p\.argsJson/, '已有块需回填完整参数而不是新建');
+});

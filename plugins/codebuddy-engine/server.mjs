@@ -344,7 +344,7 @@ export function createServerPart(options = {}) {
      * CLI 的工具已全部执行完毕，toolCalls 聚合后带 injected 结果（runner 端
      * skipExecution 标记直接采用，不再重复执行）。
      */
-    async runTurn({ model, messages, signal, onDelta, onReasoning }) {
+    async runTurn({ model, messages, signal, onDelta, onReasoning, onToolCall, onToolResult }) {
       if (hardOff) throw new Error('codebuddy 引擎已被禁用（PLITE_CODEBUDDY=0）');
       const prompt = flattenPrompt({ messages });
       const textAcc = [];
@@ -437,18 +437,27 @@ export function createServerPart(options = {}) {
               const callId = frame.call_id || randomUUID();
               const args = frame.args && typeof frame.args === 'object' ? frame.args : {};
               toolArgs.set(callId, { name: String(frame.tool || 'tool'), args });
+              // 实时上报工具调用：CLI 自持工具循环，runTurn 只在整轮结束才返回
+              // toolCalls 聚合——只靠聚合的话调用方只能把这一轮的工具卡全部追加到
+              // 正文之后（现象：CodeBuddy 的工具调用全堆在回复最后）。帧序即真实
+              // 执行序，逐帧上报工具卡才能落在它原本的位置。
+              // 注意 args 分两帧：首帧恒为空对象、收尾帧才完整，消费方必须按
+              // callId 幂等回填（前端 patchCard / 会话档 mergeBlocks 同口径）。
+              onToolCall?.({ id: callId, name: String(frame.tool || 'tool'), arguments: JSON.stringify(args) });
               onDelta?.(''); // 空帧喂看门狗由 onReasoning 承担；这里仅保持既有信号
             } else if (t === 'tool_call_end') {
               const entry = toolArgs.get(frame.call_id);
               toolArgs.delete(frame.call_id);
               if (entry) {
+                const result = typeof frame.result === 'string' ? frame.result : JSON.stringify(frame.result ?? '');
                 toolCalls.push({
                   id: String(frame.call_id || randomUUID()),
                   name: entry.name,
                   arguments: JSON.stringify(entry.args),
-                  result: typeof frame.result === 'string' ? frame.result : JSON.stringify(frame.result ?? ''),
+                  result,
                   success: frame.success !== false,
                 });
+                onToolResult?.({ id: String(frame.call_id ?? ''), name: entry.name, result, success: frame.success !== false });
               }
             } else if (t === 'usage') {
               usageFrags.push({
