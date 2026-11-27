@@ -1,0 +1,94 @@
+/* ===== image-push：对话图片卡 + 全屏查看器（popover top layer） =====
+ * 门禁纪律（tests/arch.test.mjs + lintPluginCss）：插件 CSS 不得触碰宿主命名空间
+ * 或全局根，也不得自行书写视口级定位——查看器的铺满由 UA 对 popover-open 态的
+ * 默认样式提供（fixed + inset 0），作者源只写外观。 */
+
+/* ---- 对话内图片卡 ---- */
+.ip-card {
+  margin: 6px 0 2px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: rgba(127, 127, 127, 0.08);
+  cursor: zoom-in;
+}
+.ip-card img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+}
+.ip-cap {
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.65;
+  padding: 5px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ip-missing {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 6px 0;
+}
+
+/* ---- 全屏查看器（popover top layer；UA 提供 fixed+inset:0） ---- */
+.ip-viewer {
+  display: none;
+  background: rgba(10, 10, 12, 0.96);
+  touch-action: none;
+  overflow: hidden;
+}
+.ip-viewer:popover-open {
+  display: block;
+}
+.ip-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ip-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: 94vw;
+  max-height: 80vh;
+  will-change: transform;
+  transform-origin: 50% 50%;
+}
+.ip-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 14px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ip-zoomtag {
+  position: absolute;
+  top: calc(16px + env(safe-area-inset-top));
+  left: 14px;
+  color: #9f9;
+  font: 12px/1 ui-monospace, monospace;
+  opacity: 0.9;
+}
+.ip-title {
+  position: absolute;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: #ddd;
+  font-size: 12px;
+  padding: 0 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

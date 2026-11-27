@@ -81,6 +81,8 @@ export const PLUGIN_LIST = [
   { id: 'token-ledger', config: 'token-ledger/vite.config.ts', dist: 'token-ledger/dist', order: 42 },
   // session-hud = 会话悬浮摘要卡（标题+改动文件实时清单；旁听 session.title:changed 与 runner 事件）
   { id: 'session-hud', config: 'session-hud/vite.config.ts', dist: 'session-hud/dist', order: 43 },
+  // image-push：AI 推送电脑图片到对话（push_image 工具 + image 产物渲染器 + 缩放查看器）
+  { id: 'image-push', config: 'image-push/vite.config.ts', dist: 'image-push/dist', order: 44 },
 ].sort((a, b) => a.order - b.order);
 
 /** 是否启用（缺省 true）——server-registry 用它过滤 server 半边 */

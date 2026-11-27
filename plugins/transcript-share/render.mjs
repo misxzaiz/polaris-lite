@@ -422,6 +422,10 @@ function pageScript() {
             (b.payload ? '<details class="think"><summary>问题内容</summary><div class="body">' + esc(JSON.stringify(b.payload, null, 1)) + '</div></details>' : '') +
             (ansText ? '<div class="tool-out">作答：' + ansText + '</div>' : '') + '</div>';
         }
+        else if (b.type === 'artifact' && b.rendererType === 'image' && b.data && b.data.url) {
+          html += '<div class="tool"><div class="tool-head"><span class="tool-name">[图片] ' + esc(b.title) + '</span></div>' +
+            '<div style="padding:8px 12px"><img src="' + esc(String(b.data.url)) + '" alt="' + esc(b.title) + '" style="max-width:100%;max-height:420px;border-radius:8px;" loading="lazy" /></div></div>';
+        }
         else if (b.type === 'artifact') {
           var dataKeys = b.data ? Object.keys(b.data).map(function (k) { return k + '=' + esc(String(b.data[k]).slice(0, 60)); }).join(' · ') : '';
           html += '<div class="tool"><div class="tool-head"><span class="tool-name">[产物] ' + esc(b.title) + '</span><span class="tool-status ' + (b.status === 'ready' ? 'done' : 'error') + '">' + esc(b.rendererType) + '</span></div>' + (dataKeys ? '<div class="tool-out">' + dataKeys + '</div>' : '') + '</div>';

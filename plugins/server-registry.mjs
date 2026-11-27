@@ -54,6 +54,8 @@ const RAW_SERVER_PLUGINS = [
   { id: 'git-core', entry: './git-core/server.mjs' },
   // voice-radio：AI 无限语音电台（MiMo TTS 服务端代理 + 磁盘缓存；Key 只在服务端）
   { id: 'voice-radio', entry: './voice-radio/server.mjs' },
+  // image-push：AI 推送电脑图片（/api/img/* 落盘直出 + push_image 工具）
+  { id: 'image-push', entry: './image-push/server.mjs' },
   // translate：百度翻译代理（签名 + 错误码中文化 + LRU 缓存；SecretKey 只在服务端）
   { id: 'translate', entry: './translate/server.mjs' },
   // pocket-ledger / starter-suggestions：无自有 HTTP 路由，仅注册各自的 AI 工具声明

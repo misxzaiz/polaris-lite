@@ -460,6 +460,11 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "image-push": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }
