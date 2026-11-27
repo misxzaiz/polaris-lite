@@ -182,8 +182,10 @@ function extractHtmlFromPartialJson(partial: string): string {
 }
 
 /** bootstrap iframe 骨架（流式预览「实时预览」Tab 用）：
- *  只写一次，之后经 postMessage 收增量 html 追加进 body，不重载文档——
- *  换 srcDoc = iframe 销毁重建（白屏一帧 + CSS 重初始化），是此前预览闪烁的主因。
+ *  只写一次，之后经 postMessage 收增量；子页累计全文后按完整文档重解析 morph
+ *  （见 bootstrapSource）——不能按帧 insertAdjacentHTML 追加：fragment 解析在
+ *  帧尾强制闭合未完成标签，跨帧的 <style>/<div> 会被切碎成正文文本，样式全丢。
+ *  换 srcDoc = iframe 销毁重建（白屏一帧 + CSS 重初始化），是更早前预览闪烁的主因。
  *  子页回传 {type:'height', h} 供外层做整页可见的自适应量测。
  *  函数源码必须原样内联并立即执行：不能用 JSON.stringify 包一层——那会把
  *  IIFE 变成字符串字面量，监听器永不安装，实时预览整块空白（线上踩坑）。
@@ -193,14 +195,41 @@ const STREAM_BOOTSTRAP =
   '<script>(' + bootstrapSource.toString().replace(/<\/script/gi, '<\\/script') + ')()<\/script></html>';
 
 /** 必须自包含：函数体只依赖 window/document 等全局——构建产物里经
- *  toString() 注入 srcdoc 子页独立执行，引用闭包/导入变量在子页全是未定义。 */
+ *  toString() 注入 srcdoc 子页独立执行，引用闭包/导入变量在子页全是未定义。
+ *
+ *  渲染策略：子页累计全文，每收到一帧就**同步**按完整文档 morph（合帧在父页做——
+ *  沙箱子框架的 setTimeout/rAF 会被浏览器节流，实测 morph 迟到 ~1s 甚至 rAF 整块
+ *  不触发，父页定时器无此问题）。delta 按字符位切帧，任何按帧追加（fragment
+ *  解析帧尾强制闭合未完成标签）都会把跨帧的 <style>/<div> 切碎漏成正文（实测
+ *  样式全丢、源码满屏）；每次把**累计全文**交给 DOMParser 按完整文档解析，
+ *  head 有变才替换、body 属性同步后替换 innerHTML——跨帧标签天然正确，
+ *  残缺尾部按文档语义容错渐进生效，且全程 0 次 iframe 重载（无 srcDoc 白闪）。 */
 function bootstrapSource() {
+  let full = '';
+  let lastHead = '';
+  const morph = () => {
+    const doc = new DOMParser().parseFromString(full, 'text/html');
+    const headHtml = doc.head.innerHTML;
+    if (headHtml !== lastHead) {
+      lastHead = headHtml;
+      document.head.innerHTML = headHtml;
+    }
+    // 生成页 <body class/style=...> 等属性同步
+    for (const a of Array.from(document.body.attributes)) {
+      if (!doc.body.hasAttribute(a.name)) document.body.removeAttribute(a.name);
+    }
+    for (const a of Array.from(doc.body.attributes)) {
+      document.body.setAttribute(a.name, a.value);
+    }
+    document.body.innerHTML = doc.body.innerHTML;
+    const h = document.documentElement.scrollHeight;
+    (window.parent as Window).postMessage({ type: 'height', h }, '*');
+  };
   window.addEventListener('message', (e) => {
     const d = e.data || {};
     if (d.type === 'chunk' && typeof d.html === 'string') {
-      document.body.insertAdjacentHTML('beforeend', d.html);
-      const h = document.documentElement.scrollHeight;
-      (e.source as Window | null)?.postMessage({ type: 'height', h }, e.origin as string);
+      full += d.html;
+      morph();
     }
   });
   // 就绪握手：监听器装好即回执，父页收到才投递——srcdoc 的 load 事件与子页
@@ -212,12 +241,13 @@ function bootstrapSource() {
  *  数据源是 argsDelta（tool.args.delta 累积）；无增量（非流式引擎）时不渲染。
  *  - 源码流：贴底自动跟滚（rAF 直设 scrollTop），用户上滚即暂停跟随、
  *    出「回到底部」胶囊，贴底自动恢复——与主聊天区跟滚同一语义；
- *  - 实时预览：持久 iframe + postMessage 增量追加（0 重载、无白闪），
- *    节流 leading+trailing（500ms 窗口，尾帧 setTimeout 补发不丢）；
+ *  - 实时预览：持久 iframe（0 重载、无白闪），投递走 ready 握手 +
+ *    差量发送，子页累计全文后按完整文档 morph 渲染（见 bootstrapSource）；
  *  - 整页可见：生成中容器高度跟随内容自适应（上限 FIT_CAP），
  *    超上限等比 scale 缩小整页可见；生成结束（done prop）平滑还原标准高度。 */
 const STREAM_FIT_CAP = 420;
 const STREAM_STD_H = 200;
+const STREAM_SEND_GAP = 180; // 实时预览发送节流（父页合帧间隔）
 function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean }) {
   const html = extractHtmlFromPartialJson(argsDelta);
   const [tab, setTab] = useState<'code' | 'live'>('code');
@@ -229,15 +259,17 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
   const htmlRef = useRef('');
   const sentRef = useRef(0);
   const loadedRef = useRef(false);
+  const lastSendRef = useRef(0);
+  const sendTimerRef = useRef<number | null>(null);
   const [fit, setFit] = useState<{ h: number; scale: number } | null>(null);
 
-  // 实时预览增量写入：持久 iframe + 差量追加（见组件注释）。
-  // postMessage 异步且轻，逐帧直写；CSS transition 负责容器高度平滑，
-  // 不再需要 srcDoc 节流（无重载即无闪烁）。尾帧因「每帧直写」天然不丢。
-  // 投递时机只认子页 ready 握手（onLoad 与子页脚本就绪存在竞态，不可作为信号）：
+  // 实时预览投递：持久 iframe + ready 握手 + 差量发送 + 180ms 节流（渲染策略见
+  // bootstrapSource——合帧在父页，子页同步 morph 不吃子框架定时器节流）。
+  // 节流用「距上次发送 ≥GAP 立即发，否则排一个尾帧定时器」：突发 delta 合并、
+  // 尾帧不丢。投递时机只认子页 ready 握手（onLoad 与子页脚本就绪存在竞态）：
   // ready 前到达的内容先攒在 htmlRef，握手后补发全量——切 Tab 重挂 iframe 后
   // （html 未变、[html] effect 不再触发）也靠这条补发，否则整块永远空白。
-  const flush = useCallback(() => {
+  const sendDiff = useCallback(() => {
     const frame = frameRef.current;
     if (!frame || !frame.contentWindow || !loadedRef.current) return;
     const now = htmlRef.current;
@@ -245,13 +277,31 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
     const diff = now.slice(sentRef.current);
     if (!diff) return;
     sentRef.current = now.length;
+    lastSendRef.current = Date.now();
     frame.contentWindow.postMessage({ type: 'chunk', html: diff }, '*');
   }, []);
 
+  const flush = useCallback(() => {
+    const frame = frameRef.current;
+    if (!frame || !frame.contentWindow || !loadedRef.current) return;
+    const elapsed = Date.now() - lastSendRef.current;
+    if (elapsed >= STREAM_SEND_GAP) {
+      if (sendTimerRef.current !== null) { clearTimeout(sendTimerRef.current); sendTimerRef.current = null; }
+      sendDiff();
+    } else if (sendTimerRef.current === null) {
+      sendTimerRef.current = window.setTimeout(() => {
+        sendTimerRef.current = null;
+        sendDiff();
+      }, STREAM_SEND_GAP - elapsed) as unknown as number;
+    }
+  }, [sendDiff]);
+
   // 只在元素真正（重）挂载时归零进度——ref 回调每次渲染都会以 null/el 成对触发，
   // 用 frameRef.current !== el 区分真实挂载，防止渲染期误清已投递进度。
+  // 卸载时清掉待发的尾帧定时器（新 iframe 由 ready 握手重新武装）。
   const attachFrame = useCallback((el: HTMLIFrameElement | null) => {
     if (el && frameRef.current !== el) { sentRef.current = 0; loadedRef.current = false; }
+    if (!el && sendTimerRef.current !== null) { clearTimeout(sendTimerRef.current); sendTimerRef.current = null; }
     frameRef.current = el;
   }, []);
 
