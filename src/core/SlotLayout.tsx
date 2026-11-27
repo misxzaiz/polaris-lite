@@ -7,6 +7,10 @@
  * 无插件注册时回退**固定四槽**（WorkspaceTree 时代之前的形态,不破可用）。
  *
  * 壳层自己只管：顶栏与抽屉、断点、门禁、容器 wiring（viewRegistry 注入布局插件）。
+ *
+ * 2026-11-27：启动告警条（BootNotices）按用户禁令整体移除——提示改由核心
+ * shellState.pushNotice 派发 PLITE_BOOT_NOTICE DOM 事件，notification-center
+ * 插件接收后弹 toast + 落通知 inbox；壳层顶部不再渲染任何常驻告警。
  */
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useAuthGate } from './useAuthGate';
@@ -18,14 +22,11 @@ import { getRuntimeComponent } from './externalPlugins';
 import { viewRegistry } from './workspace/viewRegistry';
 import type { LayoutRootProps, TopbarChromeProps } from './types';
 import {
-  dismissNotice,
   getDrawer,
   getIsNarrow,
-  getNotices,
   setDrawer,
   subscribeDrawer,
   subscribeNarrow,
-  subscribeNotices,
 } from './shellState';
 
 function MenuIcon() {
@@ -53,31 +54,6 @@ function Splash() {
         <span />
         <span />
       </div>
-    </div>
-  );
-}
-
-/**
- * 启动告警条：壳层第一行，占位而非浮层。
- * 以前是 fixed 覆盖层，会把侧栏品牌和面板 tab 条压掉——出问题时更需要看清界面。
- */
-function BootNotices() {
-  const notices = useSyncExternalStore(subscribeNotices, getNotices, getNotices);
-  if (notices.length === 0) return null;
-  return (
-    <div className="plite-boot-notices">
-      {notices.map((n) => (
-        <div className="plite-load-warning" key={n.id} role="alert">
-          <span className="plite-load-warning-text">
-            {n.title}：{n.lines.join('；')}
-          </span>
-          <button type="button" className="plite-load-warning-close" aria-label="关闭提示" onClick={() => dismissNotice(n.id)}>
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
-      ))}
     </div>
   );
 }
@@ -189,7 +165,6 @@ export function SlotLayout() {
     // 把告警藏在登录墙后面等于让人在无信息状态下排查。
     return (
       <div className="shell-gate-wrap">
-        <BootNotices />
         <main className="shell-gate">
           <SlotOutlet slot="auth" />
         </main>
@@ -203,7 +178,6 @@ export function SlotLayout() {
       data-layout={LayoutComp ? 'workspace-tree' : 'fixed-slots'}
       data-drawer={drawer}
     >
-      <BootNotices />
 
       <header className="shell-topbar">
         {TopbarComp ? (

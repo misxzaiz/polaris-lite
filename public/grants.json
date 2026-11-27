@@ -1,5 +1,5 @@
 {
-  "version": "27",
+  "version": 2,
   "unlistedPolicy": "declare",
   "plugins": {
     "config-manager": {
@@ -448,6 +448,11 @@
       "capabilities": [
         "cap.kv"
       ],
+      "provides": [],
+      "events": []
+    },
+    "sensenova-usage": {
+      "capabilities": [],
       "provides": [],
       "events": []
     }

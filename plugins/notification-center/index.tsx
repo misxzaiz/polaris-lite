@@ -10,7 +10,9 @@
  *    - AI 流式回复进行中挂起（不遮挡生成中内容），message.done/error 后补弹
  *      （对齐 app-updater 的流式保护模式）。
  * 2. panel 槽「通知」Tab：历史列表 / 全部已读 / 清空。
- * 3. 面板直达深链：监听 @sdk CHANNEL_PANEL_INTENT 事件，收到 { slot, title } 意图时
+ * 3. 宿主启动告警（2026-11-27 用户禁令：禁止放壳层顶部）：监听核心派发的
+ *    PLITE_BOOT_NOTICE DOM 事件（插件加载失败/权限收紧等），转成 toast + inbox。
+ * 4. 面板直达深链：监听 @sdk CHANNEL_PANEL_INTENT 事件，收到 { slot, title } 意图时
  *    写 plite.slot.active.<slot>（SlotOutlet 的激活持久化键）——宿主零改动实现
  *    「会话设置点通知 → 右栏直接停在通知面板」。
  *
@@ -410,10 +412,40 @@ export const notificationCenterPlugin: LitePlugin = {
     void loadPrefs();
     api.registerCapability.register('cap.ui.notify', createNotifyHandler());
     watchSessionEvents(api);
+    listenBootNotices();
     // ToastHost 不经槽位：直接挂 body（面板卸载不影响 toast 常驻）
     mountToastHost();
   },
 };
+
+/**
+ * 宿主启动告警接入（2026-11-27 用户禁令：禁止把启动提示放壳层顶部常驻条）。
+ * 核心只在 window 上派发 PLITE_BOOT_NOTICE DOM 事件（事件名就地字面量对齐：
+ * arch 门禁——核心不 import 插件，插件不 import 核心）——这里接收并转成
+ * toast + inbox 通知；本插件被禁用时核心退化为 console.warn，不会静默。
+ */
+let bootNoticesBound = false;
+function listenBootNotices(): void {
+  if (bootNoticesBound || typeof window === 'undefined') return;
+  bootNoticesBound = true;
+  window.addEventListener('plite-boot-notice', (e) => {
+    const detail = (e as CustomEvent<{ title?: unknown; lines?: unknown }>).detail;
+    const title = typeof detail?.title === 'string' ? detail.title : '启动告警';
+    const lines = Array.isArray(detail?.lines) ? detail.lines.filter((x): x is string => typeof x === 'string') : [];
+    if (lines.length === 0) return;
+    const body = lines.join('；');
+    void notifyHostBoot({ title, body });
+  });
+}
+
+/** 经本插件的 cap.ui.notify 通道发通知（与外部 dispatch 同一条路：toast + inbox） */
+async function notifyHostBoot(item: { title: string; body: string }): Promise<void> {
+  const handler = createNotifyHandler();
+  await handler(
+    { target: 'cap.ui.notify', action: 'push', payload: { ...item, level: 'warn', dedupeKey: `boot:${item.title}:${item.body}` } },
+    { pluginId: 'notification-center', capabilities: ['cap.kv'] },
+  );
+}
 
 let hostMounted = false;
 function mountToastHost(): void {

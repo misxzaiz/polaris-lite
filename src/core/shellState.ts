@@ -126,44 +126,24 @@ export function isMobileViewport(): boolean {
 /**
  * 启动告警（插件加载失败 / 权限收紧 / 视图声明被拒）。
  *
- * 以前是 `document.body.appendChild(<div position:fixed>)`：它盖在壳层最上方，
- * 把侧栏品牌和面板自己的 tab 条一起压掉 37px——出问题的场景恰恰最需要看清界面。
- * 改成壳层里的第一行（flex 子项），告警占位、界面下移，且可以关掉。
- *
- * 也不能只打在 console：插件没装成功在 UI 上表现为「某个面板空了」，
- * 用户和开发者都不会去看控制台。
+ * 2026-11-27 用户禁令：禁止把启动提示放壳层顶部（常驻告警条很烦）。
+ * 现在只派发 DOM 事件 PLITE_BOOT_NOTICE，由 notification-center 插件接收：
+ * 弹 toast + 落通知中心 inbox（可回看），壳层顶部不再渲染任何告警条。
+ * 通知中心未装配时退化为 console.warn——不能让插件故障变成完全静默。
  */
+export const BOOT_NOTICE_EVENT = 'plite-boot-notice';
+
 export interface BootNotice {
-  id: number;
   title: string;
   lines: string[];
 }
 
-let notices: BootNotice[] = [];
-let noticeSeq = 0;
-const noticeSubs = new Set<() => void>();
-
 export function pushNotice(title: string, lines: string[]): void {
   if (lines.length === 0) return;
-  noticeSeq += 1;
-  notices = [...notices, { id: noticeSeq, title, lines }];
-  noticeSubs.forEach((fn) => fn());
-}
-
-export function dismissNotice(id: number): void {
-  const next = notices.filter((n) => n.id !== id);
-  if (next.length === notices.length) return;
-  notices = next;
-  noticeSubs.forEach((fn) => fn());
-}
-
-export function getNotices(): BootNotice[] {
-  return notices;
-}
-
-export function subscribeNotices(fn: () => void): () => void {
-  noticeSubs.add(fn);
-  return () => {
-    noticeSubs.delete(fn);
-  };
+  console.warn(`[polaris-lite] ${title}:`, lines);
+  try {
+    window.dispatchEvent(
+      new CustomEvent<BootNotice>(BOOT_NOTICE_EVENT, { detail: { title, lines } }),
+    );
+  } catch { /* 非浏览器环境忽略 */ }
 }

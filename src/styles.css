@@ -237,7 +237,7 @@ body.ws-dragging-tab { cursor: grabbing; }
 .ws-tabpanel:hover > .ws-tab-close,
 .ws-tabpanel > .ws-tab-close:focus-visible { opacity: 1; }
 /* ===== auth 门禁 ===== */
-/* 登录墙外层：允许顶部叠加启动告警（告警占位，登录页占剩余高度） */
+/* 登录墙外层：纵向 flex，登录页占剩余高度（2026-11-27 起顶部不再叠加启动告警条） */
 .shell-gate-wrap {
   display: flex;
   flex-direction: column;
@@ -331,46 +331,6 @@ body.ws-dragging-tab { cursor: grabbing; }
 .slot-error { color: var(--plite-danger); }
 
 /* 插件业务样式随插件走；核心只持有 .shell-* 与 .slot-* */
-/* 启动告警：壳层第一行的**占位**元素，不是浮层。
-   浮层会盖住侧栏品牌与面板 tab 条——而出问题的时候恰恰最需要看清界面。 */
-.plite-boot-notices {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  z-index: 60;
-}
-.plite-load-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 9px 14px 9px 18px;
-  background: var(--bg-elevated);
-  color: var(--plite-danger);
-  border-bottom: 1px solid var(--border-strong);
-  font-size: 12px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  backdrop-filter: blur(16px);
-}
-.plite-load-warning-text { flex: 1 1 auto; min-width: 0; }
-.plite-load-warning-close {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-.plite-load-warning-close:hover { color: var(--text); background: var(--bg-hover); }
-.plite-load-warning-close svg { width: 12px; height: 12px; }
-
 /* 布局快照损坏 / 部分视图不可用时的非阻塞提示 */
 .plite-layout-notice {
   position: fixed;

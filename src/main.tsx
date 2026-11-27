@@ -18,7 +18,8 @@ import { getRuntimeComponent, loadExternalPlugins } from '@/core/externalPlugins
 import '@/plite-tokens.css';
 import '@/styles.css';
 
-/** 可见的启动告警（渲染在壳层第一行；仅 console 会让「插件没装成功」变成静默故障） */
+/** 启动告警：不再渲染壳层顶部（2026-11-27 用户禁令），经 shellState.pushNotice
+ *  派发 DOM 事件 → notification-center 弹 toast + 落 inbox 可回看；console 同步留底。 */
 function showBootNotice(title: string, lines: string[]): void {
   pushNotice(title, lines);
 }
