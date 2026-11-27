@@ -178,11 +178,16 @@ export function recordUsage(p: {
   model?: string;
 }): void {
   if (!p.sessionId || !p.messageId) return;
-  const id = `${p.sessionId}::${p.messageId}`;
+  // 轮次唯一 id（2026-11-27 丢账修复）：agent-loop 每轮 engineTurn 都 emit 一条
+  // ai.usage（messageId 同为 assistantId），按 messageId 去重会丢掉后续轮次
+  // （9826 实测丢账 94%、缓存恒为第一轮的 2176 系统前缀）。改为含 at 的轮次 id，
+  // 每轮各记一条；同 id（同轮重复 flush/转发）仍幂等跳过。
+  const at = p.at ?? Date.now();
+  const id = `${p.sessionId}::${p.messageId}::${at}`;
   if (seenIds.has(id)) return;
   const rec: UsageRecord = {
     id,
-    at: p.at ?? Date.now(),
+    at,
     sessionId: p.sessionId,
     messageId: p.messageId,
     model: p.model,
@@ -361,6 +366,22 @@ export async function isKvReady(): Promise<boolean> {
   return res.ok;
 }
 
+/**
+ * 服务端重导（2026-11-27 丢账修复）：调 token-ledger server 半边的
+ * POST /api/token-ledger/backfill-agent-runs，把 agent-runs/*.events.jsonl
+ * 里的逐轮 ai.usage 全部补进台账。幂等（server 按 id 去重），可重复调用。
+ */
+export async function backfillFromAgentRuns(): Promise<number> {
+  try {
+    const res = await fetch('/api/token-ledger/backfill-agent-runs', { method: 'POST' });
+    if (!res.ok) return 0;
+    const j = (await res.json()) as { ok?: boolean; imported?: number };
+    return j.ok === true ? Math.max(0, Number(j.imported ?? 0)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** 宿主 api 是否已注入（index.ts setup 时调用 setLedgerApi） */
 export function hasApi(): boolean {
   return api !== null;
@@ -478,7 +499,7 @@ export async function migrateFromIndexedDb(): Promise<number> {
  * 首次启动自动删除旧 bf: 记录并按新口径重导——源数据在 ai-events IndexedDB，
  * 重导幂等，不产生双账。
  */
-const BACKFILL_VER = 2;
+const BACKFILL_VER = 3;
 
 export async function backfillFromRequests(): Promise<number> {
   if (typeof indexedDB === 'undefined') return 0;

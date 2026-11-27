@@ -11,7 +11,7 @@
  * 通道并跳过，优先记 agent-loop 转发的那份（与 ai-events 同一约定）。
  */
 import type { LitePlugin, SlotHostApi } from '@sdk';
-import { recordUsage, setLedgerApi } from './ledgerStore';
+import { recordUsage, setLedgerApi, backfillFromRequests, backfillFromAgentRuns, flush } from './ledgerStore';
 import { LedgerPanel } from './LedgerPanel';
 import './token-ledger.css';
 
@@ -31,7 +31,7 @@ export const tokenLedgerPlugin: LitePlugin = {
   manifest: {
     id: 'token-ledger',
     name: 'Token 台账',
-    version: '0.2.0',
+    version: '0.3.0',
     capabilities: ['cap.kv'],
     provides: [],
     // listen 是 fail-closed：事件名须同时出现在 manifest 与 grants.json
@@ -57,6 +57,14 @@ export const tokenLedgerPlugin: LitePlugin = {
     api.listen('cap.ai.chat:event', onEvent);
     // runner 通道的 envelope 是 {source, payload}（无 kind），流式事件是 {source, kind, payload}；
     // 与 cap 通道统一交给 onEvent（读 kind === 'ai.usage'）
+    // 丢账修复（v0.3.0）：backfillVer < 3 的账本只记了每消息第一轮，
+    // 服务端 agent-runs 有全量逐轮原件——升级后自动重导一次，幂等可重试。
+    void (async () => {
+      const n1 = await backfillFromRequests();
+      const n2 = await backfillFromAgentRuns();
+      if (n1 + n2 > 0) await flush();
+    })();
+
     api.listen('cap.ai.chat.runner:event', (raw) => {
       const wrap = raw as { payload?: unknown };
       onEvent((wrap.payload ?? raw) as Record<string, unknown>);

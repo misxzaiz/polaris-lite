@@ -55,6 +55,8 @@ const RAW_SERVER_PLUGINS = [
   // pocket-ledger / starter-suggestions：无自有 HTTP 路由，仅注册各自的 AI 工具声明
   // （ledger / suggestions）。工具实现留在插件内，runner 不认识具体工具。
   { id: 'pocket-ledger', entry: './pocket-ledger/server.mjs' },
+  // token-ledger：台账服务端半边——agent-runs 逐轮 usage 重导端点（2026-11-27 丢账修复）
+  { id: 'token-ledger', entry: './token-ledger/server.mjs' },
   { id: 'starter-suggestions', entry: './starter-suggestions/server.mjs' },
   // deploy-panel：9826 一键部署（/api/deploy/*）。端点内部再按 PLITE_DEPLOY_PANEL=1
   // 二次门禁——即使产物被发布到 9825，端点也不存在。
