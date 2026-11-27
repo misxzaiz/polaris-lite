@@ -51,6 +51,10 @@ interface DayAgg {
   cached: number;
   turns: number;
   est: number;
+  /** 真实轮（供应商回了 usage）的输入合计——缓存命中率分母，排除 estimated 估算轮 */
+  realIn?: number;
+  /** 供应商回传了缓存字段（cached>0）的轮数 */
+  cachedTurns?: number;
 }
 
 interface Totals {
@@ -219,13 +223,19 @@ function scheduleFlush(): void {
 
 function aggFromRows(rows: UsageRecord[]): DayAgg {
   const a = emptyAgg();
+  let realIn = 0;
+  let cachedTurns = 0;
   for (const r of rows) {
     a.in += r.inputTokens;
     a.out += r.outputTokens;
     a.cached += r.cachedTokens ?? 0;
+    if (!r.estimated) realIn += r.inputTokens;
+    if ((r.cachedTokens ?? 0) > 0) cachedTurns += 1;
     if (r.estimated) a.est += 1;
     a.turns += 1;
   }
+  a.realIn = realIn;
+  a.cachedTurns = cachedTurns;
   return a;
 }
 
@@ -238,6 +248,8 @@ function recalcGrand(t: Totals): void {
       g.cached += d.cached;
       g.turns += d.turns;
       g.est += d.est;
+      g.realIn = (g.realIn ?? 0) + (d.realIn ?? 0);
+      g.cachedTurns = (g.cachedTurns ?? 0) + (d.cachedTurns ?? 0);
     }
   }
   t.grand = g;
@@ -356,29 +368,36 @@ export function hasApi(): boolean {
 
 /* ---------------- 历史回填：ai-events 的 requests.sse.usage ---------------- */
 
-/** OpenAI 兼容 usage 帧的形状（prompt_tokens / completion_tokens / cache_*） */
+/** OpenAI 兼容 usage 帧的形状（含 DeepSeek/GLM 方言变体） */
 interface WireUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number; cache_creation_tokens?: number };
   completion_tokens_details?: { reasoning_tokens?: number };
+  /** DeepSeek/GLM 方言：缓存命中 / 未命中（对齐 shared/usage.ts 提取链） */
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
+/**
+ * 解析 usage 帧。缓存提取链与引擎实时链路（shared/usage.ts buildUsagePayload）完全一致：
+ * 标准 prompt_tokens_details 优先，DeepSeek/GLM 变体兜底——否则回填历史会系统性少算缓存。
+ */
 function parseWireUsage(raw: unknown): { input: number; output: number; cached?: number; cacheCreation?: number } | null {
   if (!raw || typeof raw !== 'object') return null;
   const u = raw as WireUsage;
   const input = Number(u.prompt_tokens ?? NaN);
   const output = Number(u.completion_tokens ?? NaN);
   if (!Number.isFinite(input) || !Number.isFinite(output)) return null;
-  const cached = u.prompt_tokens_details?.cached_tokens;
+  const cached = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens;
+  const cacheCreation = u.prompt_tokens_details?.cache_creation_tokens ?? u.prompt_cache_miss_tokens;
   return {
     input: Math.max(0, input),
     output: Math.max(0, output),
-    cached: cached != null ? Math.max(0, Number(cached)) : undefined,
-    cacheCreation: u.prompt_tokens_details?.cache_creation_tokens != null
-      ? Math.max(0, Number(u.prompt_tokens_details.cache_creation_tokens))
-      : undefined,
+    cached: cached != null && Number.isFinite(Number(cached)) ? Math.max(0, Number(cached)) : undefined,
+    cacheCreation:
+      cacheCreation != null && Number.isFinite(Number(cacheCreation)) ? Math.max(0, Number(cacheCreation)) : undefined,
   };
 }
 
@@ -452,12 +471,34 @@ export async function migrateFromIndexedDb(): Promise<number> {
 
 /**
  * 从 ai-events 的 IndexedDB（plite-ai-events / requests）回填历史 usage。
- * 请求 id 作为 messageId，天然按请求去重；kv meta 标记只跑一次。
- * 返回回填条数（面板首次可提示「已从网络取证导入 N 条」）。
+ * 请求 id 作为 messageId，天然按请求去重。
+ *
+ * 版本化（backfillVer）：v1 的 parseWireUsage 只认 OpenAI 标准方言，DeepSeek/GLM
+ * 供应商的历史记录 cachedTokens 会丢失（缓存少算）。v2 补齐方言后，升级用户
+ * 首次启动自动删除旧 bf: 记录并按新口径重导——源数据在 ai-events IndexedDB，
+ * 重导幂等，不产生双账。
  */
+const BACKFILL_VER = 2;
+
 export async function backfillFromRequests(): Promise<number> {
   if (typeof indexedDB === 'undefined') return 0;
-  if (await getMetaFlag('backfilled')) return 0;
+  const meta = (await kvGet<Record<string, unknown>>(KEY_META)) ?? {};
+  const ver = typeof meta.backfillVer === 'number' ? meta.backfillVer : meta.backfilled === true ? 1 : 0;
+  if (ver >= BACKFILL_VER) return 0;
+  // v1 → v2：旧 bf: 记录按新口径重导（先删，避免同 id 被幂等跳过导致旧值残留）
+  if (ver === 1) {
+    const removedDays = await purgeBackfillRows();
+    if (removedDays.length > 0) {
+      const totals = (await kvGet<Totals>(KEY_TOTALS)) ?? emptyTotals();
+      for (const dk of removedDays) {
+        const arr = (await kvGet<UsageRecord[]>(dk)) ?? [];
+        totals.months[dk.slice(4, 11)] ??= {};
+        totals.months[dk.slice(4, 11)][dk.slice(8)] = aggFromRows(arr);
+      }
+      recalcGrand(totals);
+      await kvSet(KEY_TOTALS, totals);
+    }
+  }
   const out: UsageRecord[] = [];
   await new Promise<void>((resolve) => {
     let req: IDBOpenDBRequest;
@@ -474,7 +515,7 @@ export async function backfillFromRequests(): Promise<number> {
         return;
       }
       const tx = db.transaction('requests', 'readonly');
-      const cur = tx.objectStore('requests').index('byAt').openCursor(null, 'prev');
+      const cur = tx.objectStore('requests').openCursor();
       cur.onsuccess = () => {
         const c = cur.result;
         if (!c) {
@@ -516,11 +557,32 @@ export async function backfillFromRequests(): Promise<number> {
     req.onblocked = () => resolve();
   });
   await setMetaFlag('backfilled');
+  const m2 = (await kvGet<Record<string, unknown>>(KEY_META)) ?? {};
+  m2.backfillVer = BACKFILL_VER;
+  await kvSet(KEY_META, m2);
   if (out.length === 0) return 0;
   const n = appendRows(out);
   dirty = true;
   await flush();
   return n;
+}
+
+/**
+ * 删除所有 bf: 回填记录（保留实时记账），返回受影响的 dayKey 列表。
+ * 用于解析口径升级后的重导前清理。
+ */
+async function purgeBackfillRows(): Promise<string[]> {
+  const affected: string[] = [];
+  for (const dk of await kvDayKeys()) {
+    const arr = (await kvGet<UsageRecord[]>(dk)) ?? [];
+    const kept = arr.filter((r) => !r.id.startsWith('bf:'));
+    if (kept.length !== arr.length) {
+      await kvSet(dk, kept);
+      affected.push(dk);
+      dirty = true;
+    }
+  }
+  return affected;
 }
 
 /* ---------------- 导出 ---------------- */

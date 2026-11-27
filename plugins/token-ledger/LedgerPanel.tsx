@@ -58,6 +58,7 @@ export function LedgerPanel() {
   const [grandIn, setGrandIn] = useState<number | null>(null);
   const [grandOut, setGrandOut] = useState(0);
   const [grandCached, setGrandCached] = useState(0);
+  const [grandRealIn, setGrandRealIn] = useState(0);
   const [grandTurns, setGrandTurns] = useState(0);
   const [grandEst, setGrandEst] = useState(0);
 
@@ -83,6 +84,7 @@ export function LedgerPanel() {
     setGrandIn(totals.grand.in);
     setGrandOut(totals.grand.out);
     setGrandCached(totals.grand.cached);
+    setGrandRealIn(totals.grand.realIn ?? totals.grand.in);
     setGrandTurns(totals.grand.turns);
     setGrandEst(totals.grand.est);
     const ms = await listMonths();
@@ -301,7 +303,7 @@ export function LedgerPanel() {
               </div>
               <div className="tlg-v tlg-c-in">
                 {fmtTokens(grandCached)}
-                <small>{grandIn ? ` ${Math.round((grandCached / (grandIn ?? 1)) * 100)}%` : ''}</small>
+                <small>{grandRealIn ? ` ${Math.round((grandCached / grandRealIn) * 100)}%` : ''}</small>
               </div>
               <div className="tlg-sub">估算轮次 {grandEst}（供应商未回 usage）</div>
             </div>
@@ -387,7 +389,9 @@ export function LedgerPanel() {
                       <td className="tlg-mut">{fmtClock(r.at)}</td>
                       <td className="tlg-sess" title={r.sessionId}>{sessionTail(r.sessionId)}</td>
                       <td className="tlg-ta-r tlg-c-in">{fmtFull(r.inputTokens)}</td>
-                      <td className="tlg-ta-r">{r.cachedTokens != null ? fmtFull(r.cachedTokens) : '—'}</td>
+                      <td className="tlg-ta-r" title="N/A：供应商未回传缓存字段，非 0">
+                        {r.cachedTokens != null ? fmtFull(r.cachedTokens) : 'N/A'}
+                      </td>
                       <td className="tlg-ta-r tlg-c-out">{fmtFull(r.outputTokens)}</td>
                       <td className="tlg-ta-r">
                         {r.estimated ? (
