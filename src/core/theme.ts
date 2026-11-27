@@ -6,8 +6,8 @@
  * 这里作为 JS 侧唯一出处；tokens 的 `--bg` 保持语义一致（tokens 注释亦指向本文件）。
  */
 export const THEME_COLORS = {
-  light: '#f6f8fa',
-  dark: '#0d1117',
+  light: '#ffffff',
+  dark: '#16161a',
 } as const;
 
 export type ThemeMode = keyof typeof THEME_COLORS;

@@ -1,43 +1,40 @@
 /**
- * polaris-lite 设计令牌：双主题——GitHub Primer 同款（浅色 / 深色）。
+ * polaris-lite 设计令牌：双主题——「静谧蓝白」（默认，私人银行式简约）与「曜石黑」。
  * 壳层与插件共同消费；插件只读令牌，不在局部另起一套品牌色。
  *
  * 主题切换由宿主写 document.documentElement.dataset.theme，
  * 本文件只描述两套令牌值；所有衍生色（边框、柔和底、焦点环）从 RGB 三元组推导，
  * 保证插件样式里 rgba(var(--accent-rgb), a) 之类的写法在两套主题下同时成立。
- *
- * 2026-11-27 体感重构：改用 GitHub Primer 令牌（github.com 日/夜两版原值）。
- * 原「静谧蓝白/曜石黑」正文对比 17:1 / 12:1 且正文仅 13px，深色反射率 1% 户外不可读。
- * 新方案：对比 15~16:1（业界验证区间）、深色底 #0d1117、正文 14px。
  */
 :root {
   color-scheme: light;
 
-  /* ===== GitHub Primer Light ===== */
-  --bg: #f6f8fa;
+  /* ===== 纸感白：微灰画布 + 纯白面板 + 墨蓝文字 + 单一深蓝强调 =====
+   * 2026-11-27 体感修复：纯白画布过亮（正文对比 17.75:1 过曝）。画布降一档
+   * #f7f8fa（16.7:1），面板保持纯白，层次由底色差 + 细线共同撑起。 */
+  --bg: #f7f8fa;
   --bg-panel: #ffffff;
-  --bg-hover: #eaeef2;
+  --bg-hover: #eef0f4;
   --bg-elevated: #ffffff;
   --bg-translucent: rgba(255, 255, 255, 0.92);
-  --bg-code: #eff1f4;
+  --bg-code: #f6f8fb;
 
-  --border-rgb: 31, 35, 40;
-  --border: rgba(31, 35, 40, 0.12);
-  --border-strong: rgba(9, 105, 218, 0.4);
+  --border-rgb: 15, 23, 42;
+  --border: rgba(15, 23, 42, 0.075);
+  --border-strong: rgba(29, 78, 216, 0.3);
 
-  --text: #1f2328;
-  --text-soft: #3d434d;
-  --text-dim: #59636e;
-  --text-faint: #808a95;
+  --text: #101828;
+  --text-soft: #384255;
+  --text-dim: #5d6473;
+  --text-faint: #858ca0;
 
-  --accent-rgb: 9, 105, 218;
-  --accent: #0969da;
-  --accent-bright: #218bff;
-  --accent-soft: rgba(9, 105, 218, 0.08);
+  --accent-rgb: 29, 78, 216;
+  --accent: #1d4ed8;
+  --accent-bright: #3d6cf0;
+  --accent-soft: rgba(29, 78, 216, 0.07);
   --on-accent: #ffffff;
 
-  --mask-bg: rgba(31, 35, 40, 0.4);
-
+  --mask-bg: rgba(15, 23, 42, 0.3);
   --radius: 10px;
   --radius-lg: 16px;
   --plite-radius-sm: 6px;
@@ -54,35 +51,48 @@
   --plite-h-md: 38px;
   --plite-h-lg: 44px;
 
-  /* 字级：正文实际在 chat-lite 的 .chat-bubble（14px/1.85），本变量供插件次级文本消费 */
+  /* 字级：正文稍放松，标签更小、更克制 */
   --plite-fs-xs: 11px;
   --plite-fs-sm: 12px;
-  --plite-fs-md: 14px;
+  --plite-fs-md: 13px;
   --plite-fs-lg: 20px;
   --plite-font-sans: Inter, 'SF Pro Text', 'SF Pro Display', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --plite-font-display: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
   --plite-font-mono: 'SFMono-Regular', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
 
   /* 语义色：浅色底上加深一档，保证对比 */
-  --plite-success: #1a7f37;
-  --plite-warning: #9a6700;
-  --plite-danger: #cf222e;
-  --plite-info: #0969da;
-  --plite-success-soft: rgba(26, 127, 55, 0.1);
-  --plite-warning-soft: rgba(154, 103, 0, 0.1);
-  --plite-danger-soft: rgba(207, 34, 46, 0.1);
-  --plite-info-soft: rgba(9, 105, 218, 0.1);
-  --plite-neutral-soft: rgba(110, 118, 129, 0.1);
+  --plite-success: #1f7a4d;
+  --plite-warning: #9a6b1f;
+  --plite-danger: #c0392f;
+  --plite-info: #35618f;
+  --plite-success-soft: rgba(31, 122, 77, 0.09);
+  --plite-warning-soft: rgba(154, 107, 31, 0.1);
+  --plite-danger-soft: rgba(192, 57, 47, 0.09);
+  --plite-info-soft: rgba(53, 97, 143, 0.09);
+  --plite-neutral-soft: rgba(93, 100, 115, 0.09);
 
-  --plite-focus-ring: 0 0 0 3px rgba(9, 105, 218, 0.25);
-  --plite-shadow-1: 0 18px 50px rgba(31, 35, 40, 0.14);
-  --plite-shadow-2: 0 8px 26px rgba(31, 35, 40, 0.1);
-  --ring: rgba(9, 105, 218, 0.3);
+  /* 焦点 / 阴影 / 动效 */
+  --plite-focus-ring: 0 0 0 3px rgba(29, 78, 216, 0.16);
+  --plite-shadow-1: 0 16px 40px rgba(15, 23, 42, 0.07);
+  --plite-shadow-2: 0 6px 20px rgba(15, 23, 42, 0.05);
+  --plite-dur: 180ms;
+  --plite-dur-slow: 360ms;
+  --plite-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --ctl-bg: #f6f8fa;
-  --ctl-bg-hover: #eaeef2;
-  --ctl-border: rgba(31, 35, 40, 0.15);
-  --ctl-text: #1f2328;
+  /* 兼容别名 */
+  --danger: var(--plite-danger);
+  --danger-soft: var(--plite-danger-soft);
+  --ok: var(--plite-success);
+  --ok-soft: var(--plite-success-soft);
+  --warn: var(--plite-warning);
+  --warn-soft: var(--plite-warning-soft);
+  --ring: rgba(29, 78, 216, 0.2);
+  --neutral-soft: var(--plite-neutral-soft);
+  --muted: var(--text-dim);
+  --ctl-h: var(--plite-h-md);
+  --ctl-h-sm: var(--plite-h-sm);
+  --ctl-font: var(--plite-fs-md);
+  --ctl-font-sm: var(--plite-fs-sm);
   --ctl-radius: 8px;
   --ctl-focus-ring: var(--plite-focus-ring);
   --control-h: var(--plite-h-md);
@@ -91,49 +101,45 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ===== GitHub Primer Dark ===== */
-  --bg: #0d1117;
-  --bg-panel: #161b22;
-  --bg-hover: #1c2129;
-  --bg-elevated: #21262d;
-  --bg-translucent: rgba(13, 17, 23, 0.92);
-  --bg-code: #161b22;
+  /* ===== 曜石黑：低饱和暖黑 + 香槟金 =====
+   * 2026-11-27 体感修复：原 #0b0b0d 过暗且阶梯差仅 1.03（分层不可见）。
+   * 阶梯整体上移一档：bg→#16161a、正文→#e2ded6（13.4:1 舒适区）。 */
+  --bg: #16161a;
+  --bg-panel: #1c1c21;
+  --bg-hover: #26262c;
+  --bg-elevated: #222228;
+  --bg-translucent: rgba(28, 28, 33, 0.96);
+  --bg-code: #121215;
 
-  --border-rgb: 240, 246, 252;
-  --border: rgba(240, 246, 252, 0.1);
-  --border-strong: rgba(88, 166, 255, 0.45);
+  --border-rgb: 230, 220, 200;
+  --border: rgba(230, 220, 200, 0.11);
+  --border-strong: rgba(210, 180, 126, 0.28);
 
-  --text: #e6edf3;
-  --text-soft: #c6cdd5;
-  --text-dim: #98a1ad;
-  --text-faint: #6e7681;
+  --text: #e2ded6;
+  --text-soft: #b8b2a8;
+  --text-dim: #a29d94;
+  --text-faint: #79746c;
 
-  --accent-rgb: 88, 166, 255;
-  --accent: #58a6ff;
-  --accent-bright: #79b8ff;
-  --accent-soft: rgba(88, 166, 255, 0.12);
-  --on-accent: #0d2138;
+  --accent-rgb: 199, 166, 107;
+  --accent: #c7a66b;
+  --accent-bright: #e0c28c;
+  --accent-soft: rgba(199, 166, 107, 0.1);
+  --on-accent: #17130d;
 
-  --mask-bg: rgba(1, 4, 9, 0.7);
+  --mask-bg: rgba(0, 0, 0, 0.74);
 
-  /* 语义色：Primer Dark 原值 */
-  --plite-success: #3fb950;
-  --plite-warning: #d29922;
-  --plite-danger: #f85149;
-  --plite-info: #58a6ff;
-  --plite-success-soft: rgba(63, 185, 80, 0.12);
-  --plite-warning-soft: rgba(210, 153, 34, 0.12);
-  --plite-danger-soft: rgba(248, 81, 73, 0.12);
-  --plite-info-soft: rgba(88, 166, 255, 0.12);
-  --plite-neutral-soft: rgba(110, 118, 129, 0.14);
+  --plite-success: #83aa90;
+  --plite-warning: #c9a66a;
+  --plite-danger: #d17b72;
+  --plite-info: #91a7b7;
+  --plite-success-soft: rgba(131, 170, 144, 0.1);
+  --plite-warning-soft: rgba(201, 166, 106, 0.1);
+  --plite-danger-soft: rgba(209, 123, 114, 0.1);
+  --plite-info-soft: rgba(145, 167, 183, 0.1);
+  --plite-neutral-soft: rgba(152, 147, 138, 0.09);
 
-  --plite-focus-ring: 0 0 0 3px rgba(88, 166, 255, 0.3);
-  --plite-shadow-1: 0 18px 50px rgba(1, 4, 9, 0.6);
-  --plite-shadow-2: 0 8px 26px rgba(1, 4, 9, 0.4);
-  --ring: rgba(88, 166, 255, 0.35);
-
-  --ctl-bg: #161b22;
-  --ctl-bg-hover: #21262d;
-  --ctl-border: rgba(240, 246, 252, 0.14);
-  --ctl-text: #e6edf3;
+  --plite-focus-ring: 0 0 0 3px rgba(199, 166, 107, 0.18);
+  --plite-shadow-1: 0 18px 50px rgba(0, 0, 0, 0.36);
+  --plite-shadow-2: 0 8px 26px rgba(0, 0, 0, 0.16);
+  --ring: rgba(199, 166, 107, 0.2);
 }
