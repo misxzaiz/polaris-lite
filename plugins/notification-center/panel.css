@@ -40,6 +40,8 @@
 .ncp-item[data-level='error'] { --nc-c: var(--plite-danger); --nc-c-soft: var(--plite-danger-soft); }
 .ncp-main { flex: 1 1 auto; min-width: 0; }
 .ncp-t { font-size: var(--plite-fs-sm); font-weight: 600; color: var(--text); line-height: 1.4; }
+.ncp-item:not(.unread) .ncp-t { font-weight: 400; color: var(--text-dim); }
+.ncp-item:not(.unread) .ncp-ico { opacity: 0.55; }
 .ncp-d { font-size: var(--plite-fs-xs); color: var(--text-dim); margin-top: 2px; line-height: 1.5; overflow-wrap: anywhere; }
 .ncp-time { margin-left: auto; flex: 0 0 auto; font-size: var(--plite-fs-xs); color: var(--text-faint); }
 .ncp-foot { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid var(--border); font-size: var(--plite-fs-xs); color: var(--text-faint); }
@@ -91,7 +93,7 @@
 }
 .nc-toast .nc-close:hover { color: var(--text); background: var(--bg-hover); }
 .nc-toast .nc-close svg { width: 12px; height: 12px; }
-.nc-life { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--nc-c); opacity: 0.35; animation: nc-life linear both; }
+.nc-life { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--nc-c); opacity: 0.12; animation: nc-life linear both; }
 @keyframes nc-life { from { width: 100%; } to { width: 0; } }
 .nc-more {
   pointer-events: auto; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;

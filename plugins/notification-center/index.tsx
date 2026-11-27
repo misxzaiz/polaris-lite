@@ -97,7 +97,6 @@ function ToastHost(): JSX.Element | null {
   const [root, setRoot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const off = subscribe(force);
-    const t = window.setInterval(force, 1000); // 进度条动画兜底重绘（动画本身走 CSS）
     const find = (): void => setRoot(document.getElementById('plite-overlay-root'));
     find();
     // overlay root 在壳层首帧后才存在；插件 setup 早于渲染，轮询到为止
@@ -107,7 +106,6 @@ function ToastHost(): JSX.Element | null {
     }, 300);
     return () => {
       off();
-      window.clearInterval(t);
       window.clearInterval(iv);
     };
   }, [force]);
