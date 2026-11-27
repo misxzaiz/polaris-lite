@@ -327,8 +327,7 @@
       "capabilities": [],
       "provides": [],
       "events": [
-        "session.title:changed",
-        "cap.ai.chat.runner:event"
+        "session.title:changed"
       ]
     },
     "shell-chrome": {
