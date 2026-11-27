@@ -366,7 +366,10 @@ export function createServerPart(options = {}) {
   function engineTurn(run, args) {
     // 参数增量转发（流式预览）：real-engine 逐帧回调 → tool.args.delta 事件扇出。
     // 合批与 message.delta 同队列（高频率），避免事件洪峰。
+    // model 必须显式透传（9c95019 重构时误删导致 real-engine runTurn 收到
+    // undefined，`model.activeModel` 直接 TypeError——真实引擎会话全挂）。
     return run.engine.runTurn({
+      model: run.model,
       ...args,
       ...(run.engine.id === 'real' || !run.engine.id ? { onToolArgsDelta: (callId, delta) => emitEvent(run, 'tool.args.delta', { sessionId: run.sessionId, messageId: run.assistantId, callId, delta }) } : {}),
     });
