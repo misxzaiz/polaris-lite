@@ -660,17 +660,10 @@
 .tc-stream-stage.settled { height: 200px; }
 .tc-stream-frame {
   width: 100%; height: 100%; border: 1px solid var(--border); border-radius: 6px;
-  background: #fff; display: block; transform-origin: 0 0;
-  transition: transform .35s ease, width .35s ease;
-}
-/* 整页可见徽标：内容超上限等比缩小时标明当前比例 */
-.tc-stream-fitbadge {
-  position: absolute; right: 6px; bottom: 8px;
-  font-size: 9.5px; padding: 2px 8px; border-radius: 999px; pointer-events: none;
-  background: color-mix(in srgb, var(--accent, #a78bfa) 92%, transparent); color: #fff;
+  background: #fff; display: block;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tc-stream-stage, .tc-stream-frame { transition: none !important; }
+  .tc-stream-stage { transition: none !important; }
 }
 .tc-section-label {
   font-size: 10px;
