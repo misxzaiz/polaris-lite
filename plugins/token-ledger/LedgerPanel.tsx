@@ -73,6 +73,7 @@ export function LedgerPanel() {
 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const bootRef = useRef(false);
 
   /* --- 加载函数 --- */
@@ -190,7 +191,20 @@ export function LedgerPanel() {
   }, [visible]);
 
   const maxDay = Math.max(1, ...days.map((d) => d.paidIn + d.cached + d.out));
-  const shownRows = visible.slice(0, 300);
+
+  /* --- 明细分页：每页 50 条，独立于月翻页 --- */
+  const PAGE_SIZE = 50;
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageNum = Math.min(page, totalPages);
+  const pageStart = (pageNum - 1) * PAGE_SIZE;
+  const shownRows = visible.slice(pageStart, pageStart + PAGE_SIZE);
+  // 筛选/翻月后页码越界自动收敛
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+  useEffect(() => {
+    setPage(1);
+  }, [pickModel, pickSession, showEstimated, month]);
 
   const onExport = () => {
     if (visible.length === 0) return;
@@ -397,8 +411,31 @@ export function LedgerPanel() {
               </tfoot>
             </table>
           </div>
-          {visible.length > shownRows.length && (
-            <div className="tlg-more">展示最近 {shownRows.length} / {visible.length} 条；更早记录请翻上月</div>
+          {totalPages > 1 && (
+            <div className="tlg-pager">
+              <button
+                type="button"
+                className="tlg-btn"
+                disabled={pageNum <= 1}
+                onClick={() => setPage(pageNum - 1)}
+                aria-label="上一页"
+              >
+                ‹
+              </button>
+              <span className="tlg-pager-info">
+                第 {pageNum} / {totalPages} 页
+                <small>共 {visible.length} 条</small>
+              </span>
+              <button
+                type="button"
+                className="tlg-btn"
+                disabled={pageNum >= totalPages}
+                onClick={() => setPage(pageNum + 1)}
+                aria-label="下一页"
+              >
+                ›
+              </button>
+            </div>
           )}
         </>
       )}
