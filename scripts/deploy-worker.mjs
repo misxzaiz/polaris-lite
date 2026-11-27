@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { phaseOf } from './deploy-phases.mjs';
+import { cleanEnv } from './sandbox-env.mjs';
 
 const arg = (i, envName, fallback) => String(process.argv[i] ?? process.env[envName] ?? fallback).trim();
 const jobId = arg(3, 'PLITE_DEPLOY_JOB', '');
@@ -86,7 +87,10 @@ const targetSha = job?.targetSha ?? null;
 patchJob({ status: 'running', phase: '准备', pid: process.pid, startedAt });
 log(`[deploy-worker] ${stamp()} 开始（pid ${process.pid}，目标 ${targetSha ? targetSha.slice(0, 7) : 'origin/master'}）`);
 
-const childEnv = { ...process.env, PLITE_SRC_DIR: srcDir, PLITE_9826_DATA_DIR: dataDir };
+// worker 本进程的 env 来自 pm2 daemon 存档（可能被 AI 宿主会话污染出 NODE_OPTIONS
+// safe-delete 垫片 + CODEBUDDY_TOOL_CALL_ID），spawn 子进程时剥离——不然 vite 清 dist
+// 会被「批量删除护栏」误拦（scripts/sandbox-env.mjs 头部有完整事故记录）
+const childEnv = { ...cleanEnv(), PLITE_SRC_DIR: srcDir, PLITE_9826_DATA_DIR: dataDir };
 // 空串会被 deploy-9826 里的 resolve('') 解析成 cwd —— 只在本实例确有覆盖时才传
 if (process.env.PLITE_9826_DIR) childEnv.PLITE_9826_DIR = process.env.PLITE_9826_DIR;
 

@@ -91,6 +91,7 @@ npm run soft:9826 -- log               # 看最近一次软发布的后台日志
 
 | 症状 | 原因 / 处理 |
 |---|---|
+| **部署构建挂 `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":50,...}`** | AI 宿主（WorkBuddy）会话里执行过 pm2 start/restart——pm2 把**调用方 env** 原样存进 app：`NODE_OPTIONS`（safe-delete 垫片）+ `CODEBUDDY_TOOL_CALL_ID`/`CODEBUDDY_SAFE_DELETE_BULK_*` 全套进了 9826/worker 进程。vite emptyOutDir 清 dist 被垫片当「批量删除」拦下，且计数按陈旧 TOOL_CALL_ID 跨 job 累计，越过阈值后面板部署**必挂**（手动从干净终端跑反而能过）。2026-11-27 修复：deploy-9826 / release / deploy-worker 的子进程统一经 `scripts/sandbox-env.mjs` 的 `cleanEnv()` 剥离沙箱变量；再遇此错 → 在仓库本体 `npx pm2 delete polaris-lite-9826 && npx pm2 start ecosystem.config.cjs && npx pm2 save` 重置 app env |
 | **9826 打开什么都没有（UI 空）** | `public/plugins` 是 gitignore 的构建产物，fresh clone 没有；`npm run build` 的 `check:plugins` 只校验不生成。deploy 脚本已带 `build:plugins`；手工补救：clone 里 `npm run build:plugins && npm run sync:dist`，浏览器刷新即可。另注意 `/plugins/registry.json` 404 时会被 SPA fallback 伪装成 index.html——看 Content-Type 或直接 curl 看 JSON |
 | 9826 没更新 | 钉住设计本就如此；先 `git commit` 再 `npm run deploy:9826`，`npm run status:9826` 看差距 |
 | 登录/数据「变空」 | 检查 pm2 里 9826 的 `PLITE_DATA_DIR` 是否绝对路径（`npx pm2 env polaris-lite-9826`） |

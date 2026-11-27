@@ -21,6 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { cleanEnv } from './sandbox-env.mjs';
 
 const SRC = resolve(process.env.PLITE_SRC_DIR ?? 'D:/space/base/polaris-lite');
 const DEST = resolve(process.env.PLITE_9826_DIR ?? 'D:/space/base/polaris-lite-9826');
@@ -29,6 +30,9 @@ const APP = 'polaris-lite-9826';
 const run = (cmd, cwd, { capture = false } = {}) => {
   const r = spawnSync(cmd, {
     cwd, shell: true, encoding: 'utf8',
+    // 剥离 AI 宿主沙箱 env：pm2 可能把会话的 NODE_OPTIONS(safe-delete 垫片) 存进
+    // 本进程，不剥的话 vite 清 dist 会被「批量删除护栏」误拦（scripts/sandbox-env.mjs）
+    env: cleanEnv(),
     stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
   });
   if (r.status !== 0) {
