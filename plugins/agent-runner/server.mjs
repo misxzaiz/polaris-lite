@@ -1033,6 +1033,16 @@ export function createServerPart(options = {}) {
         sysParts.push(`\n\n以下是用户为本会话设定的自定义指令（优先级高于以上默认行为描述，但不得违反环境纪律）：\n${sp.trim()}`);
       }
     } catch { /* 提示词服务不可用：无注入继续 */ }
+    // 长期记忆（long-memory 插件提供，经 service 表取全局注入段）：
+    // 排在自定义指令之后（顺序：内置纪律 → 用户指令 → 记忆段）。开关关闭/无记忆
+    // 时 service 返回 null，静默跳过——插件未装/禁用均无感知，与 system-prompt 同款。
+    try {
+      const lmService = registry?.getService?.('long-memory');
+      const lm = lmService?.get?.();
+      if (typeof lm === 'string' && lm.trim()) {
+        sysParts.push(`\n\n${lm.trim()}`);
+      }
+    } catch { /* 记忆服务不可用：无注入继续 */ }
     const shadow = [{ role: 'system', content: sysParts.join('') }];
     // 多轮会话 shadow 延续：同会话上一 run 的 shadow 仍在（服务端常驻），优先续用——
     // 它包含完整工具调用过程（前端 history 只有可见文本，工具结果会丢）。

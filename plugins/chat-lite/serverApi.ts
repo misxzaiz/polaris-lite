@@ -33,4 +33,6 @@ export const SRV = {
   skills: '/api/skills',
   /** agent-bash：工具执行配置（模式/白名单） */
   tool: '/api/tool',
+  /** long-memory：长期记忆（开关/条数；会话设置分区读写，同款 HTTP 口径） */
+  longMemory: '/api/long-memory',
 } as const;

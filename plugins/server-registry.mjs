@@ -30,6 +30,8 @@ const RAW_SERVER_PLUGINS = [
   { id: 'kv-store', entry: './kv-store/server.mjs' },
   // system-prompt：会话级自定义提示词 service（agent-runner seedShadow 消费；无 HTTP 路由）
   { id: 'system-prompt', entry: './system-prompt/server.mjs' },
+  // long-memory：长期记忆（service 注入 runner + memory 工具 + /api/long-memory/*）
+  { id: 'long-memory', entry: './long-memory/server.mjs' },
   { id: 'plugin-manager', entry: './plugin-manager/server.mjs' },
   { id: 'chat-store', entry: './chat-store/server.mjs' },
   // agent-runner：AI 编排循环服务端执行器（spec：docs/chat-server-orchestration-plan.md B1）

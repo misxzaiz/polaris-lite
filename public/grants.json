@@ -455,6 +455,11 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "long-memory": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }

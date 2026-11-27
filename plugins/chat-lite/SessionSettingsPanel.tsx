@@ -11,7 +11,7 @@
  * 模型选择浮层：叠在面板同位（bottom 对齐面板底缘），选中不自动关。
  * 数据源：同源 HTTP /api/providers/list（chat-lite 无 cap.model.admin 授权面，走 HTTP 免 grants）。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_EVENT, CHANNEL_DRAWER_STATE, type AiEngineInfo } from '@sdk';
 import { type PendingSend } from './store';
@@ -72,6 +72,63 @@ interface ProviderEntry {
 
 /** 弹层定位形态（bottom 贴住锚点上方） */
 interface PopupPos { left: number; width: number; bottom: number; maxHeight: number }
+
+/* ---------------- 长期记忆分区（自包含：同 ShareDrawerRows 形态，ChatInput 零传参）-----
+ * 读写走同源 HTTP（SRV.longMemory，经 serverApi.ts 登记——chat-lite 的唯一跨插件
+ * HTTP 出处纪律）。开关语义：关闭=停用注入与写入、记忆保留不清空（文案明示，防
+ * 「我关了它怎么还记得」的惊吓时刻）。服务不可达（插件未装/禁用）时整分区隐藏
+ * ——「插件被禁用 → 端点消失」是 P0-4 的兜底语义，不算 bug。 */
+function MemoryRows(): JSX.Element | null {
+  const [info, setInfo] = useState<{ enabled: boolean; count: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const r = await fetch(`${SRV.longMemory}/settings`, { credentials: 'include' });
+      if (!r.ok) return;
+      const s = await r.json();
+      if (s && typeof s.enabled === 'boolean') setInfo({ enabled: !!s.enabled, count: Number(s.count) || 0 });
+    } catch { /* 插件未装/禁用：分区隐藏 */ }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const toggle = async (): Promise<void> => {
+    if (!info || busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${SRV.longMemory}/settings`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !info.enabled }),
+      });
+      const next = await r.json().catch(() => null);
+      if (next && typeof next.enabled === 'boolean') setInfo({ enabled: !!next.enabled, count: info.count });
+    } catch { /* 切换失败：保持原状 */ }
+    setBusy(false);
+  };
+
+  if (!info) return null;
+
+  return (
+    <div className="chat-assistant-row">
+      <span className="chat-assistant-key">长期记忆</span>
+      <button
+        className={`chat-trust-chip ${info.enabled ? 'trusted' : ''}`}
+        onClick={() => void toggle()}
+        disabled={busy}
+        aria-pressed={info.enabled}
+        title={info.enabled
+          ? '已开启：新对话注入既有记忆，AI 主动记录值得记住的信息。点击关闭（仅停用，记忆保留不清空）'
+          : '点击开启：AI 记得你们聊过的偏好/决定/配置选择，并在后续对话中运用'}
+      >
+        {info.enabled ? `已开启 · ${info.count} 条` : '关闭'}
+      </button>
+      <span className="chat-row-aux" title="在「记忆」面板查看/编辑/导出/清空记忆条目">仅停用不清空</span>
+    </div>
+  );
+}
 
 interface SessionSettingsPanelProps {
   // ---- 会话标题（头部展示；未设置=「新会话」时回退用户第一句）----
@@ -459,6 +516,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               </button>
             </div>
           )}
+
+          {/* ===== 长期记忆：全局开关（long-memory 插件 HTTP；不可达=分区隐藏）===== */}
+          <div className="chat-assistant-sec">记忆</div>
+          <MemoryRows />
 
           {/* ===== 待发队列 ===== */}
           <div className="chat-assistant-sec">待发队列</div>

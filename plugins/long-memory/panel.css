@@ -1,0 +1,270 @@
+/**
+ * long-memory 插件面板样式。只消费宿主令牌（plite-tokens.css），与
+ * system-prompt / theme-switcher 同款纪律：不写死颜色，浅/深主题自适应。
+ */
+.lm-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+}
+
+/* ---- 头部：开关 + 状态 ---- */
+.lm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.lm-switch {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  border: 1px solid var(--plite-border, #ccc);
+  background: var(--plite-bg-muted, #eee);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.lm-switch.on {
+  background: var(--plite-accent-bg, #eef);
+  border-color: var(--plite-accent, #66f);
+}
+
+.lm-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--plite-fg, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: left 0.15s;
+}
+
+.lm-switch.on .lm-switch-knob {
+  left: 20px;
+}
+
+.lm-head-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.lm-head-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--plite-fg, inherit);
+}
+
+.lm-head-sub {
+  font-size: 12px;
+  color: var(--plite-fg-muted, #888);
+}
+
+/* ---- 通用按钮 ---- */
+.lm-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.lm-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lm-btn-ghost {
+  background: transparent;
+}
+
+.lm-btn-danger {
+  border-color: var(--plite-danger, #c33);
+  color: var(--plite-danger, #c33);
+}
+
+/* ---- 添加行 ---- */
+.lm-add {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.lm-add-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 13px;
+}
+
+/* ---- 工具行：筛选/搜索/计数/导出/清空 ---- */
+.lm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.lm-select {
+  padding: 5px 8px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 12px;
+}
+
+.lm-search {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 12px;
+}
+
+.lm-count {
+  font-size: 12px;
+  color: var(--plite-fg-muted, #888);
+  white-space: nowrap;
+}
+
+.lm-toolbar-acts {
+  display: flex;
+  gap: 6px;
+}
+
+/* ---- 清空确认条 ---- */
+.lm-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--plite-danger, #c33);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--plite-fg, inherit);
+  background: var(--plite-bg-muted, transparent);
+  flex-shrink: 0;
+}
+
+.lm-confirm > span {
+  flex: 1;
+}
+
+/* ---- 条目列表 ---- */
+.lm-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lm-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--plite-fg-muted, #888);
+}
+
+.lm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--plite-border-muted, rgba(128, 128, 128, 0.15));
+}
+
+.lm-item:last-child {
+  border-bottom: none;
+}
+
+.lm-item-kind {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  border: 1px solid var(--plite-border, #ccc);
+  color: var(--plite-fg-muted, #888);
+}
+
+.lm-item-kind.config {
+  border-color: var(--plite-accent, #66f);
+  color: var(--plite-accent, #66f);
+}
+
+.lm-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--plite-fg, inherit);
+}
+
+.lm-item-reason {
+  cursor: help;
+  color: var(--plite-fg-muted, #888);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.lm-item-time {
+  font-size: 11px;
+  color: var(--plite-fg-muted, #888);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.lm-item-edit {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--plite-accent, #66f);
+  border-radius: 6px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 13px;
+}
+
+/* ---- 底部状态 ---- */
+.lm-foot {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 16px;
+}
+
+.lm-note {
+  font-size: 12px;
+  color: var(--plite-fg-muted, #888);
+}
+
+.lm-note-err {
+  color: var(--plite-danger, #c33);
+}
