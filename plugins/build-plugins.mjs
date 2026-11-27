@@ -734,7 +734,12 @@ function publishOne(p) {
   }
   // 产物内容 hash 作为缓存破坏版本号：bundle 变了 URL 就变，浏览器不再吃旧缓存
   // （dev 曾因磁盘缓存启发式命中旧 bundle，表现为「改了没生效」的假象；prod 静态服务同受益）
-  const bundleVersion = createHash('sha256').update(readFileSync(resolve(distDir, 'plugin.js'))).digest('hex').slice(0, 8);
+  // 2026-11-28 补：把 style.css 一起纳入 hash——此前 CSS-only 改动版本戳不变，
+  // 手机/浏览器会一直吃旧样式（image-push 查看器全屏修复实测踩中）
+  const bundleVersion = createHash('sha256')
+    .update(readFileSync(resolve(distDir, 'plugin.js')))
+    .update(hasStyle ? readFileSync(styleFile) : '')
+    .digest('hex').slice(0, 8);
   const manifest = { id: p.id, module: `/plugins/${p.id}/plugin.js?v=${bundleVersion}`, enabled: p.enabled ?? EXISTING_ENABLED.get(p.id) ?? true };
   if (hasStyle) manifest.style = `/plugins/${p.id}/style.css?v=${bundleVersion}`;
   const manifestFile = resolve(dest, 'plugin.json');

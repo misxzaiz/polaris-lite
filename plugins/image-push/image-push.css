@@ -33,7 +33,10 @@
   padding: 6px 0;
 }
 
-/* ---- 全屏查看器（popover top layer；UA 提供 fixed+inset:0） ---- */
+/* ---- 全屏查看器（popover top layer） ----
+ * 必须整套覆盖 UA 对 [popover] 的默认框样式（margin:auto + fit-content）：
+ * 本查看器子元素全 absolute，fit-content 算出空盒——不覆盖就是居中「小方块」
+ * （2026-11-28 手机实测复现：盒子 13×13，图片被 overflow 裁没）。 */
 .ip-viewer {
   display: none;
   background: rgba(10, 10, 12, 0.96);
@@ -42,6 +45,15 @@
 }
 .ip-viewer:popover-open {
   display: block;
+  inset: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 .ip-stage {
   position: absolute;
