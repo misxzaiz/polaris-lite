@@ -713,6 +713,11 @@ export function createServerPart(options = {}) {
             if (autoContinueLeft > 0) {
               autoContinueLeft -= 1;
               emitEvent(run, 'message.continued', { sessionId, messageId: assistantId, attempt: 3 - autoContinueLeft, max: 3, reason });
+              // 截断的半截工具调用：给前端的流式占位卡补发 skipped 结果就地关闭，
+              // 否则占位卡（连同冻结的半截预览）永远停在「执行中」
+              for (const pc of (result.partialCalls ?? [])) {
+                emitEvent(run, 'tool.result', { sessionId, messageId: assistantId, callId: pc.id, status: 'skipped', stderr: '该调用因输出上限被截断，已引导模型重新调用' });
+              }
               if (reason === 'tool-truncated') {
                 run.shadow.push({ role: 'user', content: `（系统：上一条响应在生成 ${result.partialToolCalls} 个工具调用时被单次输出上限截断，未执行。请重新调用所需工具；参数过长时请精简内容或分多次调用。）` });
               } else if (reason === 'reasoning-exhausted') {

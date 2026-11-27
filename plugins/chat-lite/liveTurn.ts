@@ -254,7 +254,21 @@ export function createLiveTurn(opts: {
     clearWatchdogs();
     flushDelta();
     flushReasoning();
-    useSessionStore.getState().updateMessage(sid, assistantId, {
+    // 兜底清扫：收尾时仍处 running 的工具卡（截断/中断等路径漏发结果的占位卡）
+    // 就地关账，避免「执行中」幽灵卡连同冻结的半截流式预览一直挂在会话里
+    const st2 = useSessionStore.getState();
+    const msg2 = st2.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+    if (msg2 && hasBlocks(msg2)) {
+      for (const b of msg2.blocks) {
+        if (b.type === 'tool' && b.card.status === 'running') {
+          st2.patchAssistantToolBlock(sid, assistantId, b.card.callId, {
+            status: 'skipped',
+            stderr: b.card.stderr ?? '该调用未完成（生成被截断或中断）',
+          });
+        }
+      }
+    }
+    st2.updateMessage(sid, assistantId, {
       streaming: false,
       endedAt: Date.now(),
     });

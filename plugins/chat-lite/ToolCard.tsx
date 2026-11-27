@@ -207,6 +207,7 @@ const STREAM_BOOTSTRAP =
 function bootstrapSource() {
   let full = '';
   let lastHead = '';
+  let lastBody = '';
   const morph = () => {
     const doc = new DOMParser().parseFromString(full, 'text/html');
     const headHtml = doc.head.innerHTML;
@@ -214,6 +215,9 @@ function bootstrapSource() {
       lastHead = headHtml;
       document.head.innerHTML = headHtml;
     }
+    const bodyHtml = doc.body.innerHTML;
+    if (bodyHtml === lastBody) return; // 同值跳过：重复 morph 的整树重建（图片重建/动画重启）是「偶尔闪」的来源之一
+    lastBody = bodyHtml;
     // 生成页 <body class/style=...> 等属性同步
     for (const a of Array.from(document.body.attributes)) {
       if (!doc.body.hasAttribute(a.name)) document.body.removeAttribute(a.name);
@@ -221,7 +225,7 @@ function bootstrapSource() {
     for (const a of Array.from(doc.body.attributes)) {
       document.body.setAttribute(a.name, a.value);
     }
-    document.body.innerHTML = doc.body.innerHTML;
+    document.body.innerHTML = bodyHtml;
     const h = document.documentElement.scrollHeight;
     (window.parent as Window).postMessage({ type: 'height', h }, '*');
   };

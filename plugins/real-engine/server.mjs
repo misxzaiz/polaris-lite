@@ -128,8 +128,13 @@ export function createServerPart(options = {}) {
           ? [...toolAcc.entries()].sort(([a], [b]) => a - b).map(([, v]) => ({ id: v.id, name: v.name, arguments: v.arguments }))
           : [];
         const partialToolCalls = finishReason && finishReason !== 'tool_calls' ? toolAcc.size : 0;
+        // 被输出上限截断的半截工具调用清单：runner 据此给前端的流式占位卡补发
+        // skipped 结果（否则占位卡永远停在「执行中」，冻结的半截预览一直挂在屏幕上）
+        const partialCalls = partialToolCalls > 0
+          ? [...toolAcc.values()].filter((v) => v.id).map((v) => ({ id: v.id, name: v.name }))
+          : [];
         const usage = wireUsage && sawUsage ? wireUsage : null;
-        return { text: attemptText, toolCalls, finishReason, partialToolCalls, usage, lastUsage: usage };
+        return { text: attemptText, toolCalls, finishReason, partialToolCalls, partialCalls, usage, lastUsage: usage };
       }
       carriedText += attemptText;
       if (attempt >= MAX_STREAM_RETRIES) {
