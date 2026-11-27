@@ -1,9 +1,10 @@
 /**
- * system-prompt 插件：用户自定义系统提示词（会话粒度）。
+ * system-prompt 插件：用户自定义系统提示词（全局 + 会话两级）。
  *
  * 架构（对齐 docs 讨论结论 2026-11-27）：
- * - 提示词按 sessionId 存 kv-store（namespace='system-prompt'，key=`session.<id>`，
- *   value=字符串；另 key='default' 存默认模板）——服务端 sqlite 持久化，多端一致；
+ * - 提示词存 kv-store（namespace='system-prompt'）——服务端 sqlite 持久化，多端一致；
+ *   · key='global'：全局基底段，作用于所有会话；
+ *   · key=`session.<id>`：会话段，与全局段拼接（全局在前、会话在后细化）；
  * - server 半边把 { get(sessionId) } 注册进 adapter-registry 的 service 表
  *   （id='system-prompt'）——agent-runner 的 seedShadow 经 registry.getService 取用，
  *   不认识本插件的存储布局（与 kv-store / chat-store 的 service 模式同构）；
@@ -43,6 +44,14 @@ async function kvSet(key: string, value: string): Promise<boolean> {
   return !!res.ok;
 }
 
+/** 全局（所有会话）伪条目的 select value；不用真实会话 id 防碰撞 */
+const GLOBAL_ID = '__global__';
+
+/** UI 选中项 → kv key */
+function kvKeyOf(target: string): string {
+  return target === GLOBAL_ID ? 'global' : `session.${target}`;
+}
+
 /* ---------------- 会话索引（chat-store 公开端点） ---------------- */
 
 interface SessionBrief {
@@ -77,7 +86,7 @@ function displayName(s: SessionBrief): string {
 export function SystemPromptPanel(): JSX.Element {
   const [, force] = useReactReducer((x: number) => x + 1, 0);
   const [sessions, setSessions] = useState<SessionBrief[]>([]);
-  const [activeId, setActiveId] = useState<string>('');
+  const [target, setTarget] = useState<string>(GLOBAL_ID);
   const [text, setText] = useState<string>('');
   const [draft, setDraft] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -88,35 +97,32 @@ export function SystemPromptPanel(): JSX.Element {
     void (async () => {
       const list = await listSessions();
       setSessions(list);
-      if (list.length > 0 && !list.some((s) => s.id === activeId)) {
-        setActiveId(list[0].id);
-      }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 选中会话变化：读该会话的提示词进编辑器
+  // 选中目标变化：读对应提示词进编辑器（全局或会话）
   useReactEffect(() => {
-    if (!activeId) return;
     setNote('');
     void (async () => {
-      const v = await kvGet(`session.${activeId}`);
+      const v = await kvGet(kvKeyOf(target));
       setText(v ?? '');
       setDraft(v ?? '');
     })();
-  }, [activeId]);
+  }, [target]);
 
+  const isGlobal = target === GLOBAL_ID;
   const dirty = draft !== text;
 
   const save = async (): Promise<void> => {
-    if (!activeId || saving) return;
+    if (saving) return;
     setSaving(true);
     setNote('');
-    const ok = await kvSet(`session.${activeId}`, draft.trim());
+    const value = draft.trim();
+    const ok = await kvSet(kvKeyOf(target), value);
     setSaving(false);
     if (ok) {
-      setText(draft.trim());
-      setNote(draft.trim() ? '已保存，下一轮对话生效' : '已清空该会话的提示词');
+      setText(value);
+      setNote(value ? '已保存，下一轮对话生效' : `已清空${isGlobal ? '全局' : '该会话'}的提示词`);
     } else {
       setNote('保存失败（cap.kv 不可用？）');
     }
@@ -128,10 +134,11 @@ export function SystemPromptPanel(): JSX.Element {
       <div className="sp-head">
         <select
           className="sp-select"
-          value={activeId}
-          onChange={(e) => setActiveId(e.target.value)}
-          aria-label="选择会话"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          aria-label="选择作用范围"
         >
+          <option value={GLOBAL_ID}>全局（所有会话）</option>
           {sessions.length === 0 && <option value="">（暂无会话）</option>}
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>{displayName(s)}</option>
@@ -140,7 +147,7 @@ export function SystemPromptPanel(): JSX.Element {
         <button
           type="button"
           className="sp-btn"
-          disabled={!activeId || saving || !dirty}
+          disabled={saving || !dirty}
           onClick={() => void save()}
         >
           {saving ? '保存中…' : '保存'}
@@ -150,10 +157,9 @@ export function SystemPromptPanel(): JSX.Element {
         className="sp-editor"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder={activeId
-          ? '为本会话追加的自定义指令（如：回答用英文；你是资深 DBA…）。留空=不追加。下一轮发送后生效。'
-          : '请先在上方选择会话'}
-        disabled={!activeId}
+        placeholder={isGlobal
+          ? '全局基底指令，注入所有会话（如：回答始终用中文；先给结论再展开…）。留空=不追加。'
+          : '本会话的细化指令，追加在全局段之后（如：回答用英文；你是资深 DBA…）。留空=不追加。'}
         spellCheck={false}
       />
       <div className="sp-foot">
@@ -161,7 +167,7 @@ export function SystemPromptPanel(): JSX.Element {
         <button
           type="button"
           className="sp-btn sp-btn-ghost"
-          disabled={!activeId || !text}
+          disabled={!text}
           onClick={() => { setDraft(''); setNote('已清空编辑区（需点保存才生效）'); }}
         >
           清空
@@ -177,7 +183,7 @@ export const systemPromptPlugin: LitePlugin = {
   manifest: {
     id: 'system-prompt',
     name: '系统提示词',
-    version: '0.1.0',
+    version: '0.2.0',
     capabilities: ['cap.kv'],
     provides: [],
     events: [],
