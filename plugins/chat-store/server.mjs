@@ -232,6 +232,11 @@ export function createServerPart(options = {}) {
   const access = createChatStoreAccess({ dataDir, onAudit: audit, onIndexChange: (id) => notifyIndex(id) });
   const { readRecord, writeRecord, listRecords, sweepTombstones, mergeMessages, lock } = access;
   options.registry?.registerService?.('chat-store', access);
+  // loop-state 内部上报接口（agent-runner 编排 run 的「执行中」徽标；同进程直调）
+  options.registry?.registerService?.('chat-loop-state', {
+    /** run start/heartbeat/done（与 HTTP loop-state 端点同语义） */
+    report: applyLoopState,
+  });
 
   // ---- loop 运行态（内存表；见文件头「loop 运行态与实时推流」注释） ----
   /** sessionId → { startedAt, device, phase, lastBeat }；done/超时即回收 */
@@ -268,6 +273,38 @@ export function createServerPart(options = {}) {
       indexPendingIds.clear();
       fanoutIndexChanged(batch);
     }, INDEX_NOTIFY_BATCH_MS);
+  }
+
+  /** loop 运行态落地（start/heartbeat/done 三态语义；HTTP 端点与 agent-runner service 共用）。
+   *  2026-11-27：agent-runner 编排的 run 也经此上报——服务端编排后「执行中」徽标链路
+   *  断了半年（loop-state 只剩旧前端 agent-loop 在调，那个通道已被删除），侧栏从此
+   *  看不出哪个会话在跑。runner 直调本函数（service 接口），不绕 HTTP 自调。 */
+  function applyLoopState(id, event, info = {}) {
+    if (typeof id !== 'string' || !ID_RE.test(id)) return false;
+    if (event === 'start') {
+      runningLoops.set(id, {
+        startedAt: Date.now(),
+        device: String(info.device ?? '未知设备').slice(0, 40),
+        phase: String(info.phase ?? 'running').slice(0, 24),
+        lastBeat: Date.now(),
+      });
+      audit({ op: 'loop-start', sessionId: id });
+      notifyIndex(id); // 「执行中」徽标全设备即时亮起
+      return true;
+    }
+    if (event === 'heartbeat') {
+      const st = runningLoops.get(id);
+      if (st) { st.lastBeat = Date.now(); st.phase = String(info.phase ?? st.phase).slice(0, 24); }
+      // 未知 id 的心跳静默忽略（GC 已回收的不再复活，避免暴毙端复活假象）
+      return true;
+    }
+    if (event === 'done') {
+      runningLoops.delete(id);
+      audit({ op: 'loop-done', sessionId: id });
+      notifyIndex(id); // 「执行中」徽标全设备即时摘除
+      return true;
+    }
+    return false;
   }
 
   function gcLoops() {
@@ -556,25 +593,8 @@ export function createServerPart(options = {}) {
         if (event !== 'start' && event !== 'heartbeat' && event !== 'done') {
           return sendJson(400, { error: 'event must be start|heartbeat|done', code: 'BAD_REQUEST' });
         }
-        if (event === 'start') {
-          runningLoops.set(id, {
-            startedAt: Date.now(),
-            device: String(body.device ?? '未知设备').slice(0, 40),
-            phase: String(body.phase ?? 'running').slice(0, 24),
-            lastBeat: Date.now(),
-          });
-          audit({ op: 'loop-start', sessionId: id });
-          notifyIndex(id); // 「执行中」徽标全设备即时亮起
-        } else if (event === 'heartbeat') {
-          const st = runningLoops.get(id);
-          if (st) { st.lastBeat = Date.now(); st.phase = String(body.phase ?? st.phase).slice(0, 24); }
-          // 未知 id 的心跳静默忽略（GC 已回收的不再复活，避免暴毙端复活假象）
-        } else {
-          runningLoops.delete(id);
-          audit({ op: 'loop-done', sessionId: id });
-          notifyIndex(id); // 「执行中」徽标全设备即时摘除
-        }
-        return sendJson(200, { ok: true });
+        const applied = applyLoopState(id, event, { device: body.device, phase: body.phase });
+        return applied ? sendJson(200, { ok: true }) : sendJson(400, { error: 'bad id', code: 'BAD_REQUEST' });
       }
 
       // ---- live 事件批量镜像（发起端 → 服务端扇出；只透传不落盘不解释） ----

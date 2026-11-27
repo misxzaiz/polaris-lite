@@ -68,6 +68,17 @@ export function resetRunnerProbe(): void {
   runnerAvailable = null;
 }
 
+/** 本机设备名（「执行中」徽标 hover 展示「xx 发起」用；同一浏览器会话内稳定） */
+function deviceName(): string {
+  try {
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const platform = nav.userAgentData?.platform || nav.platform || '';
+    return platform ? `${platform} 浏览器` : '浏览器';
+  } catch {
+    return '浏览器';
+  }
+}
+
 /**
  * 发起服务端编排。返回 true=已接入 runner（事件经 SSE 消费）；false=回落旧通道。
  */
@@ -105,7 +116,7 @@ export async function startRunnerRun(payload: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, device: deviceName() }),
     });
   } catch {
     runnerAvailable = false;

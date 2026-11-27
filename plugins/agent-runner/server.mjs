@@ -154,6 +154,15 @@ export function createServerPart(options = {}) {
     }
   }
 
+  /** 「执行中」徽标上报（chat-store 的 loop 运行态；service 不可用时静默降级——
+   *  徽标是可见性增强，缺失不影响任何主流程）。device 取发起端透传的 body.device。 */
+  function reportLoopState(run, event) {
+    try {
+      const svc = options.registry?.getService?.('chat-loop-state');
+      svc?.report?.(run.sessionId, event, { device: run.device ?? '编排服务端', phase: 'running' });
+    } catch { /* 徽标链路失败静默 */ }
+  }
+
   /** 本 run 的用户消息（start 时落一次；幂等） */
   function syncUserMessage(run, prompt, createdAt) {
     if (!prompt?.trim()) return;
@@ -566,6 +575,10 @@ export function createServerPart(options = {}) {
   // 编排主循环（前端 agent-loop 的服务端移植；事件形状保持一致）
   // ------------------------------------------------------------------
   async function runLoop(run) {
+    // 「执行中」徽标（2026-11-27）：run 进入主循环即向 chat-store 上报 start，
+    // finishRun 时 done。经 adapter-registry 的 chat-loop-state service 同进程直调
+    // （写消息的 mergeMessages 同一通道），SSE 扇出让全设备侧栏徽标即时亮/灭。
+    reportLoopState(run, 'start');
     const { sessionId, assistantId } = run;
     const signal = run.controller.signal;
     let turn = 0; // try 块外声明：catch/finally 的 syncTurnToSession 也要引用
@@ -830,6 +843,7 @@ export function createServerPart(options = {}) {
     if (run.finished) return;
     run.finished = true;
     run.phase = 'done';
+    reportLoopState(run, 'done'); // 「执行中」徽标摘除（在 finished 置位后，不进 catch 路径）
     fireHook('turn-end', { sessionId: run.sessionId });
     run.controller.abort(); // 兜底：中断残余上游流
     for (const [, a] of run.approvals) a.resolve?.('deny');
@@ -844,7 +858,7 @@ export function createServerPart(options = {}) {
         shadow: run.shadow, engine: run.engine, engineId: run.engineId, model: run.model,
         ctxWindow: run.ctxWindow, ctxPolicy: run.ctxPolicy, acc: run.acc,
         extraToolDefs: run.extraToolDefs, shellHint: run.shellHint,
-        boundRootId: run.boundRootId, execCwd: run.execCwd,
+        boundRootId: run.boundRootId, execCwd: run.execCwd, device: run.device,
       });
       while (resumableRuns.size > MAX_RESUMABLE_RUNS) {
         const oldest = resumableRuns.keys().next().value;
@@ -1112,6 +1126,8 @@ export function createServerPart(options = {}) {
         id: runId,
         sessionId,
         assistantId,
+        // 发起端设备名（「执行中」徽标 hover 展示「xx 发起 · 已执行 Ns」用）
+        device: String(body.device ?? '编排服务端').slice(0, 40),
         phase: 'running',
         startedAt: Date.now(),
         seq: 0,
@@ -1186,7 +1202,7 @@ export function createServerPart(options = {}) {
       resumableRuns.delete(`${sessionId}::${assistantId}`);
       const runId = `r-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
       const run = {
-        id: runId, sessionId, assistantId, phase: 'running', startedAt: Date.now(),
+        id: runId, sessionId, assistantId, device: snap.device ?? '编排服务端', phase: 'running', startedAt: Date.now(),
         seq: 0, buffer: [], syncedSeq: 0, logFd: null, logSize: 0, pendingFrames: [], frameTimer: null,
         subs: new Set(), approvals: new Map(), interactives: new Map(), controller: new AbortController(),
         finished: false, extraToolDefs: snap.extraToolDefs ?? [], engine: snap.engine, engineId: snap.engineId,

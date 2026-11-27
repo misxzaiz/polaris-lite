@@ -417,6 +417,9 @@
       ],
       "events": [
         "cap.ai.chat:event",
+        "cap.ai.chat.runner:event",
+        "interactive.created",
+        "interactive.answered",
         "notifications-changed"
       ]
     },
