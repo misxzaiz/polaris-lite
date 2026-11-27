@@ -7,7 +7,7 @@
  *  触屏长按会话行唤出同一菜单（iOS/安卓原生习惯）。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
+import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow, isToolCard } from './store';
 import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon, CloseIcon, PinIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
 
@@ -204,6 +204,9 @@ export function SessionSidebar() {
   const renderRow = (s: (typeof sessions)[number]) => {
     const run = runningLoops[s.id];
     const stale = run ? Date.now() - run.lastBeat > 20_000 : false;
+    // 本机流式（直连引擎通道，无服务端 loop）：本机可见的「生成中」弱标记。
+    // 与 run 徽标互斥：runner 编排会话有权威徽标，直连会话用本地呼吸点。
+    const streamingLocal = !run && s.messages.some((m) => !isToolCard(m) && m.streaming);
     const isRenaming = renaming?.id === s.id;
     return (
       <div
@@ -248,6 +251,11 @@ export function SessionSidebar() {
               : `${run.device} 发起 · 已执行 ${Math.max(1, Math.round((Date.now() - run.startedAt) / 1000))}s`}
           >
             <i className="chat-run-dot" />执行中
+          </span>
+        )}
+        {streamingLocal && (
+          <span className="chat-run-badge local" title="本机正在生成回复（直连引擎，其他设备不可见）">
+            <i className="chat-run-dot" />生成中
           </span>
         )}
         {confirmId === s.id ? (

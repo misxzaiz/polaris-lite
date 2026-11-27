@@ -1210,6 +1210,9 @@
 }
 .chat-run-badge.stale { color: var(--text-faint); background: transparent; border-color: var(--border); }
 .chat-run-badge.stale .chat-run-dot { background: var(--text-faint); animation: none; }
+/* 直连流式（本机可见；无服务端 loop 权威徽标时的弱提示） */
+.chat-run-badge.local { border-color: var(--border); background: transparent; color: var(--text-dim); }
+.chat-run-badge.local .chat-run-dot { background: var(--text-dim); animation-duration: 2.4s; }
 @keyframes chat-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* ===== 消息操作条（P0/P1 消息操作：复制/编辑/回填/重发/开头/重新生成） =====
