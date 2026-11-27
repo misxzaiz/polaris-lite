@@ -224,9 +224,7 @@
 .lm-item-caret {
   flex-shrink: 0;
   color: var(--plite-fg-muted, #888);
-  font-size: 10px;
-  width: 14px;
-  text-align: center;
+  width: 14px; height: 14px;
   transition: transform 0.18s ease;
 }
 

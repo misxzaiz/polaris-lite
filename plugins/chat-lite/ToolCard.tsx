@@ -7,7 +7,7 @@
  * - 审批卡：warning 色边 + 三按钮（允许一次 / 总是允许该前缀 / 拒绝）；
  *   resolved 后收敛为一行回执（ShieldCheck/ShieldX 语义用文字代替，不引图标库）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { resolveApproval } from './index';
 import { copyText } from '../shared/copyText';
 import type { ToolCardData, ToolCardMessage } from './store';
@@ -181,23 +181,81 @@ function extractHtmlFromPartialJson(partial: string): string {
   return out; // 值未闭合（仍在生成）：返回半成品，浏览器容错渲染
 }
 
+/** bootstrap iframe 骨架（流式预览「实时预览」Tab 用）：
+ *  只写一次，之后经 postMessage 收增量 html 追加进 body，不重载文档——
+ *  换 srcDoc = iframe 销毁重建（白屏一帧 + CSS 重初始化），是此前预览闪烁的主因。
+ *  子页回传 {type:'height', h} 供外层做整页可见的自适应量测。
+ *  缩进字面量经 JSON.stringify 注入，内容含换行/引号也安全。 */
+const STREAM_BOOTSTRAP =
+  '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:system-ui,sans-serif}</style></head><body></body>' +
+  '<script>(' + JSON.stringify(`(${bootstrapSource.toString()})()`) + ')<\/script></html>';
+
+function bootstrapSource() {
+  window.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'chunk' && typeof d.html === 'string') {
+      document.body.insertAdjacentHTML('beforeend', d.html);
+      const h = document.documentElement.scrollHeight;
+      (e.source as Window | null)?.postMessage({ type: 'height', h }, e.origin as string);
+    }
+  });
+}
+
 /** 流式预览（render 类大参数工具 running 态）：源码流 + 实时预览双 Tab。
  *  数据源是 argsDelta（tool.args.delta 累积）；无增量（非流式引擎）时不渲染。
- *  srcdoc 节流：500ms 一次，避免高频重载闪烁；iframe 带 sandbox 隔离脚本。 */
-function StreamPreview({ argsDelta }: { argsDelta: string }) {
-  const html = useMemo(() => extractHtmlFromPartialJson(argsDelta), [argsDelta]);
+ *  - 源码流：贴底自动跟滚（rAF 直设 scrollTop），用户上滚即暂停跟随、
+ *    出「回到底部」胶囊，贴底自动恢复——与主聊天区跟滚同一语义；
+ *  - 实时预览：持久 iframe + postMessage 增量追加（0 重载、无白闪），
+ *    节流 leading+trailing（500ms 窗口，尾帧 setTimeout 补发不丢）；
+ *  - 整页可见：生成中容器高度跟随内容自适应（上限 FIT_CAP），
+ *    超上限等比 scale 缩小整页可见；生成结束（done prop）平滑还原标准高度。 */
+const STREAM_FIT_CAP = 420;
+const STREAM_STD_H = 200;
+function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean }) {
+  const html = extractHtmlFromPartialJson(argsDelta);
   const [tab, setTab] = useState<'code' | 'live'>('code');
-  const [doc, setDoc] = useState('');
-  const lastRef = useRef(0);
+  const codeRef = useRef<HTMLPreElement>(null);
+  const [follow, setFollow] = useState(true); // 源码流是否贴底跟随
+  // live iframe：doc=累计已写入的 html（去重比较），pending=节流窗口内未写入的尾帧
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const writtenRef = useRef('');
+  const [fit, setFit] = useState<{ h: number; scale: number } | null>(null);
+
+  // 实时预览增量写入：持久 iframe + 差量追加（见组件注释）。
+  // postMessage 异步且轻，逐帧直写；CSS transition 负责容器高度平滑，
+  // 不再需要 srcDoc 节流（无重载即无闪烁）。尾帧因「每帧直写」天然不丢。
   useEffect(() => {
-    const now = Date.now();
-    if (now - lastRef.current < 500) return;
-    lastRef.current = now;
-    setDoc(html);
+    const frame = frameRef.current;
+    const diff = html.slice(writtenRef.current.length);
+    if (!frame || !frame.contentWindow || !diff) return;
+    writtenRef.current = html;
+    frame.contentWindow.postMessage({ type: 'chunk', html: diff }, '*');
   }, [html]);
+
+  // 高度回传（整页可见量测）
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { type?: string; h?: number } | null;
+      if (d?.type === 'height' && typeof d.h === 'number') {
+        const scale = d.h > STREAM_FIT_CAP ? STREAM_FIT_CAP / d.h : 1;
+        setFit({ h: d.h, scale });
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  // 源码流贴底跟随
+  useEffect(() => {
+    const el = codeRef.current;
+    if (!el || !follow) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [html, follow]);
+
   if (!html.trim()) return null;
   const lines = html.split('\n').length;
   const kb = (new Blob([html]).size / 1024).toFixed(1);
+  const boxH = fit ? Math.min(fit.h, STREAM_FIT_CAP) : STREAM_STD_H;
   return (
     <div className="tc-stream">
       <div className="tc-stream-tabs">
@@ -206,15 +264,38 @@ function StreamPreview({ argsDelta }: { argsDelta: string }) {
         <span className="tc-stream-stats">{lines} 行 · {kb} KB</span>
       </div>
       {tab === 'code' ? (
-        <pre className="tc-stream-code" aria-label="生成中的 HTML 源码">{html}</pre>
+        <div className="tc-stream-codewrap">
+          <pre
+            className="tc-stream-code"
+            aria-label="生成中的 HTML 源码"
+            ref={codeRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+              if (atBottom !== follow) setFollow(atBottom);
+            }}
+          >{html}</pre>
+          {!follow && (
+            <button type="button" className="tc-stream-pill" onClick={() => setFollow(true)}>有更新 ↓ 回到底部</button>
+          )}
+        </div>
       ) : (
-        <iframe
-          title="实时预览（生成中）"
-          className="tc-stream-frame"
-          sandbox="allow-scripts allow-forms allow-pointer-lock"
-          referrerPolicy="no-referrer"
-          srcDoc={doc}
-        />
+        <div className={`tc-stream-stage ${done ? 'settled' : ''}`} style={{ height: boxH }}>
+          <iframe
+            title="实时预览（生成中）"
+            className="tc-stream-frame"
+            sandbox="allow-scripts allow-forms allow-pointer-lock"
+            referrerPolicy="no-referrer"
+            srcDoc={STREAM_BOOTSTRAP}
+            ref={frameRef}
+            style={done ? undefined : (fit && fit.scale < 1
+              ? { transform: `scale(${fit.scale})`, width: `${100 / fit.scale}%` }
+              : undefined)}
+          />
+        </div>
+      )}
+      {tab === 'live' && !done && fit && fit.scale < 1 && (
+        <span className="tc-stream-fitbadge">整页可见 · {Math.round(fit.scale * 100)}%</span>
       )}
     </div>
   );
@@ -226,7 +307,11 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
   const isApproval = tool.status === 'awaiting';
   const hasBody = !isApproval && !!(tool.command || tool.argsJson || tool.stdout || tool.stderr || tool.exitCode !== undefined);
   const spin = tool.status === 'running';
-  const streaming = spin && (tool.argsDelta ?? '').trim().length > 0;
+  // 判空下沉到「能否解析出 html」：外层旧口径（running && argsDelta 非空）会让
+  // bash/files 等所有收到 argsDelta 的工具都冒出一条空的 tc-stream-wrap（十几像素
+  // 空白条，跑完消失）——视觉即「单卡展开一点再折叠」。解析不出 html 整块不渲染。
+  const streamHtml = spin ? extractHtmlFromPartialJson(tool.argsDelta ?? '') : '';
+  const streaming = spin && streamHtml.trim().length > 0;
 
   // 审批卡：独立视觉（warning 色边 + 按钮组）；决策直接回填 cap.agent.loop。
   // 卡片内嵌于 assistant 气泡（blocks 模式），左侧已有 AI 头像——不再重复放字母块。
@@ -267,7 +352,7 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
         </button>
         {streaming && (
           <div className="tc-stream-wrap">
-            <StreamPreview argsDelta={tool.argsDelta ?? ''} />
+            <StreamPreview argsDelta={tool.argsDelta ?? ''} done={!spin} />
           </div>
         )}
         {open && (
