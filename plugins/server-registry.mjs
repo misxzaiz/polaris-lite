@@ -59,6 +59,11 @@ const RAW_SERVER_PLUGINS = [
   // deploy-panel：9826 一键部署（/api/deploy/*）。端点内部再按 PLITE_DEPLOY_PANEL=1
   // 二次门禁——即使产物被发布到 9825，端点也不存在。
   { id: 'deploy-panel', entry: './deploy-panel/server.mjs' },
+  // http-gateway：通用有状态 HTTP 转发 + 密钥保管（/api/http-gw/*）。
+  // 纯 server 半边（无 UI 产物、不进 PLUGIN_LIST，同 agent-runner 惯例）：
+  // cookie-jar 会话 + 跟 302 + {{vault:id}} 服务端注入。面向商城外部插件（只有 UI
+  // 半边、不能自带 server.mjs）访问无 CORS 上游/OAuth2 登录链的公共地基，非业务专属。
+  { id: 'http-gateway', entry: './http-gateway/server.mjs' },
 ];
 
 /** 与前端清单共享 enabled：前端关掉的插件，server 半边也不挂载。
