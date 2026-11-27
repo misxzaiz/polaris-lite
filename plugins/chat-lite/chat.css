@@ -651,10 +651,11 @@
   background: var(--text); color: var(--bg); box-shadow: 0 2px 6px rgb(0 0 0 / .2);
 }
 /* 实时预览舞台：流式期间高度随内容自适应（JS 内联 height），CSS 只负责平滑过渡；
-   settled（生成结束）还原为标准高度 + 内部滚动 */
+   settled（生成结束）还原为标准高度 + 内部滚动。
+   底色跟主题走：iframe 铺满后本不可见，只在加载间隙露出——写死 #fff 在暗色主题刺眼 */
 .tc-stream-stage {
   position: relative; overflow: hidden; border-radius: 6px;
-  background: #fff; transition: height .35s ease;
+  background: var(--bg, #fff); transition: height .35s ease;
 }
 .tc-stream-stage.settled { height: 200px; }
 .tc-stream-frame {

@@ -244,7 +244,8 @@ function bootstrapSource() {
  *  - 实时预览：持久 iframe（0 重载、无白闪），投递走 ready 握手 +
  *    差量发送，子页累计全文后按完整文档 morph 渲染（见 bootstrapSource）；
  *  - 整页可见：生成中容器高度跟随内容自适应（上限 FIT_CAP），
- *    超上限等比 scale 缩小整页可见；生成结束（done prop）平滑还原标准高度。 */
+ *    超上限等比 scale 缩小（布局宽高同乘 1/scale，缩放后铺满舞台）；
+ *    生成结束（done prop）平滑还原标准高度。 */
 const STREAM_FIT_CAP = 420;
 const STREAM_STD_H = 200;
 const STREAM_SEND_GAP = 180; // 实时预览发送节流（父页合帧间隔）
@@ -323,8 +324,11 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
       }
       if (d.type !== 'height' || typeof d.h !== 'number') return;
       if (e.source !== frameRef.current?.contentWindow) return;
-      const scale = d.h > STREAM_FIT_CAP ? STREAM_FIT_CAP / d.h : 1;
-      setFit({ h: d.h, scale });
+      const h = d.h;
+      const scale = h > STREAM_FIT_CAP ? STREAM_FIT_CAP / h : 1;
+      // 小幅变化不跟进：scale 一变，子页视口（宽高各 1/scale 倍）随之变 → 触发重排
+      // 回传新高度，无阻尼会震荡；6% 迟滞 + CSS 过渡足够平滑
+      setFit((prev) => (prev && Math.abs(prev.scale - scale) < 0.06 ? prev : { h, scale }));
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
@@ -366,6 +370,8 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
         </div>
       ) : (
         <div className={`tc-stream-stage ${done ? 'settled' : ''}`} style={{ height: boxH }}>
+          {/* 整页可见：布局宽高同乘 1/scale（origin 0 0），缩放后恰好铺满舞台——
+              只放大宽度会让可视高度只剩 stage×scale，其余是舞台底色的大片空白 */}
           <iframe
             title="实时预览（生成中）"
             className="tc-stream-frame"
@@ -374,7 +380,7 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
             srcDoc={STREAM_BOOTSTRAP}
             ref={attachFrame}
             style={done ? undefined : (fit && fit.scale < 1
-              ? { transform: `scale(${fit.scale})`, width: `${100 / fit.scale}%` }
+              ? { transform: `scale(${fit.scale})`, width: `${100 / fit.scale}%`, height: `${100 / fit.scale}%` }
               : undefined)}
           />
         </div>
