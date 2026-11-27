@@ -234,10 +234,20 @@ export function createServerPart(options = {}) {
     return finalizeInstall({ id, entry, manifest, bundle, style });
   }
 
+  /**
+   * 冲突守卫：只拦「内置插件 id」。
+   * registry 里 module 指向 /ext-plugins/ 的同名条目是上次商城安装自己写入的
+   * （覆盖更新场景），放行——尾段 registry.plugins.filter 会去重覆盖它。
+   * 修复：此前一刀切按 id 拒绝，导致「更新已安装插件」被自己写的旧条目拦死。
+   */
+  function builtinIdConflicts(reg, id) {
+    return Boolean(reg?.plugins?.some((p) => p && p.id === id && !String(p.module ?? '').startsWith('/ext-plugins/')));
+  }
+
   /** 落盘 + registry 双写（dir/http 两类源共用尾段） */
   function finalizeInstall({ id, entry, manifest, bundle, style }) {
     const reg = readRegistry(publicRegistry) ?? readRegistry(distRegistry);
-    if (reg?.plugins?.some((p) => p && p.id === id)) {
+    if (builtinIdConflicts(reg, id)) {
       return { error: `插件 id 与已注册插件冲突：${id}` };
     }
     const dest = join(extPluginsDir, id);
@@ -289,9 +299,9 @@ export function createServerPart(options = {}) {
       return { error: 'plugin.json 的 id 不合法' };
     }
     if (manifest.id !== id) return { error: `plugin.json id(${manifest.id}) 与安装请求(${id}) 不符` };
-    // 禁止覆盖内置插件 id（与 build:plugins 清单冲突）
+    // 禁止覆盖内置插件 id（与 build:plugins 清单冲突；/ext-plugins 残留条目视为覆盖更新放行）
     const reg = readRegistry(publicRegistry) ?? readRegistry(distRegistry);
-    if (reg?.plugins?.some((p) => p && p.id === id)) {
+    if (builtinIdConflicts(reg, id)) {
       return { error: `插件 id 与已注册插件冲突：${id}` };
     }
     // 落盘到外部插件目录

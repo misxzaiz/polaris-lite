@@ -83,11 +83,17 @@ test('market: 添加源 → 列清单 → 安装（sha256 校验 + 落盘）→ 
   assert.ok(existsSync(join(dataDir, 'plugins', 'hello-tool', 'plugin.js')), 'bundle 应落外部插件目录');
   assert.ok(existsSync(join(dataDir, 'plugins', 'hello-tool', 'plugin.json')));
 
-  // 二次安装：与已注册 id（真实 repo registry 现在 hello-tool 已写入）冲突 → 拒绝
+  // 二次安装：registry 里残留的是上次安装自己写入的 /ext-plugins 条目 → 覆盖更新放行（不再误报冲突）
   const regNow = JSON.parse(readFileSync(join(repoRoot, 'public', 'plugins', 'registry.json'), 'utf8'));
-  console.log('DEBUG registry ids:', regNow.plugins.map(p=>p.id).join(','));
+  const reinstalled = regNow.plugins.find((p) => p && p.id === 'hello-tool');
+  assert.ok(reinstalled, '首装后 registry 应有 hello-tool 条目');
+  assert.ok(String(reinstalled.module).startsWith('/ext-plugins/'), '商城安装条目 module 应指向 /ext-plugins/');
   const again = await call('/api/market/install', { source: 'test-src', id: 'hello-tool' });
-  assert.equal(again.status, 400, 'id 冲突应拒绝');
+  assert.equal(again.status, 200, '同 id 覆盖更新应放行（ext 条目不再视为冲突）');
+  assert.equal(again.json.ok, true, `覆盖更新应成功：${JSON.stringify(again.json)}`);
+  // 覆盖后 registry 仍应只有一条 hello-tool（去重覆盖，不重复 push）
+  const regAfter = JSON.parse(readFileSync(join(repoRoot, 'public', 'plugins', 'registry.json'), 'utf8'));
+  assert.equal(regAfter.plugins.filter((p) => p && p.id === 'hello-tool').length, 1, '覆盖更新后不应产生重复条目');
   // 清理真实 registry 的测试条目（防污染真实仓库）
   for (const p of ['public/plugins/registry.json', 'dist/plugins/registry.json']) {
     try {
