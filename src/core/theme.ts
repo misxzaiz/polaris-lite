@@ -7,7 +7,7 @@
  */
 export const THEME_COLORS = {
   light: '#ffffff',
-  dark: '#0b0b0d',
+  dark: '#16161a',
 } as const;
 
 export type ThemeMode = keyof typeof THEME_COLORS;

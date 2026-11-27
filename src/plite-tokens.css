@@ -9,11 +9,12 @@
 :root {
   color-scheme: light;
 
-  /* ===== 纯白为主：白底 + 墨蓝文字 + 单一深蓝强调 =====
-   * 主画布纯白，三栏靠 1px 细线与悬浮阴影分层，不用灰块堆层次。 */
-  --bg: #ffffff;
+  /* ===== 纸感白：微灰画布 + 纯白面板 + 墨蓝文字 + 单一深蓝强调 =====
+   * 2026-11-27 体感修复：纯白画布过亮（正文对比 17.75:1 过曝）。画布降一档
+   * #f7f8fa（16.7:1），面板保持纯白，层次由底色差 + 细线共同撑起。 */
+  --bg: #f7f8fa;
   --bg-panel: #ffffff;
-  --bg-hover: #f3f5f9;
+  --bg-hover: #eef0f4;
   --bg-elevated: #ffffff;
   --bg-translucent: rgba(255, 255, 255, 0.92);
   --bg-code: #f6f8fb;
@@ -100,19 +101,21 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ===== 曜石黑：低饱和暖黑 + 香槟金 ===== */
-  --bg: #0b0b0d;
-  --bg-panel: #111114;
-  --bg-hover: #19191d;
-  --bg-elevated: #151518;
-  --bg-translucent: rgba(17, 17, 20, 0.96);
-  --bg-code: #09090b;
+  /* ===== 曜石黑：低饱和暖黑 + 香槟金 =====
+   * 2026-11-27 体感修复：原 #0b0b0d 过暗且阶梯差仅 1.03（分层不可见）。
+   * 阶梯整体上移一档：bg→#16161a、正文→#e2ded6（13.4:1 舒适区）。 */
+  --bg: #16161a;
+  --bg-panel: #1c1c21;
+  --bg-hover: #26262c;
+  --bg-elevated: #222228;
+  --bg-translucent: rgba(28, 28, 33, 0.96);
+  --bg-code: #121215;
 
   --border-rgb: 230, 220, 200;
   --border: rgba(230, 220, 200, 0.11);
   --border-strong: rgba(210, 180, 126, 0.28);
 
-  --text: #ece9e2;
+  --text: #e2ded6;
   --text-soft: #b8b2a8;
   --text-dim: #a29d94;
   --text-faint: #79746c;
