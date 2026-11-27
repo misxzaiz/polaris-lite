@@ -40,6 +40,8 @@ function StatusIcon({ status }: { status: ToolCardData['status'] }) {
           {line('M6.5 17.5l11-11')}
         </svg>
       );
+    case 'skipped':
+      return <svg {...box}>{line('M5 12h14')}</svg>;
     case 'awaiting':
       return <svg {...box}>{line('M9.5 6v12')}{line('M14.5 6v12')}</svg>;
   }
@@ -62,6 +64,7 @@ function statusLabel(data: ToolCardData): string {
     case 'done': return '完成';
     case 'error': return `失败${data.exitCode !== undefined && data.exitCode !== 0 ? ` (exit ${data.exitCode})` : ''}`;
     case 'denied': return '已拒绝';
+    case 'skipped': return '已跳过';
     case 'awaiting': return '等待审批';
     case 'resolved': return data.decision === 'deny' ? '已拒绝' : '已允许';
   }
@@ -174,7 +177,7 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
           {tool.durationMs !== undefined && tool.durationMs > 1000 && (
             <span className="tc-duration">{(tool.durationMs / 1000).toFixed(1)}s</span>
           )}
-          <span className={`tc-state ${tool.status === 'done' ? 'ok' : tool.status === 'running' ? '' : 'fail'}`}>
+          <span className={`tc-state ${tool.status === 'done' ? 'ok' : tool.status === 'running' || tool.status === 'skipped' ? '' : 'fail'}`}>
             {statusLabel(tool)}
           </span>
           {hasBody && <span className="tc-chevron">{open ? '˄' : '˅'}</span>}

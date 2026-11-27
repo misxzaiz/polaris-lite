@@ -596,6 +596,8 @@ export function createServerPart(options = {}) {
       // 流出的 callId，runner 自己的回放段据此去重，保证每个调用只发一次卡/结果。
       const streamedCards = new Set();
       const streamedResults = new Set();
+      // 本 run 已派发（真实执行）过的调用签名（name+arguments）——重复调用护栏的去重源
+      const dispatchedCalls = new Set();
       const onToolCall = (c) => {
         if (!c?.id) return;
         streamedCards.add(c.id);
@@ -693,6 +695,40 @@ export function createServerPart(options = {}) {
           }
           break;
         }
+
+        // ---- 重复调用护栏（2026-11-27，针对 9826 实测「答案已收敛仍追加冗余工具调用」）----
+        // 场景：模型同一条响应里既输出了完整正文、又附带了与本 run 已派发过的调用
+        // 完全相同（名字+参数逐字一致）的 tool_calls（finish_reason=tool_calls）。
+        // 旧逻辑只看 tool_calls 存在与否 → 执行冗余调用 → 进下一轮 → 模型再次
+        // 「保险起见重跑一遍」→ 空转循环。收敛判据（两条同时满足才跳过）：
+        //   1) 本轮全部调用都与已派发过的调用重复（有新调用则照常执行——
+        //      「先说一句进度再继续」的合法 text+tool 模式不受影响）；
+        //   2) 正文非空（把正文视为收敛信号；正文为空时不视为收敛，但也不再
+        //      原样执行重复调用——以工具结果形式回一条 nudge，逼下一轮产出正文）。
+        const callKey = (c) => `${c.name}::${String(c.arguments ?? '')}`;
+        const allRepeat = result.toolCalls.length > 0
+          && result.toolCalls.every((c) => dispatchedCalls.has(callKey(c)));
+        if (allRepeat) {
+          const hasText = result.text.trim().length > 0;
+          for (const call of result.toolCalls) {
+            const callId = call.id || `call-${turn}-${totalToolCalls + 1}`;
+            const display = summarizeCall(call);
+            // assistant.tool_calls 已入 shadow（协议成对）：跳过的调用也要回一条
+            // tool 结果（不同正文，避免与上一条混淆协议），并落一张「已跳过」卡。
+            const skipNote = hasText
+              ? '[runner 护栏：该调用与本 run 之前派发的调用完全重复，已跳过执行（本轮正文已含结论，视为收敛）。]'
+              : '[runner 护栏：该调用与本 run 之前派发的调用完全重复，已跳过执行。请勿原样重试；若任务未完成，请换参数/换工具或直接给出正文结论。]';
+            if (!streamedResults.has(callId)) emitEvent(run, 'tool.result', { sessionId, messageId: assistantId, callId, status: 'skipped', command: display, stdout: capText(skipNote) });
+            run.shadow.push({ role: 'tool', content: skipNote, tool_call_id: call.id, name: call.name });
+          }
+          if (hasText) {
+            toolOnlyStreak = 0;
+            run.shadow.push({ role: 'assistant', content: result.text });
+            break;
+          }
+          continue; // 空正文 + 全重复：不发正文（无 delta），直接下一轮（nudge 在 shadow 里）
+        }
+        for (const c of result.toolCalls) dispatchedCalls.add(callKey(c));
 
         // assistant.tool_calls 入 shadow（协议成对）
         run.shadow.push({

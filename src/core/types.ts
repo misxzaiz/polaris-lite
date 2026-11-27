@@ -300,7 +300,7 @@ export interface ChatMessage {
 // chat-lite 经 @sdk 引用同名类型(store.ts 保留 re-export 保持文件内引用兼容)。
 
 /** 工具调用卡（参考 Polaris ToolCallBlock 的收敛版） */
-export type ToolCardStatus = 'running' | 'done' | 'error' | 'denied' | 'awaiting' | 'resolved';
+export type ToolCardStatus = 'running' | 'done' | 'error' | 'denied' | 'awaiting' | 'resolved' | 'skipped';
 
 export interface ToolCardData {
   callId: string;
