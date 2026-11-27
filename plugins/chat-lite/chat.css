@@ -562,7 +562,7 @@
   .chat-empty-eyebrow { font-size: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-bubble .cursor, .chat-empty, .chat-msg { animation: none !important; }
+  .chat-bubble .cursor, .chat-empty, .chat-msg, .gen-indicator i { animation: none !important; }
 }
 
 /* ===== 工具调用卡（参考 Polaris ToolCallBlock 收敛版） ===== */
@@ -1430,6 +1430,20 @@
   display: inline-flex; align-items: center; gap: 5px;
   color: var(--accent); font-variant-numeric: tabular-nums;
 }
+/* 生成阶段活动指示（气泡底部）：模型思考/产出工具参数期间可能长时间静默，
+   呼吸点常显让「在生成」可感知——不模拟任何进度，只表明活跃。 */
+.gen-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.gen-indicator i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  animation: gen-pulse 1.2s ease-in-out infinite;
+}
+@keyframes gen-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.82); } }
 .live-timer .live-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent);

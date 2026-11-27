@@ -119,9 +119,11 @@ function handleToolEvent(
       return;
     }
     if (kind === 'tool.card') {
-      // 部分引擎对同一 callId 连发两帧：首帧 input 恒为空，收尾帧才带完整参数
+      // 部分引擎对同一 callId 连发两帧：首帧 input 恒为空，收尾帧才带完整参数。
+      // name 一并回填：args.delta 先到时建过「工具调用」占位卡，这里换成真名。
       patchCard(callId, (c) => ({
         ...c,
+        ...(inner.name ? { name: inner.name } : {}),
         ...(inner.command ? { command: capArgs(inner.command) } : {}),
         ...(inner.argsJson ? { argsJson: capArgs(inner.argsJson) } : {}),
       }));
@@ -138,9 +140,20 @@ function handleToolEvent(
   if (kind === 'tool.args.delta') {
     // 工具参数流式增量（render 等大参数工具的实时预览数据源）：
     // 按 callId 累积进 argsDelta（字符串拼接，容量上限对齐 argsJson 裁剪策略）。
-    // 卡片不存在（事件先于 tool.card 到达）时丢弃——tool.card 收尾帧会带完整参数兜底。
+    // delta 总是先于 runner 的 tool.card 到达（后者在 turn 收敛才发）——
+    // 卡片不存在时先建 running 临时卡（name 未知先用「工具调用」占位），
+    // tool.card 到达时按 callId 幂等回填真名/参数，绝不重复建块。
     if (typeof inner.delta === 'string' && inner.delta) {
-      patchCard(inner.callId ?? '', (c) => ({
+      const callId = inner.callId ?? '';
+      const msg = st.sessions.find((s) => s.id === sid)?.messages.find((m) => m.id === assistantId);
+      const exists = msg && hasBlocks(msg) && msg.blocks.some((b) => b.type === 'tool' && b.card.callId === callId);
+      if (!exists) {
+        st.appendAssistantBlock(sid, assistantId, {
+          type: 'tool',
+          card: { callId, name: '工具调用', status: 'running' },
+        });
+      }
+      patchCard(callId, (c) => ({
         ...c,
         argsDelta: ((c.argsDelta ?? '') + inner.delta).slice(0, CARD_STORE_CAP),
       }));

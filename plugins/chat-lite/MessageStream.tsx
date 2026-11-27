@@ -238,6 +238,11 @@ function MessageRow({ m, sid, isLastUser, isLast, isLong, sessionStreaming, edit
                 ? <Markdown text={m.content} />
                 : m.content}
             {m.streaming && !hasBlocks(m) && <span className="cursor" />}
+            {/* 生成阶段的活动指示：模型思考/产出工具参数期间可能长时间无任何事件
+                （实测整帧网关 7s+ 静默），消息级 streaming 常显呼吸点+计时，
+                让「在生成」与「卡死」可区分。MsgMeta 的 live-timer 只在 meta 行
+                （手机端弱化、桌面 hover 才显），这里是气泡内的主指示。 */}
+            {m.streaming && !isUser && <span className="gen-indicator" aria-live="polite"><i />正在生成…</span>}
           </div>
         )}
         {!isEditing && <MsgMeta m={m} />}
