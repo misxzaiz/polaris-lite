@@ -26,7 +26,6 @@
  * - 事件日志按 run 落盘，run 结束保留（UI 重放需要），由 GC 按 TTL 清理。
  */
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, renameSync, readdirSync, rmSync, statSync, openSync, writeSync, closeSync } from 'node:fs';
-import { once } from 'node:events';
 import { resolve, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 // 上下文压缩（simple_ai/compact.rs 语义纯函数；Node 24 类型剥离直接吃 TS）。
@@ -63,6 +62,13 @@ const DELTA_FLUSH_MS = 16;
 const MAX_SESSION_SHADOWS = 24;
 /** 单个 run buffer 上限（超出丢弃最旧——syncTurnToSession 只需未同步段） */
 const MAX_RUN_BUFFER = 4096;
+/**
+ * 单个工具调用参数体积上限（原始 arguments JSON 字符数）。
+ * 2026-11-27 9826 事故：模型把图片 base64（64KB+）塞进工具参数，以 ~135B/s 流了
+ * 8 分钟（10k+ args.delta 事件、1.7MB 日志），期间零正文零新卡——用户视为「对话中断」
+ * 按停；同时烧掉上万输出 token，随时撞 max_tokens。大内容一律走文件+路径。
+ */
+const MAX_TOOL_ARGS_CHARS = 32 * 1024;
 
 export function createServerPart(options = {}) {
   const getSession = options.getSession;
@@ -260,7 +266,11 @@ export function createServerPart(options = {}) {
       }
       if (res.write(frame) === false) {
         res._agentPaused = true;
-        once(res, 'drain', () => {
+        // drain 恢复必须挂在 res 自身。此前误用 node:events 的 once(emitter, name, options)
+        // ——第三参收 options 对象，传回调抛 ERR_INVALID_ARG_TYPE（floating rejection →
+        // unhandledRejection，2026-11-27 晚 9826 两次实录），且回调永远挂不上：
+        // 慢客户端（手机锁屏/后台）流被永久暂停，直到 2048 帧上限被 destroy。
+        res.once('drain', () => {
           res._agentPaused = false;
           const q = res._agentQueue ?? [];
           res._agentQueue = [];
@@ -584,6 +594,15 @@ export function createServerPart(options = {}) {
   // ------------------------------------------------------------------
   // 编排主循环（前端 agent-loop 的服务端移植；事件形状保持一致）
   // ------------------------------------------------------------------
+  /** message.done 幂等发射：中断路径可能多处触发（interrupt 端点先发一次、
+   *  runLoop 的 aborted 检查/catch 再发一次——2026-11-27 实录同帧双发），
+   *  以 run 为粒度去重，首个事件定生死。 */
+  function emitRunDone(run, extra = {}) {
+    if (run.doneEmitted) return;
+    run.doneEmitted = true;
+    emitEvent(run, 'message.done', { sessionId: run.sessionId, messageId: run.assistantId, ...extra });
+  }
+
   async function runLoop(run) {
     // 「执行中」徽标（2026-11-27）：run 进入主循环即向 chat-store 上报 start，
     // finishRun 时 done。经 adapter-registry 的 chat-loop-state service 同进程直调
@@ -630,7 +649,7 @@ export function createServerPart(options = {}) {
         run.turnStartedAt = Date.now();
         // 触发压缩（先压再请求；水位达阈值 + 未熔断；失败非破坏回滚）
         await maybeCompact(run);
-        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+        if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }
         if (turn >= MAX_LOOP_TURNS || totalToolCalls >= MAX_TOOL_CALLS) {
           run.shadow.push({
             role: 'user',
@@ -640,7 +659,7 @@ export function createServerPart(options = {}) {
           const r = await engineTurn(run, { messages: run.shadow, tools: [], signal });
           run.shadow.push({ role: 'assistant', content: r.text });
           emitEvent(run, 'message.delta', { sessionId, messageId: assistantId, delta: r.text });
-          emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
+          emitRunDone(run, { finishReason: 'stop' });
           emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn, guardLimit: true });
           syncTurnToSession(run, turn);
           return;
@@ -655,7 +674,7 @@ export function createServerPart(options = {}) {
           onToolCall,
           onToolResult,
         });
-        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); syncTurnToSession(run, turn); return; }
+        if (signal.aborted) { emitRunDone(run, { interrupted: true }); syncTurnToSession(run, turn); return; }
         // 本轮 AI 产出落服务端会话档（幂等增量）：发起端被杀也留痕
         syncTurnToSession(run, turn);
         // usage 采集：压缩触发基准（真实 usage 优先，估算兜底）
@@ -767,11 +786,25 @@ export function createServerPart(options = {}) {
             idx: i, call, callId, display, adapter,
             preExecuted: call.result !== undefined,
             freePass: call.result !== undefined || !!adapter?.noApproval,
+            tooLarge: String(call.arguments ?? '').length > MAX_TOOL_ARGS_CHARS,
           };
         });
 
+        // ---- 参数尺寸闸（2026-11-27 9826 事故护栏）----
+        // 超限调用不执行、不进审批，按协议成对回错误反馈，引导模型改走「文件+路径」。
+        for (const p of prepared.filter((x) => x.tooLarge)) {
+          const kb = Math.round(String(p.call.arguments ?? '').length / 1024);
+          const gateNote = `[runner 护栏：工具 ${p.call.name} 的参数体积 ${kb}KB 超过 ${Math.round(MAX_TOOL_ARGS_CHARS / 1024)}KB 上限，已拒绝执行。` +
+            '严禁把 base64/长文本等大内容塞进工具参数（会卡死流式通道并烧光输出预算）。' +
+            '大内容先用 files_write 或 bash 写入文件，再把文件路径作为参数调用工具。]';
+          if (!streamedResults.has(p.callId)) {
+            emitEvent(run, 'tool.result', { sessionId, messageId: assistantId, callId: p.callId, status: 'error', command: p.display, stderr: capText(gateNote) });
+          }
+          run.shadow.push({ role: 'tool', content: gateNote, tool_call_id: p.call.id, name: p.call.name });
+        }
+
         // 并行段：已执行 + 免审批工具同时跑（各事件先收集，回放段按序落）
-        const parallel = prepared.filter((p) => p.freePass);
+        const parallel = prepared.filter((p) => p.freePass && !p.tooLarge);
         const parallelResults = await Promise.all(parallel.map(async (p) => {
           const { call, callId, display } = p;
           if (p.preExecuted) {
@@ -801,10 +834,10 @@ export function createServerPart(options = {}) {
           if (!streamedResults.has(pr.resultEvent.callId)) emitEvent(run, 'tool.result', pr.resultEvent);
           run.shadow.push({ role: 'tool', content: pr.feedback, tool_call_id: call.id, name: call.name });
         }
-        if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+        if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }
 
         // 串行段：需审批的工具逐个挂起（先到先得；shadow 按调用顺序续接并行段之后）
-        for (const p of prepared.filter((x) => !x.freePass)) {
+        for (const p of prepared.filter((x) => !x.freePass && !x.tooLarge)) {
           const { call, callId, display } = p;
           const toolInput = parseArgs(call.arguments);
           fireHook('pre-tool-use', { sessionId, toolName: call.name, toolInput });
@@ -818,7 +851,7 @@ export function createServerPart(options = {}) {
           const needApproval = (mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted)) && !allowlisted;
           let verdict = 'ok';
           if (needApproval) verdict = await askApproval(run, call, display);
-          if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+          if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }
           // 审批决策映射（对齐前端 decideApproval）：once=放行一次；always/trust=
           // 沉淀会话级白名单（后续同前缀/同工具免审批）；deny/timeout=拒绝。
           if (verdict === 'always' || verdict === 'trust') {
@@ -837,7 +870,7 @@ export function createServerPart(options = {}) {
 
           const r = await execTool(run, call, signal);
           fireHook('post-tool-use', { sessionId, toolName: call.name, toolInput, success: r.ok && (r.exitCode === undefined || r.exitCode === 0) });
-          if (signal.aborted) { emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true }); return; }
+          if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }
           const status = r.ok && (r.exitCode === undefined || r.exitCode === 0) ? 'done' : r.denied ? 'denied' : 'error';
           emitEvent(run, 'tool.result', {
             sessionId, messageId: assistantId, callId, status,
@@ -871,11 +904,11 @@ export function createServerPart(options = {}) {
         }
       }
       emitEvent(run, 'loop.done', { sessionId, messageId: assistantId, turns: turn });
-      emitEvent(run, 'message.done', { sessionId, messageId: assistantId, finishReason: 'stop' });
+      emitRunDone(run, { finishReason: 'stop' });
       syncTurnToSession(run, turn);
     } catch (err) {
       if (signal.aborted) {
-        emitEvent(run, 'message.done', { sessionId, messageId: assistantId, interrupted: true });
+        emitRunDone(run, { interrupted: true });
       } else {
         emitEvent(run, 'stream.error', { sessionId, messageId: assistantId, message: err instanceof Error ? err.message : String(err) });
       }
@@ -1204,6 +1237,7 @@ export function createServerPart(options = {}) {
         pendingFrames: [],
         frameTimer: null,
         subs: new Set(),
+        doneEmitted: false,
         approvals: new Map(),
         interactives: new Map(),
         controller: new AbortController(),
@@ -1270,7 +1304,7 @@ export function createServerPart(options = {}) {
       const run = {
         id: runId, sessionId, assistantId, device: snap.device ?? '编排服务端', phase: 'running', startedAt: Date.now(),
         seq: 0, buffer: [], syncedSeq: 0, logFd: null, logSize: 0, pendingFrames: [], frameTimer: null,
-        subs: new Set(), approvals: new Map(), interactives: new Map(), controller: new AbortController(),
+        subs: new Set(), doneEmitted: false, approvals: new Map(), interactives: new Map(), controller: new AbortController(),
         finished: false, extraToolDefs: snap.extraToolDefs ?? [], engine: snap.engine, engineId: snap.engineId,
         model: snap.model, execCwd: snap.execCwd, boundRootId: snap.boundRootId, shellHint: snap.shellHint,
         acc: snap.acc ?? new UsageAccumulator(), ctxWindow: snap.ctxWindow ?? 0, ctxPolicy: snap.ctxPolicy ?? { autoCompact: true, threshold: 0.75, keepRecent: 6 },
@@ -1370,7 +1404,7 @@ export function createServerPart(options = {}) {
       const run = (runId && runs.get(runId)) || (sessionId && runsBySession.get(sessionId)) || null;
       if (!run) return send(res, 404, { error: 'run not found', code: 'RUN_NOT_FOUND' });
       audit({ op: 'interrupt', runId: run.id, sessionId: run.sessionId, user: session?.user?.name });
-      emitEvent(run, 'message.done', { sessionId: run.sessionId, messageId: run.assistantId, interrupted: true });
+      emitRunDone(run, { interrupted: true });
       finishRun(run);
       return send(res, 200, { ok: true });
     }
