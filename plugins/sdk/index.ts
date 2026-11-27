@@ -27,6 +27,7 @@ export type {
   SlotDescriptor,
   ViewDescriptor,
   TabChromeProps,
+  TopbarChromeProps,
   ContainerDescriptor,
   LayoutRootProps,
   LiteManifest,
@@ -103,3 +104,15 @@ export const CHANNEL_ENGINE_DIRECT = '__PLITE_ENGINE_DIRECT__';
 /** 会话镜像存储键：chat-lite 独立档本地会话 ↔ mock-auth 会话状态共享（sessionStorage） */
 export const KEY_MOCK_AUTH_SESSION = 'mock-auth.session.v1';
 
+
+/** 会话跳转意图事件（CustomEvent 名）：插件请求 chat-lite 把活跃会话切到指定 sessionId。
+ *  detail: { sessionId: string }。消费方是 chat-lite（映射到 useSessionStore.setActive）
+ *  派发方典型是 notification-center（点击跨会话通知/询问等待通知跳转过去）。
+ *  与 CHANNEL_PANEL_INTENT 同一模式：意图事件 + 零硬编码消费方清单。 */
+export const CHANNEL_SESSION_INTENT = 'plite-session-intent';
+
+/** 活跃会话只读桥（window 键）：chat-lite 在 setup/activeId 变化时写入
+ *  { sessionId: string | null, title: string | null }（title 为空标题/新会话时回退首条消息截断，
+ *  与 session.title:changed 广播同一口径）。旁听方（notification-center 等）只读，
+ *  不经此通道写——切换会话一律走 CHANNEL_SESSION_INTENT。 */
+export const CHANNEL_SESSION_ACTIVE = '__PLITE_SESSION_ACTIVE__';

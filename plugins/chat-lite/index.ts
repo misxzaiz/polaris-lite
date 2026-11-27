@@ -10,7 +10,7 @@
  * - 任何收敛路径都必须补发 settle，否则输入框永远停在「停止」态；
  * - delta 按帧合并写 store：逐 token 写会让整棵消息树每个 token 重渲染。
  */
-import { CHANNEL_FILE_BROWSER_COMPOSE, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
+import { CHANNEL_FILE_BROWSER_COMPOSE, CHANNEL_SESSION_INTENT, CHANNEL_SESSION_ACTIVE, type LitePlugin, type SlotHostApi, type ChatMessage } from '@sdk';
 import { useSessionStore, isToolCard, hasBlocks, setOfflineMode, syncPullNow, markRunnerOwned, type StoreMessage } from './store';
 import { useCtxStore, ctxPolicyOf } from './ctxStore';
 import type { Attachment } from './attachments';
@@ -135,7 +135,7 @@ export const chatLitePlugin: LitePlugin = {
     // workspace-renamed：file-browser 改名广播，输入区目录名据此即时同步（不再停留在旧名）
     // mode-changed：standalone-mode 的运行模式广播（独立档切换本地会话镜像，docs/mobile-app-plan.md §10）
     // auth-changed：登录成功立即对账（否则新设备首登要等 30s 轮询才有会话列表）
-    events: ['cap.ai.chat:event', 'cap.ai.chat.runner:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed', 'auth-changed'],
+    events: ['cap.ai.chat:event', 'cap.ai.chat.runner:event', 'user.prompt', 'interactive.created', 'interactive.answered', 'artifact.created', 'workspace-renamed', 'mode-changed', 'auth-changed', 'session.title:changed'],
     contributes: {
       slots: [
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
@@ -147,6 +147,24 @@ export const chatLitePlugin: LitePlugin = {
   setup(api) {
     hostApi = api;
     bindEngineCatalog(api);
+    // 会话跳转意图（notification-center 等派发）：切到指定会话。sessionId 无效时 no-op。
+    window.addEventListener(CHANNEL_SESSION_INTENT, (ev) => {
+      const sid = (ev as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (sid) useSessionStore.getState().setActive(sid);
+    });
+    // 活跃会话只读桥：activeId/标题变化时写入 { sessionId, title }（title 口径对齐
+    // session.title:changed 广播：未命名回退首条消息前 18 字），旁听方零轮询消费。
+    const writeSessionActive = (): void => {
+      const st = useSessionStore.getState();
+      const s2 = st.sessions.find((x) => x.id === st.activeId);
+      const first = s2?.messages.find((m) => m.role === 'user')?.content ?? '';
+      (window as unknown as Record<string, unknown>)[CHANNEL_SESSION_ACTIVE] = {
+        sessionId: st.activeId,
+        title: s2?.title && s2.title !== '新会话' ? s2.title : (first ? first.slice(0, 18) : null),
+      };
+    };
+    useSessionStore.subscribe(() => { writeSessionActive(); });
+    writeSessionActive();
     void loadEngines(); // 引擎清单自省（失败静默；面板打开时会重试）
     // 跨插件输入注入通道（file-browser「发到对话」等使用；经本函数保证走合法发送路径）
     (window as unknown as Record<string, unknown>)[CHANNEL_FILE_BROWSER_COMPOSE] = (text: string) => requestCompose(text);
@@ -196,6 +214,38 @@ export const chatLitePlugin: LitePlugin = {
     };
     api.listen('interactive.created', onInteractive(true));
     api.listen('interactive.answered', onInteractive(false));
+
+    // ---- 会话标题广播（session-hud / topbar-brief 等旁听方消费）----
+    // 广播时机：activeId 切换、当前会话标题变化（rename / 自动命名 / 同步对账回填）。
+    // 与 user.prompt 同一 emit 通道：无监听者或事件未授权时 emit 会抛错，静默跳过。
+    // 口径对齐 SessionSidebar.displayTitle：'新会话' 未命名时用首条消息前 18 字展示，
+    // 这里直接带上原始 title 与 firstMessage，消费方自行决定展示口径。
+    const emitTitle = (): void => {
+      const st = useSessionStore.getState();
+      const s = st.sessions.find((x) => x.id === st.activeId);
+      try {
+        hostApi?.emit('session.title:changed', {
+          sessionId: st.activeId,
+          title: s?.title ?? null,
+          firstMessage: s?.messages.find((m) => m.role === 'user')?.content ?? null,
+        });
+      } catch {
+        /* 无监听者或事件未授权：静默跳过（广播失败不影响任何主流程） */
+      }
+    };
+    // zustand subscribe：任意 setState 后回调，内部比较去重（只有 active 会话的
+    // activeId/title/首条消息变化才真正 emit，避免轮询/心跳触发的全量 setState 刷屏）
+    let lastKey = '';
+    useSessionStore.subscribe((st) => {
+      const s = st.sessions.find((x) => x.id === st.activeId);
+      const key = `${st.activeId ?? ''}::${s?.title ?? ''}::${s?.messages.find((m) => m.role === 'user')?.content?.slice(0, 64) ?? ''}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      emitTitle();
+    });
+    // 首次启动广播一次（冷启动恢复 activeId 后）：晚订阅的消费者（插件装配顺序不同）
+    // 拿不到历史，靠这次广播补齐初值。
+    emitTitle();
 
     // 独立档数据面（docs/mobile-app-plan.md §10.4）：standalone-mode 广播模式变化 →
     // 切换会话同步层。standalone（宿主不可达）时暂停服务端轮询/推送，会话变更只落

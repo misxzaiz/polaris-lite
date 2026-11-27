@@ -19,7 +19,7 @@
  */
 import { createPortal } from 'react-dom';
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
-import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_STATE, CHANNEL_DRAWER_EVENT } from '@sdk';
+import { CHANNEL_PANEL_INTENT, CHANNEL_DRAWER_STATE, CHANNEL_DRAWER_EVENT, CHANNEL_SESSION_ACTIVE, CHANNEL_SESSION_INTENT } from '@sdk';
 import { NotificationPanel } from './Panel';
 import {
   MAX_VISIBLE, TOAST_TTL_MS, loadInbox, loadPrefs, getPrefs, pushNotice, setNotifyApi,
@@ -30,7 +30,9 @@ import './panel.css';
 // ── 通知 → toast 队列（展示态，内存即可） ─────────────────────────────
 
 interface Toast extends NotifyItem {
-  ttl: number; // 0 = 常驻（error）
+  ttl: number; // 0 = 常驻（error / 询问等待）
+  /** 关联会话：点击 toast 主体跳转过去（CHANNEL_SESSION_INTENT） */
+  sessionId?: string;
 }
 
 let toasts: Toast[] = [];
@@ -113,7 +115,8 @@ function ToastHost(): JSX.Element | null {
   return createPortal(
     <div className="nc-region" role="region" aria-label="通知">
       {toasts.map((t) => (
-        <div key={t.id} className="nc-toast" data-level={t.level} data-toast-id={t.id} role="alert">
+        <div key={t.id} className={`nc-toast ${t.sessionId ? 'jumpable' : ''}`} data-level={t.level} data-toast-id={t.id} role="alert"
+          onClick={() => { if (t.sessionId) jumpToSession(t.sessionId); }}>
           <span className="ncp-ico">
             <PanelIco level={t.level} />
           </span>
@@ -121,7 +124,7 @@ function ToastHost(): JSX.Element | null {
             <span className="ncp-t">{t.title}</span>
             {t.body && <span className="ncp-d">{t.body}</span>}
           </span>
-          <button type="button" className="nc-close" aria-label="关闭" onClick={() => dismissToast(t.id)}>
+          <button type="button" className="nc-close" aria-label="关闭" onClick={(e) => { e.stopPropagation(); dismissToast(t.id); }}>
             <CloseX />
           </button>
           {t.ttl > 0 && <span className="nc-life" style={{ animationDuration: `${t.ttl}ms` }} />}
@@ -195,8 +198,114 @@ function enqueueToast(t: Toast): void {
   pushToast(t);
 }
 
-function watchStream(api: SlotHostApi): void {
+/** 当前活跃会话（只读桥：chat-lite 写入 { sessionId, title }） */
+function activeSessionInfo(): { sessionId: string | null; title: string | null } {
+  const v = (window as unknown as Record<string, unknown>)[CHANNEL_SESSION_ACTIVE] as
+    | { sessionId?: string | null; title?: string | null }
+    | undefined;
+  return {
+    sessionId: typeof v?.sessionId === 'string' ? v.sessionId : null,
+    title: typeof v?.title === 'string' ? v.title : null,
+  };
+}
+
+/** 会话显示名：有标题用标题，否则用 sessionId 前 8 位 */
+function sessionLabel(sessionId: string | undefined): string {
+  if (!sessionId) return '未知会话';
+  const info = activeSessionInfo();
+  if (info.sessionId === sessionId && info.title) return info.title;
+  return sessionId.slice(0, 8);
+}
+
+/** 是否有 runner 编排在跑（runner 事件出现即视为有；用于 message.done 兜底去重） */
+let runnerActive = false;
+
+/** 点击跳转：派发会话跳转意图（chat-lite 消费切到该会话），并撤掉询问等待 toast */
+function jumpToSession(sessionId: string): void {
+  window.dispatchEvent(new CustomEvent(CHANNEL_SESSION_INTENT, { detail: { sessionId } }));
+  void markToastGone(`ia:${sessionId}`);
+}
+
+/** 已作答/超时后撤掉指定前缀的 toast（去 inbox 找同前缀条目映射到展示态） */
+async function markToastGone(idPrefix: string): Promise<void> {
+  const list = await loadInbox();
+  const hit = list.find((n) => n.id.startsWith(idPrefix));
+  if (hit) dismissToast(hit.id);
+}
+
+function watchSessionEvents(api: SlotHostApi): void {
   // envelope: { source, kind, payload }（与 chat-lite / app-updater 的处理约定一致）
+
+  // ── runner 通道（工具编排模式）：整轮结束口径 = loop.done ──────────────
+  // 此前监听 cap.ai.chat:event 的 message.done 会把「引擎层每轮回复结束」当完成——
+  // 工具链中途每转一轮弹一次，通知早且没用。runner 模式下正确的终信号是 loop.done
+  // （含 guardLimit：达到轮次上限被安全阀收尾，也算整轮结束）。
+  api.listen('cap.ai.chat.runner:event', (raw) => {
+    const env = raw as { source?: string; kind?: string; payload?: { sessionId?: string; turns?: number; interrupted?: boolean; message?: string; kind2?: string } };
+    if (!env?.source || !env?.kind) return;
+    runnerActive = true;
+    const sid = typeof env.payload?.sessionId === 'string' ? env.payload.sessionId : null;
+
+    // 询问等待通知：runner 模式的 interactive.required（带 callId/title）。
+    // 非当前会话才提醒——正盯着的会话 AI 提问，卡片就在眼前，通知反而打扰。
+    if (env.kind === 'interactive.required') {
+      streaming = true; // 询问挂起期间同样挂起普通 toast，避免遮挡生成中内容
+      void (async () => {
+        await loadPrefs();
+        if (!getPrefs().notifyOnInteractive) return;
+        if (!sid || sid === activeSessionInfo().sessionId) return;
+        const item: NotifyItem = {
+          id: `ia:${sid}`,
+          level: 'warn',
+          title: '会话在等你作答',
+          body: `「${sessionLabel(sid)}」：${String((env.payload as Record<string, unknown> | undefined)?.title ?? '') || 'AI 发起了交互'}，点击通知跳转作答`,
+          at: Date.now(),
+          read: false,
+          source: 'notification-center',
+        };
+        await pushNotice(item);
+        enqueueToast({ ...item, ttl: 0, sessionId: sid }); // 常驻：作答/超时前一直在
+      })();
+      return;
+    }
+    // 询问收敛（作答/超时/中断都会走）：撤掉该会话的询问等待 toast
+    if (env.kind === 'interactive.resolved') {
+      void markToastGone(`ia:${sid ?? ''}`);
+      return;
+    }
+    if (env.kind === 'message.delta') {
+      streaming = true;
+      return;
+    }
+    if (env.kind !== 'loop.done' && env.kind !== 'stream.error') return;
+    streaming = false;
+    // 整轮完成通知（可开关）。普通完成只提醒非当前会话——正开着的会话结果就在
+    // 屏幕上，再弹通知是噪音；失败/中断无论哪个会话都提醒（错过重试就是坑）。
+    void (async () => {
+      await loadPrefs();
+      if (!getPrefs().notifyOnDone) return;
+      const failed = env.kind === 'stream.error';
+      const interrupted = env.payload?.interrupted === true;
+      const isCurrent = sid === activeSessionInfo().sessionId;
+      if (!failed && !interrupted && isCurrent) return;
+      const level: NotifyLevel = failed ? 'error' : interrupted ? 'warn' : 'success';
+      const title = failed ? '回复失败' : interrupted ? '回复已中断' : '任务完成';
+      const body = failed
+        ? (env.payload?.message ?? '生成出错，可重试')
+        : `「${sessionLabel(sid ?? undefined)}」整轮结束（${env.payload?.turns ?? '?'} 轮）`;
+      const id = `done:${sid ?? 'x'}:${Date.now()}`;
+      const item: NotifyItem = { id, level, title, body, at: Date.now(), read: false, source: 'notification-center', sessionId: sid ?? undefined };
+      await pushNotice(item);
+      enqueueToast({ ...item, ttl: failed ? 0 : TOAST_TTL_MS, sessionId: sid ?? undefined });
+    })();
+    while (pendingQueue.length) {
+      const t = pendingQueue.shift();
+      if (t) pushToast(t);
+    }
+  });
+
+  // ── 引擎直达通道（无工具编排的纯聊天）：message.done 仍作完成口径 ──────────
+  // 但 runner 活动期间忽略——runner 模式的每轮 message.done 不是终信号（见上）。
   api.listen('cap.ai.chat:event', (raw) => {
     const env = raw as { source?: string; kind?: string; payload?: { sessionId?: string; interrupted?: boolean; message?: string } };
     if (!env?.source || !env?.kind) return;
@@ -206,35 +315,65 @@ function watchStream(api: SlotHostApi): void {
     }
     if (env.kind !== 'message.done' && env.kind !== 'stream.error') return;
     streaming = false;
-    // 会话完成通知（可开关）：一轮回复结束/失败/被打断后提醒。多标签页会重复弹——
-    // 每个标签页都订阅同一事件总线，这是既有 toast 通道的已知口径（与 app-updater 相同）。
+    // runner 编排在跑：done 由 loop.done 通道负责，此处只做流式保护队列收敛
+    if (runnerActive) {
+      runnerActive = false;
+      while (pendingQueue.length) {
+        const t = pendingQueue.shift();
+        if (t) pushToast(t);
+      }
+      return;
+    }
+    const sid = typeof env.payload?.sessionId === 'string' ? env.payload.sessionId : null;
     void (async () => {
       await loadPrefs();
       if (!getPrefs().notifyOnDone) return;
       const failed = env.kind === 'stream.error';
       const interrupted = env.payload?.interrupted === true;
+      const isCurrent = sid === activeSessionInfo().sessionId;
+      if (!failed && !interrupted && isCurrent) return;
       const level: NotifyLevel = failed ? 'error' : interrupted ? 'warn' : 'success';
       const title = failed ? '回复失败' : interrupted ? '回复已中断' : '回复完成';
       const body = failed
         ? (env.payload?.message ?? '生成出错，可重试')
-        : `会话 ${env.payload?.sessionId?.slice(0, 8) ?? ''} 一轮回复结束`;
-      await pushNotice({
-        id: `done:${env.payload?.sessionId ?? 'x'}:${Date.now()}`,
-        level,
-        title,
-        body,
-        source: 'notification-center',
-      });
-      enqueueToast({
-        id: `done:${env.payload?.sessionId ?? 'x'}:${Date.now()}`,
-        level, title, body, source: 'notification-center', at: Date.now(), read: false,
-        ttl: TOAST_TTL_MS,
-      });
+        : `「${sessionLabel(sid ?? undefined)}」一轮回复结束`;
+      const id = `done:${sid ?? 'x'}:${Date.now()}`;
+      const item: NotifyItem = { id, level, title, body, at: Date.now(), read: false, source: 'notification-center', sessionId: sid ?? undefined };
+      await pushNotice(item);
+      enqueueToast({ ...item, ttl: failed ? 0 : TOAST_TTL_MS, sessionId: sid ?? undefined });
     })();
     while (pendingQueue.length) {
       const t = pendingQueue.shift();
       if (t) pushToast(t);
     }
+  });
+
+  // ── 客户端编排路径（interactive-cards 直发，无 runner）：询问等待通知 ──────
+  api.listen('interactive.created', (raw) => {
+    const env = raw as { payload?: Record<string, unknown> };
+    const p = (env?.payload ?? {}) as { sessionId?: string; title?: string; kind?: string };
+    const sid = typeof p.sessionId === 'string' ? p.sessionId : null;
+    void (async () => {
+      await loadPrefs();
+      if (!getPrefs().notifyOnInteractive) return;
+      if (!sid || sid === activeSessionInfo().sessionId) return;
+      const item: NotifyItem = {
+        id: `ia:${sid}`,
+        level: 'warn',
+        title: '会话在等你作答',
+        body: `「${sessionLabel(sid)}」：${String(p.title ?? '') || 'AI 发起了交互'}，点击通知跳转作答`,
+        at: Date.now(),
+        read: false,
+        source: 'notification-center',
+      };
+      await pushNotice(item);
+      enqueueToast({ ...item, ttl: 0, sessionId: sid });
+    })();
+  });
+  api.listen('interactive.answered', (raw) => {
+    const env = raw as { payload?: { sessionId?: string } };
+    const sid = typeof env?.payload?.sessionId === 'string' ? env.payload.sessionId : null;
+    void markToastGone(`ia:${sid ?? ''}`);
   });
 }
 
@@ -262,7 +401,7 @@ export const notificationCenterPlugin: LitePlugin = {
     version: '0.1.0',
     capabilities: ['cap.kv'],
     provides: ['cap.ui.notify'],
-    events: ['cap.ai.chat:event', 'notifications-changed'],
+    events: ['cap.ai.chat:event', 'cap.ai.chat.runner:event', 'interactive.created', 'interactive.answered', 'notifications-changed'],
     contributes: {
       slots: [{ slot: 'panel', component: 'NotificationPanel', order: 34, title: '通知' }],
     },
@@ -272,7 +411,7 @@ export const notificationCenterPlugin: LitePlugin = {
     void loadInbox();
     void loadPrefs();
     api.registerCapability.register('cap.ui.notify', createNotifyHandler());
-    watchStream(api);
+    watchSessionEvents(api);
     // ToastHost 不经槽位：直接挂 body（面板卸载不影响 toast 常驻）
     mountToastHost();
   },

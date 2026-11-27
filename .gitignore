@@ -67,3 +67,7 @@ nonexistent-dir-for-test/
 
 # 脚本备份
 /*.bak
+
+nul
+
+/test-rabbit.html

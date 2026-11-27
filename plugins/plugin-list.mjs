@@ -75,6 +75,8 @@ export const PLUGIN_LIST = [
   // token-ledger = Token 总用量台账（ai.usage 事件旁听记账 + IndexedDB 持久化
   // + ai-events requests 表历史回填 + panel 看板；纯前端，可卸载可替换）
   { id: 'token-ledger', config: 'token-ledger/vite.config.ts', dist: 'token-ledger/dist', order: 42 },
+  // session-hud = 会话悬浮摘要卡（标题+改动文件实时清单；旁听 session.title:changed 与 runner 事件）
+  { id: 'session-hud', config: 'session-hud/vite.config.ts', dist: 'session-hud/dist', order: 43 },
 ].sort((a, b) => a.order - b.order);
 
 /** 是否启用（缺省 true）——server-registry 用它过滤 server 半边 */

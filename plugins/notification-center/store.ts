@@ -21,6 +21,8 @@ export interface NotifyItem {
   read: boolean;
   /** 来源插件 id（宿主 dispatch 时由总线注入？——cap 无溯源，这里由 payload 透传） */
   source?: string;
+  /** 关联会话（会话完成/询问等待通知携带；面板条目点击可跳转过去） */
+  sessionId?: string;
 }
 
 const NS = 'notification-center';
@@ -36,9 +38,11 @@ export const TOAST_TTL_MS = 5000;
 export interface NotifyPrefs {
   /** 会话完成通知（AI 回复 done/error 后提醒） */
   notifyOnDone: boolean;
+  /** 别的会话 AI 发起交互（question/form/confirm）时提醒（仅非当前会话） */
+  notifyOnInteractive: boolean;
 }
 
-const DEFAULT_PREFS: NotifyPrefs = { notifyOnDone: true };
+const DEFAULT_PREFS: NotifyPrefs = { notifyOnDone: true, notifyOnInteractive: true };
 
 let prefsCache: NotifyPrefs | null = null;
 const prefsSubs = new Set<() => void>();

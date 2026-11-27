@@ -98,9 +98,16 @@ export type ChatSessionShape = Omit<ChatSession, 'messages'> & {
  *  v2（2026-11-22）：从 lastActiveAt 改为 createdAt——按活跃排序会让「回复一句旧会话」
  *  导致会话瞬移到顶部，左右滑切/Alt+N 依赖下标稳定，位置漂移即切错目标。
  *  lastActiveAt 仍随会话 JSON 同步（供展示用），但不再参与排序。
+ *  v3（2026-11-27）：pinned=true 的会话常驻列表最前（长跑会话被后续小会话淹没、
+ *  左右切换要逐个穿过的痛点）；新会话头插仍落置顶组之下——「新增还在前面」语义不变。
  *  sessions 数组的下标语义（相邻切换/滑切/侧栏展示）全部依赖本函数，勿在别处自行排序。 */
-export function sortSessions<T extends { createdAt: number }>(sessions: T[]): T[] {
-  return [...sessions].sort((a, b) => b.createdAt - a.createdAt);
+export function sortSessions<T extends { createdAt: number; pinned?: boolean }>(sessions: T[]): T[] {
+  return [...sessions].sort((a, b) => {
+    const pa = a.pinned ? 1 : 0;
+    const pb = b.pinned ? 1 : 0;
+    if (pa !== pb) return pb - pa; // 置顶组在前
+    return b.createdAt - a.createdAt; // 组内仍按创建时间倒序
+  });
 }
 
 /** 触摸会话：刷新 lastActiveAt 并标记脏（所有会话内容变更的唯一入口） */

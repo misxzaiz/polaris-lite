@@ -16,7 +16,7 @@ import { host } from './hostRuntime';
 import { t } from './i18n';
 import { getRuntimeComponent } from './externalPlugins';
 import { viewRegistry } from './workspace/viewRegistry';
-import type { LayoutRootProps } from './types';
+import type { LayoutRootProps, TopbarChromeProps } from './types';
 import {
   dismissNotice,
   getDrawer,
@@ -101,6 +101,13 @@ export function SlotLayout() {
     ? (getRuntimeComponent(container.pluginId, container.component) as
         ((props: LayoutRootProps) => ReactNode) | undefined)
     : undefined;
+  // topbar 容器解析（移动端顶栏 chrome 外移：插件可替换顶栏渲染，宿主保留抽屉状态权威）
+  const topbarComp = host.slots.resolveContainer('topbar');
+  const TopbarComp = topbarComp
+    ? (getRuntimeComponent(topbarComp.pluginId, topbarComp.component) as
+        ((props: TopbarChromeProps) => ReactNode) | undefined)
+    : undefined;
+
   // wiring 已移至 main.tsx 装载完成后（必修包修4:渲染体不再做副作用;wire 缺失有 boot notice）
 
   useEffect(() => {
@@ -199,23 +206,34 @@ export function SlotLayout() {
       <BootNotices />
 
       <header className="shell-topbar">
-        <button
-          className={`topbar-btn ${drawer === 'sidebar' ? 'active' : ''}`}
-          aria-label={t('shell.sessionList')}
-          aria-expanded={drawer === 'sidebar'}
-          onClick={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
-        >
-          <MenuIcon />
-        </button>
-        <span className="topbar-title">{t('shell.appName')}</span>
-        <button
-          className={`topbar-btn ${drawer === 'panel' ? 'active' : ''}`}
-          aria-label={t('shell.capabilityPanel')}
-          aria-expanded={drawer === 'panel'}
-          onClick={() => setDrawer(drawer === 'panel' ? 'none' : 'panel')}
-        >
-          <PanelIcon />
-        </button>
+        {TopbarComp ? (
+          <TopbarComp
+            drawer={drawer}
+            onToggleSidebar={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
+            onTogglePanel={() => setDrawer(drawer === 'panel' ? 'none' : 'panel')}
+            t={t}
+          />
+        ) : (
+          <>
+            <button
+              className={`topbar-btn ${drawer === 'sidebar' ? 'active' : ''}`}
+              aria-label={t('shell.sessionList')}
+              aria-expanded={drawer === 'sidebar'}
+              onClick={() => setDrawer(drawer === 'sidebar' ? 'none' : 'sidebar')}
+            >
+              <MenuIcon />
+            </button>
+            <span className="topbar-title">{t('shell.appName')}</span>
+            <button
+              className={`topbar-btn ${drawer === 'panel' ? 'active' : ''}`}
+              aria-label={t('shell.capabilityPanel')}
+              aria-expanded={drawer === 'panel'}
+              onClick={() => setDrawer(drawer === 'panel' ? 'none' : 'panel')}
+            >
+              <PanelIcon />
+            </button>
+          </>
+        )}
       </header>
 
       <div className="shell-body">

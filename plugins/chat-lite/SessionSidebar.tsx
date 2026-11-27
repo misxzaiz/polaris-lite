@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow } from './store';
-import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon, CloseIcon } from './icons';
+import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon, CloseIcon, PinIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
 
 /** 浮层根：宿主 SlotLayout 提供的 fixed 覆盖层（空态 pointer-events:none 放行，子元素恢复 auto）。
@@ -60,12 +60,14 @@ function displayTitle(title: string, firstMessage: string | undefined): string {
   return firstMessage ? firstMessage.slice(0, 18) : title;
 }
 
-// ---- 时间分组（P0-4）：列表顺序已按最后活跃倒序，桶顺序天然递增 ----
-type TimeBucket = 'today' | 'week' | 'older';
-const BUCKET_ORDER: TimeBucket[] = ['today', 'week', 'older'];
-const BUCKET_LABEL: Record<TimeBucket, string> = { today: '今天', week: '7 天内', older: '更早' };
+// ---- 时间分组（P0-4）：列表顺序已按创建时间倒序，桶顺序天然递增 ----
+// pinned 桶（2026-11-27）：置顶会话独立成组常驻最前；filtered 沿用 store 的
+// sortSessions 结果（置顶组在前），桶内顺序无需再排。
+type GroupKey = 'pinned' | 'today' | 'week' | 'older';
+const BUCKET_ORDER: GroupKey[] = ['pinned', 'today', 'week', 'older'];
+const BUCKET_LABEL: Record<GroupKey, string> = { pinned: '置顶', today: '今天', week: '7 天内', older: '更早' };
 
-function bucketOf(ts: number): TimeBucket {
+function bucketOf(ts: number): Exclude<GroupKey, 'pinned'> {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
   if (ts >= startOfDay.getTime()) return 'today';
@@ -93,6 +95,7 @@ export function SessionSidebar() {
   const createSession = useSessionStore((s) => s.createSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const renameSession = useSessionStore((s) => s.renameSession);
+  const togglePinSession = useSessionStore((s) => s.togglePinSession);
   const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
   const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -141,8 +144,8 @@ export function SessionSidebar() {
 
   // ---- 时间分组（无搜索词时）：今天 / 7 天内 / 更早（按创建时间，与排序口径一致） ----
   const grouped = useMemo(() => {
-    const map: Record<TimeBucket, typeof sessions> = { today: [], week: [], older: [] };
-    for (const s of filtered) map[bucketOf(s.createdAt)].push(s);
+    const map: Record<GroupKey, typeof sessions> = { pinned: [], today: [], week: [], older: [] };
+    for (const s of filtered) map[s.pinned ? 'pinned' : bucketOf(s.createdAt)].push(s);
     return map;
   }, [filtered]);
 
@@ -205,7 +208,7 @@ export function SessionSidebar() {
     return (
       <div
         key={s.id}
-        className={`chat-session-item ${s.id === activeId ? 'active' : ''}`}
+        className={`chat-session-item ${s.id === activeId ? 'active' : ''}${s.pinned ? ' pinned' : ''}`}
         onClick={() => onRowClick(s.id)}
         onPointerDown={(e) => onRowPointerDown(s.id, e)}
         onPointerUp={onRowPointerUp}
@@ -213,6 +216,7 @@ export function SessionSidebar() {
         onPointerCancel={onRowPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       >
+        {s.pinned && <span className="chat-session-pinmark" title="已置顶" aria-hidden="true"><PinIcon filled /></span>}
         <span className="title" onDoubleClick={() => startRename(s.id)}>
           {isRenaming ? (
             <input
@@ -257,6 +261,16 @@ export function SessionSidebar() {
             {!isRenaming && <span className="chat-session-count">{s.messages.length}</span>}
             {/* 桌面：行内三图标（hover 浮现）；窄屏：CSS 隐藏图标、显示 ⋮（44px 命中区） */}
             <span className="chat-session-actions">
+              {!isRenaming && (
+                <button
+                  className="chat-session-act chat-session-pin"
+                  title={s.pinned ? '取消置顶' : '置顶（常驻列表最前）'}
+                  aria-label={`${s.pinned ? '取消置顶' : '置顶'} ${displayTitle(s.title, s.messages[0]?.content)}`}
+                  onClick={(e) => { e.stopPropagation(); togglePinSession(s.id); }}
+                >
+                  <PinIcon filled={s.pinned} />
+                </button>
+              )}
               {!isRenaming && (
                 <button
                   className="chat-session-act chat-session-rename"
@@ -384,6 +398,14 @@ export function SessionSidebar() {
               <CloseIcon />
             </button>
             <div className="chat-sheet-title">{displayTitle(menuSession.title, menuSession.messages[0]?.content)}</div>
+            <button
+              type="button"
+              className="chat-sheet-item"
+              role="menuitem"
+              onClick={() => { togglePinSession(menuSession.id); setMenuFor(null); }}
+            >
+              <PinIcon filled={menuSession.pinned} /><span>{menuSession.pinned ? '取消置顶' : '置顶'}</span>
+            </button>
             <button
               type="button"
               className="chat-sheet-item"

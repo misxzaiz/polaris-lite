@@ -397,7 +397,7 @@ function readSourceManifest(p) {
  * 同级的故障类别,必须在构建期挡掉。kind 受控枚举;component 必须非空字符串。
  */
 function readContainerContributions(literal, pluginId) {
-  const CONTAINER_KINDS = new Set(['slot-tabs', 'layout-root']);
+  const CONTAINER_KINDS = new Set(['slot-tabs', 'layout-root', 'topbar']);
   const m = /\bcontainers\s*:\s*\[/.exec(literal);
   if (!m) return [];
   const arrStart = literal.indexOf('[', m.index);
@@ -598,6 +598,8 @@ function preflight() {
     'plite-drawer-changed',
     'plite-panel-intent',
     'mock-auth.session.v1',
+    'plite-session-intent',
+    '__PLITE_SESSION_ACTIVE__',
   ];
   const darkHits = [];
   for (const p of plugins) {

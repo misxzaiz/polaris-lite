@@ -113,6 +113,10 @@
 }
 .chat-session-item:hover .chat-session-act, .chat-session-act:focus-visible { opacity: 1; }
 .chat-session-act:hover { background: var(--plite-danger-soft); color: var(--plite-danger); }
+/* 置顶（2026-11-27）：行首图钉常驻可见（非 hover 态也有）；图钉按钮 hover 用 accent 而非 danger */
+.chat-session-item.pinned .chat-session-pinmark { display: inline-flex; color: var(--accent-bright); flex: 0 0 auto; }
+.chat-session-pinmark svg { width: 12px; height: 12px; opacity: 0.9; }
+.chat-session-act.chat-session-pin:hover { background: var(--accent-soft); color: var(--accent-bright); }
 .chat-session-confirm { display: flex; align-items: center; gap: 5px; flex: 1; justify-content: flex-end; }
 .chat-session-confirm span { font-size: 10px; color: var(--plite-danger); white-space: nowrap; }
 .chat-session-confirm button {

@@ -84,6 +84,15 @@ export function RefreshIcon() {
 
 // ===== 消息操作条图标（P0/P1 消息操作） =====
 
+/** 置顶（图钉，filled=已置顶实心） */
+export function PinIcon({ filled = false }: { filled?: boolean }) {
+  return <Icon size={13}>
+    <path d="M9 4h6" {...stroke} />
+    <path d="M12 4v5" {...stroke} />
+    <path d="M8 9h8l-1.6 5H14v4h-4v-4h2.4L8 9Z" {...stroke} fill={filled ? 'currentColor' : 'none'} fillOpacity={filled ? 0.25 : undefined} />
+  </Icon>;
+}
+
 /** 编辑（铅笔） */
 export function EditIcon() {
   return <Icon size={13}><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" {...stroke} /></Icon>;

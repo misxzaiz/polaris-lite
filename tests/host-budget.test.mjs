@@ -63,8 +63,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  提升到一切层叠上下文之上，DOM 原位零重载，四个坑天然免疫），宿主 44 行全删、
  *  布局职责回到插件 CSS（UA 默认样式 + 插件覆盖 margin/inset）。豁免随方案作废
  *  回滚，预算恢复 5345。
+ * 2026-11-27 · 顶栏 chrome 外移（topbar 容器契约）：SlotLayout 顶栏渲染权经
+ * containers 契约委托插件（与 slot-tabs/layout-root 同款机制；宿主保留抽屉状态
+ * 权威 + 内置回退，types.ts 契约 +17、SlotLayout 委托 +18）。业务（会话标题等）
+ * 全在 session-hud 插件里，核心零业务不变。CORE_BUDGET 5345 → 5385。
  */
-const CORE_BUDGET = 5345;
+const CORE_BUDGET = 5385;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

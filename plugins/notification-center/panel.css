@@ -99,6 +99,9 @@
   box-shadow: 0 2px 6px rgba(var(--border-rgb), 0.08);
 }
 .nc-more:hover { color: var(--text); border-color: var(--border-strong); }
+/* 可跳转 toast（带会话）：主体点击切会话，给 pointer + 轻微强调 */
+.nc-toast.jumpable { cursor: pointer; }
+.nc-toast.jumpable:hover .ncp-t { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .nc-region { left: 10px; right: 10px; width: auto; top: 50px; }
 }

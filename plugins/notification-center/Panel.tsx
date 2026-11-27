@@ -5,6 +5,7 @@
  * ToastHost 常驻渲染，与本面板解耦——面板未挂载时通知照样弹）。
  */
 import { useEffect, useState } from 'react';
+import { CHANNEL_SESSION_INTENT } from '@sdk';
 import {
   clearInbox, getPrefs, loadInbox, loadPrefs, markAllRead, markRead, savePrefs, subscribe, subscribePrefs, unreadCount,
   type NotifyItem, type NotifyPrefs,
@@ -63,6 +64,16 @@ export function NotificationPanel() {
   const toggleDone = (): void => {
     void savePrefs({ ...prefs, notifyOnDone: !prefs.notifyOnDone });
   };
+  const toggleInteractive = (): void => {
+    void savePrefs({ ...prefs, notifyOnInteractive: !prefs.notifyOnInteractive });
+  };
+  /** 条目点击：有 sessionId 先跳会话（notification-center 的跳转意图），再标已读 */
+  const openItem = (n: NotifyItem): void => {
+    if (n.sessionId) {
+      window.dispatchEvent(new CustomEvent(CHANNEL_SESSION_INTENT, { detail: { sessionId: n.sessionId } }));
+    }
+    void markRead(n.id);
+  };
 
   const unread = unreadCount(items);
 
@@ -87,7 +98,7 @@ export function NotificationPanel() {
         <div className="ncp-pref-row">
           <span className="ncp-pref-main">
             <span className="ncp-pref-t">会话完成通知</span>
-            <span className="ncp-pref-d">每轮 AI 回复结束/中断/失败时提醒</span>
+            <span className="ncp-pref-d">整轮回复结束（含工具链）/中断/失败时提醒；仅提醒未打开的会话</span>
           </span>
           <button
             type="button"
@@ -97,6 +108,23 @@ export function NotificationPanel() {
             aria-label="会话完成通知开关"
             data-testid="nc-switch-done"
             onClick={toggleDone}
+          >
+            <span className="ncp-switch-knob" />
+          </button>
+        </div>
+        <div className="ncp-pref-row">
+          <span className="ncp-pref-main">
+            <span className="ncp-pref-t">询问等待通知</span>
+            <span className="ncp-pref-d">其他会话的 AI 发起表单/选择/确认时提醒，点击通知跳转作答</span>
+          </span>
+          <button
+            type="button"
+            className={`ncp-switch ${prefs.notifyOnInteractive ? 'on' : ''}`}
+            role="switch"
+            aria-checked={prefs.notifyOnInteractive}
+            aria-label="询问等待通知开关"
+            data-testid="nc-switch-ia"
+            onClick={toggleInteractive}
           >
             <span className="ncp-switch-knob" />
           </button>
@@ -112,8 +140,8 @@ export function NotificationPanel() {
               type="button"
               className={`ncp-item ${n.read ? '' : 'unread'}`}
               data-level={n.level}
-              onClick={() => void markRead(n.id)}
-              title={n.read ? undefined : '点击标记已读'}
+              onClick={() => openItem(n)}
+              title={n.sessionId ? '点击跳转到该会话' : n.read ? undefined : '点击标记已读'}
             >
               <span className="ncp-ico"><Ico level={n.level} /></span>
               <span className="ncp-main">
@@ -125,7 +153,7 @@ export function NotificationPanel() {
           ))
         )}
       </div>
-      <div className="ncp-foot">通知经 cap.ui.notify 推送，最近 100 条；点击条目标记已读。</div>
+      <div className="ncp-foot">通知经 cap.ui.notify 推送，最近 100 条；点击会话通知跳转，其余标记已读。</div>
     </div>
   );
 }

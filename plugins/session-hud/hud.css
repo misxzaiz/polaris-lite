@@ -1,0 +1,208 @@
+/**
+ * session-hud 样式：只用主题 token（--bg-* / --border-* / --text-* / --accent-*）。
+ * 门禁约束：不用 position:fixed（锚定由宿主 overlay root 提供）、不碰宿主类名
+ * （.slot-* / .shell-* / .polaris-lite-shell）、不用 emoji。命名空间 hud-*。
+ */
+
+.hud-region {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 64px); /* 避开移动端顶栏（60px + 余量） */
+  right: 12px;
+  z-index: 50;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: min(300px, 72vw);
+}
+
+.hud-card {
+  pointer-events: auto;
+  background: var(--bg-raised, var(--bg-elevated, #1c1f26));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  backdrop-filter: blur(14px);
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.hud-card[data-busy='true'] {
+  border-color: var(--accent, #7aa2f7);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--accent-soft, rgba(122, 162, 247, 0.25));
+}
+
+/* ── 头部（点击收起/展开）── */
+
+.hud-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.hud-head:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.05)); }
+
+.hud-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.hud-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--accent-soft, rgba(122, 162, 247, 0.18));
+  color: var(--accent-bright, #7aa2f7);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-count:empty { display: none; }
+
+.hud-chev { flex: 0 0 auto; color: var(--text-dim); display: inline-flex; }
+.hud-chev svg { width: 14px; height: 14px; }
+
+/* 状态点：静止绿点；有文件改动时实心 */
+.hud-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-faint, #888);
+  background: transparent;
+}
+.hud-dot[data-count='true'] {
+  border-color: transparent;
+  background: var(--accent, #7aa2f7);
+}
+
+/* 忙碌旋转 */
+.hud-spin { flex: 0 0 auto; display: inline-flex; color: var(--accent-bright, #7aa2f7); }
+.hud-spin svg { width: 14px; height: 14px; animation: hud-rotate 0.9s linear infinite; }
+
+@keyframes hud-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-spin svg { animation: none !important; }
+  .hud-chev svg { transition: none !important; }
+}
+
+/* ── 展开的文件列表 ── */
+
+.hud-body {
+  border-top: 1px solid var(--border);
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.hud-empty {
+  padding: 10px 12px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.hud-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hud-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.hud-file:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.05)); }
+
+.hud-file-ico { flex: 0 0 auto; color: var(--text-dim); display: inline-flex; }
+.hud-file-ico svg { width: 13px; height: 13px; }
+
+.hud-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 长路径左截断，保留文件名 */
+  text-align: left;
+  color: var(--text);
+}
+
+.hud-file-op {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-dim);
+}
+
+.hud-file[data-op='write'] .hud-file-op { color: var(--accent-bright, #7aa2f7); }
+.hud-file[data-op='edit'] .hud-file-op { color: #9ece6a; }
+.hud-file[data-op='read'] .hud-file-op { opacity: 0.7; }
+
+/* ── 移动端顶栏 chrome（topbar 容器贡献；外壳 header.shell-topbar 由宿主渲染，
+      这里只样式化自己的按钮/标题。断点外宿主已 display:none 整个顶栏）── */
+
+.hud-topbar-btn {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.hud-topbar-btn svg { width: 20px; height: 20px; }
+
+.hud-topbar-btn:active,
+.hud-topbar-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  border-color: var(--border-strong);
+}
+
+.hud-topbar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: var(--text);
+  font-family: var(--plite-font-display);
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}

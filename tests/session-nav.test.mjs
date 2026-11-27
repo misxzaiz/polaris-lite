@@ -67,11 +67,38 @@ test('streaming 标记：当前会话任一消息在流式即 true', () => {
 // 这里从源码提取函数体自证（与 reasoning.test.mjs 的源码级断言同风格）。
 const storeSrc = readFileSync(resolve(root, 'plugins/chat-lite/store.ts'), 'utf8');
 const fnStart = storeSrc.indexOf('export function sortSessions');
-const fnEnd = storeSrc.indexOf(String.fromCharCode(13,10) + String.fromCharCode(125) + String.fromCharCode(13,10), fnStart);
-const fnSrc = fnStart >= 0 && fnEnd > fnStart ? storeSrc.slice(fnStart, fnEnd + 4) : null;
+// v3 起函数体含多行比较器（内部就有 "  }"），且泛型签名 <T extends {...}> 内含 "{"：
+// 先跳过泛型段（剥到函数体开括号），再闭括号配平提取完整函数体。
+const fnSrc = (() => {
+  if (fnStart < 0) return null;
+  const genericEnd = storeSrc.indexOf('>(sessions', fnStart);
+  if (genericEnd < 0) return null;
+  let depth = 0;
+  for (let i = genericEnd; i < storeSrc.length; i++) {
+    if (storeSrc[i] === '{') depth++;
+    else if (storeSrc[i] === '}') { depth--; if (depth === 0) return storeSrc.slice(fnStart, i + 1); }
+  }
+  return null;
+})();
 assert.ok(fnSrc, 'store.ts 必须导出 sortSessions');
 // new Function 不吃 TS 泛型参数——剥掉 <T extends ...> 再求值（仅本测试的运行时自证）
-const jsFn = fnSrc.replace(/^export function/, 'function').replace(/<T extends[^>]*>/, '').replace(/\(sessions: T\[\]\)/, '(sessions)').replace(/\)\s*:\s*T\[\]\s*\{/, ') {');
+// v3 签名 <T extends { createdAt: number; pinned?: boolean }> 含内层 ">"，
+// 简单的 [^>]* 剥不干净——用大括号配平找到 extends {...} 的结束再剥。
+const jsFn = (() => {
+  let s = fnSrc.replace(/^export function/, 'function');
+  const m = s.match(/<T extends /);
+  if (m) {
+    const gStart = s.indexOf('{', m.index);
+    let depth = 0;
+    for (let i = gStart; i < s.length; i++) {
+      if (s[i] === '{') depth++;
+      else if (s[i] === '}') { depth--; if (depth === 0) { s = s.slice(0, m.index) + s.slice(i + 1); break; } }
+    }
+  }
+  // 剥掉泛型段后残留的孤立 ">"（签名 <T extends {...}> 的收尖括号）一并清除
+  s = s.replace(/^function\s+sortSessions>*/, 'function sortSessions');
+  return s.replace(/\(sessions: T\[\]\)/, '(sessions)').replace(/\)\s*:\s*T\[\]\s*\{/, ') {');
+})();
 const sortSessions = new Function(`return (${jsFn})`)();
 
 test('sortSessions：按 lastActiveAt 倒序，缺省回退 createdAt', () => {
@@ -90,6 +117,17 @@ test('sortSessions：不修改入参数组（纯函数）', () => {
   const copy = [...list];
   sortSessions(list);
   assert.deepEqual(list, copy);
+});
+
+test('sortSessions v3：置顶组常驻最前，组内仍按 createdAt 倒序；非置顶保持原有顺序', () => {
+  const list = [
+    { id: 'old-pin', createdAt: 100, pinned: true },
+    { id: 'new', createdAt: 500 },
+    { id: 'new-pin', createdAt: 400, pinned: true },
+    { id: 'mid', createdAt: 300 },
+  ];
+  const sorted = sortSessions(list);
+  assert.deepEqual(sorted.map((s) => s.id), ['new-pin', 'old-pin', 'new', 'mid']);
 });
 
 // ---- 服务端快照合并不得污染排序（回归：拉取导致的列表颠倒） ----

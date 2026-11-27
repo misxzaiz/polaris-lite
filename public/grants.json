@@ -30,7 +30,8 @@
         "artifact.created",
         "workspace-renamed",
         "mode-changed",
-        "auth-changed"
+        "auth-changed",
+        "session.title:changed"
       ]
     },
     "model-admin": {
@@ -320,6 +321,14 @@
       ],
       "events": [
         "tool-registered"
+      ]
+    },
+    "session-hud": {
+      "capabilities": [],
+      "provides": [],
+      "events": [
+        "session.title:changed",
+        "cap.ai.chat.runner:event"
       ]
     },
     "shell-chrome": {

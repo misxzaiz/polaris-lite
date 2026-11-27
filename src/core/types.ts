@@ -143,6 +143,23 @@ export interface TabChromeProps {
  * 布局插件自持树/持久化/layoutCap 注册(grants 授权 cap.ui.layout)。
  * 无插件注册时宿主回退内置固定四槽(WorkspaceTree 时代之前的形态)。
  */
+/**
+ * 顶栏 chrome 契约（topbar 容器）：移动端顶栏的渲染权外移给插件。
+ * 宿主保留抽屉状态的**状态权威**（shellState 单一事实源），插件组件零自持状态；
+ * 无插件注册时宿主回退内置版本（appName + 两个抽屉按钮），不破可用性。
+ * 与 TabChromeProps 同一纪律：宿主注入全部状态与回调。
+ */
+export interface TopbarChromeProps {
+  /** 当前抽屉状态（'sidebar' | 'panel' | 'none'；宿主 shellState 权威） */
+  drawer: 'sidebar' | 'panel' | 'none';
+  /** 切换侧栏抽屉（toggle 语义：开着就关、关着就开） */
+  onToggleSidebar(): void;
+  /** 切换面板抽屉（toggle 语义） */
+  onTogglePanel(): void;
+  /** i18n 文案（宿主注入，插件不用自己带词典） */
+  t(key: string): string;
+}
+
 export interface LayoutRootProps {
   /** 渲染指定锚点的槽位内容(host.slot.* 保留视图的落地回调) */
   renderAnchor(anchor: AnchorId): ReactNode;
@@ -157,7 +174,7 @@ export interface LayoutRootProps {
  */
 export interface ContainerDescriptor {
   /** 容器种类（受控枚举，按需扩展；layout-root = 工作区布局树宿主容器,P2-2） */
-  container: 'slot-tabs' | 'layout-root';
+  container: 'slot-tabs' | 'layout-root' | 'topbar';
   /** 插件内组件导出名（组件签名 = TabChromeProps） */
   component: string;
   /** 同类容器的优先级，小者优先 */
