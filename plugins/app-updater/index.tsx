@@ -296,6 +296,7 @@ export function VersionPanel(): JSX.Element {
   const pageBehind = us.result === 'update';
 
   const arm = (): void => {
+    if (submitting) return; // 双保险：投递中不允许再次武装确认
     setConfirming(true);
     if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
     confirmTimer.current = window.setTimeout(() => setConfirming(false), 6000);
@@ -313,6 +314,24 @@ export function VersionPanel(): JSX.Element {
         setError(data.error ?? `投递失败（HTTP ${res.status}）`);
       } else {
         setError(null);
+        // 乐观更新：202 一回来就拼一个 queued job，不等下一轮轮询——
+        // 否则 st 还是旧的「落后 N commit、无 job」，主按钮会退回「一键部署」。
+        const { jobId } = (await res.json().catch(() => ({}))) as { jobId?: string };
+        if (jobId) {
+          setSt((prev) => prev && ({
+            ...prev,
+            job: {
+              id: jobId,
+              status: 'queued',
+              phase: '排队',
+              startedAt: new Date().toISOString(),
+              endedAt: null,
+              targetSha: prev.target.sha,
+              error: null,
+              logTail: '',
+            },
+          }));
+        }
       }
       await load();
     } catch {
@@ -329,8 +348,12 @@ export function VersionPanel(): JSX.Element {
   const masterMeta = st?.target.subject ?? us.server?.subject ?? (us.server?.time ? fmtTime(us.server.time) : null);
 
   // ── 主按钮状态机（链路驱动）──
+  // submitting 在最前：POST /run 与下一轮 status 之间有一个空窗，此时 st 还是
+  // 旧的，不优先判 submitting 会让按钮退回「一键部署」且可再点（会撞 409）。
   let mainBtn: { text: string; cls: string; disabled: boolean; onClick?: () => void };
-  if (running) {
+  if (submitting) {
+    mainBtn = { text: '正在投递部署…', cls: '', disabled: true };
+  } else if (running) {
     mainBtn = { text: `部署中…（${st?.job?.phase ?? '进行中'}）`, cls: '', disabled: true };
   } else if (failedLast) {
     mainBtn = { text: '重新部署', cls: 'dp-btn-danger', disabled: !canDeploy, onClick: arm };

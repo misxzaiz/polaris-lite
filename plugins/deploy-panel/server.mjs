@@ -351,8 +351,16 @@ export function createServerPart(options = {}) {
           targetSha: target.sha,
         });
 
+        // 202 必须在拉起 worker **之前**回：pm2 delete/start 是同步阻塞（最长
+        // 45s），压住事件循环会让前端的 2.5s status 轮询一起卡住——用户点了
+        // 确认却看到按钮退回「一键部署」。提前回 202，前端立刻切「部署中」。
+        sendJson(202, { jobId, targetSha: target.sha });
+
         const launched = launchWorker({ jobId, logFile });
         if (!launched.ok) {
+          // 拉起失败在响应之后收尾：前端拿不到这个 500，唯一的信息通道是 status，
+          // 所以 job.json 和 last-run.json 都要写——前端 failedLast 读 lastRun，
+          // 不写的话按钮会静默退回「一键部署」且不显示任何错误。
           writeJson(jobFile, {
             id: jobId,
             status: 'done',
@@ -362,7 +370,20 @@ export function createServerPart(options = {}) {
             targetSha: target.sha,
             error: launched.error,
           });
-          return sendJson(500, { error: launched.error, code: 'DEPLOY_SPAWN_FAILED' });
+          writeJson(lastRunFile, {
+            id: jobId,
+            ok: false,
+            sha: null,
+            startedAt,
+            endedAt: new Date().toISOString(),
+            error: launched.error,
+            notified: true, // 拉起失败没有「重启后补通知」一说，页面还在直接看
+          });
+          audit({
+            event: 'spawn-failed', jobId, targetSha: target.sha,
+            error: launched.error, by: session?.user ?? null,
+          });
+          return;
         }
 
         // 只补 launcher/pid 这类元数据，绝不覆盖 worker 可能已经写好的 status/phase
@@ -376,7 +397,7 @@ export function createServerPart(options = {}) {
           event: 'run', jobId, targetSha: target.sha, launcher: launched.mode,
           pid: launched.pid ?? null, by: session?.user ?? null,
         });
-        return sendJson(202, { jobId, targetSha: target.sha });
+        return; // 202 已回，但必须 return：不然后面还会撞 404 fallback 覆写响应
       }
 
       if (pathname === '/api/deploy/ack' && req.method === 'POST') {

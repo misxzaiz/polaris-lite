@@ -293,7 +293,7 @@ test('run：缺 worker 脚本 → 500；读不到 origin/master → 409，都带
   assert.equal(r2.json().code, 'DEPLOY_NO_TARGET');
 });
 
-test('run：spawn 抛错时给出 500 并把 job 收尾成失败（不留 running 幽灵）', async () => {
+test('run：spawn 抛错时 job 收尾成失败（不留 running 幽灵；202 已回，失败由 status 暴露）', async () => {
   const { srcDir, dataDir } = layout();
   stubWorker(srcDir);
   initClone(cloneDirOf(srcDir));
@@ -302,11 +302,14 @@ test('run：spawn 抛错时给出 500 并把 job 收尾成失败（不留 runnin
     spawn: () => { throw new Error('EACCES'); },
   });
   const res = await call(mw, '/api/deploy/run', { method: 'POST', body: '{}' });
-  assert.equal(res.state.status, 500);
-  assert.equal(res.json().code, 'DEPLOY_SPAWN_FAILED');
+  assert.equal(res.state.status, 202, '202 在拉起之前就已返回（不被 pm2/拉起阻塞）');
   const job = JSON.parse(readFileSync(join(dataDir, 'deploy', 'job.json'), 'utf8'));
   assert.equal(job.status, 'done');
   assert.match(job.error, /EACCES/);
+  // 下一轮 status 必须能看到失败结果，前端不会死等一个不存在的部署
+  const s = (await call(mw, '/api/deploy/status')).json();
+  assert.equal(s.lastRun.ok, false);
+  assert.match(s.lastRun.error, /EACCES/);
 });
 
 // ── pm2 托管（发布中途要 restart 9826，worker 必须不在它的进程树里）──────
@@ -356,7 +359,7 @@ test('run：默认用 pm2 托管 worker（--no-autorestart，父进程是 daemon
   assert.equal(job.launcher, 'pm2');
 });
 
-test('run：pm2 拉起失败 → 500 且 job 收尾成失败（不静默退回 detached）', async () => {
+test('run：pm2 拉起失败 → 202 已回但 job 收尾成失败（status 可见，不静默退回 detached）', async () => {
   const { srcDir, dataDir } = layout();
   stubWorker(srcDir);
   stubPm2Bin(srcDir);
@@ -369,12 +372,15 @@ test('run：pm2 拉起失败 → 500 且 job 收尾成失败（不静默退回 d
     spawn: () => { throw new Error('不该退回 detached'); },
   });
   const res = await call(mw, '/api/deploy/run', { method: 'POST', body: '{}' });
-  assert.equal(res.state.status, 500);
-  assert.equal(res.json().code, 'DEPLOY_SPAWN_FAILED');
-  assert.match(res.json().error, /pm2 daemon not running/);
+  assert.equal(res.state.status, 202, '202 在 pm2 delete/start 之前就已返回');
   const job = JSON.parse(readFileSync(join(dataDir, 'deploy', 'job.json'), 'utf8'));
   assert.equal(job.status, 'done');
   assert.equal(job.phase, '失败');
+  assert.match(job.error, /pm2 daemon not running/);
+  // 失败必须能从 status 看到（前端唯一的信息通道）
+  const s = (await call(mw, '/api/deploy/status')).json();
+  assert.equal(s.lastRun.ok, false);
+  assert.match(s.lastRun.error, /pm2 daemon not running/);
 });
 
 test('status：刚投递、pid 还没写回来的空窗期不算「已中断」；超时才判 stale', async () => {
