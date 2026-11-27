@@ -135,6 +135,18 @@ function handleToolEvent(
     }
     return;
   }
+  if (kind === 'tool.args.delta') {
+    // 工具参数流式增量（render 等大参数工具的实时预览数据源）：
+    // 按 callId 累积进 argsDelta（字符串拼接，容量上限对齐 argsJson 裁剪策略）。
+    // 卡片不存在（事件先于 tool.card 到达）时丢弃——tool.card 收尾帧会带完整参数兜底。
+    if (typeof inner.delta === 'string' && inner.delta) {
+      patchCard(inner.callId ?? '', (c) => ({
+        ...c,
+        argsDelta: ((c.argsDelta ?? '') + inner.delta).slice(0, CARD_STORE_CAP),
+      }));
+    }
+    return;
+  }
   if (kind === 'tool.approval.resolved') {
     patchCard(inner.callId ?? '', (c) => ({
       ...c,

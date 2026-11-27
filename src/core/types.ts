@@ -315,6 +315,9 @@ export interface ToolCardData {
   durationMs?: number;
   truncated?: boolean;
   decision?: 'once' | 'always' | 'trust' | 'deny';
+  /** 工具参数流式增量（tool.args.delta 累积；仅 running 态有意义）：
+   *  render 等大参数工具的「源码流/实时预览」数据源，收敛后清空（argsJson 兜底）。 */
+  argsDelta?: string;
 }
 
 /** role:'tool' 的消息形态（旧数据兼容；新编排输出改为 assistant.blocks 内嵌块） */

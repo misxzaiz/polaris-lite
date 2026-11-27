@@ -39,6 +39,7 @@ export const EVENT_VOCABULARY: readonly VocabEntry[] = [
   { kind: 'stream.retry', layer: 'engine', payload: ['sessionId', 'messageId', 'attempt', 'maxAttempts', 'chars'], desc: '断流自动重试提示' },
   { kind: 'engine.status', layer: 'engine', payload: ['sessionId', 'messageId', 'message'], desc: '引擎状态行（冷启动等，喂 chat-lite 看门狗）' },
   { kind: 'tool.card', layer: 'engine', payload: ['sessionId', 'messageId', 'callId', 'name', 'status'], desc: '工具卡直发（引擎侧已具卡片形态时，如 codebuddy CLI）' },
+  { kind: 'tool.args.delta', layer: 'engine', payload: ['sessionId', 'messageId', 'callId', 'delta'], desc: '工具参数增量（大参数工具流式预览数据源，如 render 的 HTML）' },
   // ---- 编排层（cap.agent.loop:event；agent-loop 发出） ----
   { kind: 'tool.card', layer: 'orchestrator', payload: ['sessionId', 'messageId', 'callId', 'name', 'status'], desc: '工具卡落块（编排层创建/更新工具卡状态）' },
   { kind: 'tool.result', layer: 'orchestrator', payload: ['sessionId', 'messageId', 'callId', 'result'], desc: '工具执行结果回填' },

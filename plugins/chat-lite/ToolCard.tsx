@@ -7,7 +7,7 @@
  * - 审批卡：warning 色边 + 三按钮（允许一次 / 总是允许该前缀 / 拒绝）；
  *   resolved 后收敛为一行回执（ShieldCheck/ShieldX 语义用文字代替，不引图标库）。
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { resolveApproval } from './index';
 import { copyText } from '../shared/copyText';
 import type { ToolCardData, ToolCardMessage } from './store';
@@ -138,12 +138,95 @@ function OutputCopy({ text }: { text: string }) {
   );
 }
 
+/** 增量 JSON 字符串的字符串值抽取（流式预览用）：
+ *  累积中的 argsDelta 形如 `{"html":"<!DOCTYPE html>...` ——按 JSON 转义规则反解析出
+ *  html 字段当前已到达的内容。残缺尾部的处理：走不出一个完整 token 就返回已确认段。
+ *  反解析器遇到非法转义/未闭合时容错降级（返回当前累积），保证半成品永远可渲染。 */
+function extractHtmlFromPartialJson(partial: string): string {
+  const key = '"html"';
+  const ki = partial.indexOf(key);
+  if (ki < 0) return '';
+  let i = ki + key.length;
+  while (i < partial.length && /\s/.test(partial[i])) i += 1;
+  if (partial[i] !== ':') return '';
+  i += 1;
+  while (i < partial.length && /\s/.test(partial[i])) i += 1;
+  if (partial[i] !== '"') return '';
+  i += 1;
+  let out = '';
+  while (i < partial.length) {
+    const ch = partial[i];
+    if (ch === '"') return out; // 值闭合：完整到达
+    if (ch === '\\') {
+      const esc = partial[i + 1];
+      if (esc === undefined) return out; // 转义符被截断：返回已确认段
+      if (esc === 'n') out += '\n';
+      else if (esc === 't') out += '\t';
+      else if (esc === 'r') out += '\r';
+      else if (esc === 'b') out += '\b';
+      else if (esc === 'f') out += '\f';
+      else if (esc === 'u') {
+        const hex = partial.slice(i + 2, i + 6);
+        if (hex.length < 4 || !/^[0-9a-fA-F]+$/.test(hex)) return out; // \u 截断
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 6;
+        continue;
+      } else out += esc; // \" \\ \/ 等
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out; // 值未闭合（仍在生成）：返回半成品，浏览器容错渲染
+}
+
+/** 流式预览（render 类大参数工具 running 态）：源码流 + 实时预览双 Tab。
+ *  数据源是 argsDelta（tool.args.delta 累积）；无增量（非流式引擎）时不渲染。
+ *  srcdoc 节流：500ms 一次，避免高频重载闪烁；iframe 带 sandbox 隔离脚本。 */
+function StreamPreview({ argsDelta }: { argsDelta: string }) {
+  const html = useMemo(() => extractHtmlFromPartialJson(argsDelta), [argsDelta]);
+  const [tab, setTab] = useState<'code' | 'live'>('code');
+  const [doc, setDoc] = useState('');
+  const lastRef = useRef(0);
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastRef.current < 500) return;
+    lastRef.current = now;
+    setDoc(html);
+  }, [html]);
+  if (!html.trim()) return null;
+  const lines = html.split('\n').length;
+  const kb = (new Blob([html]).size / 1024).toFixed(1);
+  return (
+    <div className="tc-stream">
+      <div className="tc-stream-tabs">
+        <button type="button" className={tab === 'code' ? 'on' : ''} onClick={() => setTab('code')}>源码流</button>
+        <button type="button" className={tab === 'live' ? 'on' : ''} onClick={() => setTab('live')}>实时预览</button>
+        <span className="tc-stream-stats">{lines} 行 · {kb} KB</span>
+      </div>
+      {tab === 'code' ? (
+        <pre className="tc-stream-code" aria-label="生成中的 HTML 源码">{html}</pre>
+      ) : (
+        <iframe
+          title="实时预览（生成中）"
+          className="tc-stream-frame"
+          sandbox="allow-scripts allow-forms allow-pointer-lock"
+          referrerPolicy="no-referrer"
+          srcDoc={doc}
+        />
+      )}
+    </div>
+  );
+}
+
 export function ToolCard({ msg }: { msg: ToolCardMessage }) {
   const [open, setOpen] = useState(false);
   const tool = msg.tool;
   const isApproval = tool.status === 'awaiting';
   const hasBody = !isApproval && !!(tool.command || tool.argsJson || tool.stdout || tool.stderr || tool.exitCode !== undefined);
   const spin = tool.status === 'running';
+  const streaming = spin && (tool.argsDelta ?? '').trim().length > 0;
 
   // 审批卡：独立视觉（warning 色边 + 按钮组）；决策直接回填 cap.agent.loop。
   // 卡片内嵌于 assistant 气泡（blocks 模式），左侧已有 AI 头像——不再重复放字母块。
@@ -182,6 +265,11 @@ export function ToolCard({ msg }: { msg: ToolCardMessage }) {
           </span>
           {hasBody && <span className="tc-chevron">{open ? '˄' : '˅'}</span>}
         </button>
+        {streaming && (
+          <div className="tc-stream-wrap">
+            <StreamPreview argsDelta={tool.argsDelta ?? ''} />
+          </div>
+        )}
         {open && (
           <div className="tc-body">
             {tool.command && (

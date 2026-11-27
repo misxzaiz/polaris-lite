@@ -50,7 +50,7 @@ export function createServerPart(options = {}) {
    * 聚合 delta/reasoning/tool_calls，断流自动续写。
    * 返回 { text, toolCalls, finishReason, partialToolCalls, usage, lastUsage }。
    */
-  async function runTurn({ model, messages, tools, signal, onDelta, onReasoning, onRetry }) {
+  async function runTurn({ model, messages, tools, signal, onDelta, onReasoning, onRetry, onToolArgsDelta }) {
     let carriedText = '';
     let wireUsage = null;
     for (let attempt = 1; attempt <= MAX_STREAM_RETRIES; attempt += 1) {
@@ -115,6 +115,8 @@ export function createServerPart(options = {}) {
               if (tc.function?.name) slot.name += String(tc.function.name);
               if (tc.function?.arguments) slot.arguments += String(tc.function.arguments);
               toolAcc.set(idx, slot);
+              // 参数增量透传（流式预览数据源）：id 先到才发（无法定位 callId 的帧跳过）
+              if (tc.function?.arguments && slot.id) onToolArgsDelta?.(slot.id, String(tc.function.arguments));
             }
           }
           if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDone = true; }

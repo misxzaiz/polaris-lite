@@ -650,7 +650,20 @@ const streamHandler: StreamCapabilityHandler = async (req, emit) => {
               attemptText += delta;
               emit({ kind: 'message.delta', payload: { sessionId, messageId, delta } });
             }
-            // 工具调用增量聚合（index 维度）
+            // 工具调用增量聚合（index 维度）；同时透传参数增量（tool.args.delta）——
+            // render 等大参数工具的前端流式预览数据源（chat-live-preview 特性）。
+            // 按 index 找到对应 callId（先到先注册），未注册帧丢弃（等整帧兜底）。
+            if (Array.isArray(choice?.delta?.tool_calls)) {
+              for (const tc of choice.delta.tool_calls as { index?: unknown; id?: unknown; function?: { arguments?: unknown } }[]) {
+                const argsDelta = tc?.function?.arguments;
+                if (typeof argsDelta !== 'string' || !argsDelta) continue;
+                const idx = Number(tc?.index ?? 0);
+                const slot = toolAcc.get(idx);
+                const cid = slot?.id || '';
+                if (!cid) continue; // id 未到（首帧常只有 arguments）：无法定位 callId，跳过
+                emit({ kind: 'tool.args.delta', payload: { sessionId, messageId, callId: cid, delta: argsDelta } });
+              }
+            }
             aggregateToolCallDelta(toolAcc, choice?.delta?.tool_calls);
             if (choice?.finish_reason) { finishReason = String(choice.finish_reason); sawDoneMarker = true; sse.markDone(); }
           } catch { /* 跳过不完整行 */ }

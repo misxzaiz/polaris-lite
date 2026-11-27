@@ -197,6 +197,8 @@ export function createServerPart(options = {}) {
         const last = blocks[blocks.length - 1];
         if (last?.type === 'text') last.text += p.delta;
         else blocks.push({ type: 'text', text: p.delta });
+      } else if (ev.kind === 'tool.args.delta') {
+        // 流式预览增量：不落档（完整参数由收尾的 tool.card / tool.calls 帧承载）
       } else if (ev.kind === 'tool.card') {
         // 同 callId 可能连发两帧（首帧 args 恒为空、收尾帧才带完整参数），也可能
         // 由引擎在 turn 内实时上报一次、再由 runner 的回放段上报一次：一律按
@@ -307,9 +309,9 @@ export function createServerPart(options = {}) {
         run.logSize += bytes;
       }
     } catch { /* 日志失败不阻断执行 */ }
-    // 扇出：delta/reasoning 合批，其余先冲刷再发（保序）
+    // 扇出：delta/reasoning/args.delta 合批（高频率增量类），其余先冲刷再发（保序）
     const frame = `id: ${ev.seq}\nevent: agent\ndata: ${data}\n\n`;
-    if (kind === 'message.delta' || kind === 'message.reasoning') {
+    if (kind === 'message.delta' || kind === 'message.reasoning' || kind === 'tool.args.delta') {
       (run.pendingFrames ??= []).push(frame);
       if (!run.frameTimer) run.frameTimer = setTimeout(() => flushFrames(run), DELTA_FLUSH_MS);
     } else {
@@ -362,7 +364,12 @@ export function createServerPart(options = {}) {
   }
 
   function engineTurn(run, args) {
-    return run.engine.runTurn({ model: run.model, ...args });
+    // 参数增量转发（流式预览）：real-engine 逐帧回调 → tool.args.delta 事件扇出。
+    // 合批与 message.delta 同队列（高频率），避免事件洪峰。
+    return run.engine.runTurn({
+      ...args,
+      ...(run.engine.id === 'real' || !run.engine.id ? { onToolArgsDelta: (callId, delta) => emitEvent(run, 'tool.args.delta', { sessionId: run.sessionId, messageId: run.assistantId, callId, delta }) } : {}),
+    });
   }
 
   // ------------------------------------------------------------------
