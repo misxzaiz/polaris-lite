@@ -151,6 +151,14 @@ export function ImageCard({ callId, title, data }: ImageCardProps) {
       }
     };
     const onEnd = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        // 捏合后抬起一指：剩余手指直接接续平移（pinch→drag 连贯手势，无需抬手重按）
+        panStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx, ty };
+        pinchStartDist = 0;
+        pinchStartMid = null;
+        pinchStartOff = null;
+        return;
+      }
       if (e.touches.length === 0) {
         pinchStartDist = 0;
         pinchStartMid = null;
