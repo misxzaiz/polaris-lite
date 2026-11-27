@@ -443,6 +443,13 @@
       ],
       "provides": [],
       "events": []
+    },
+    "system-prompt": {
+      "capabilities": [
+        "cap.kv"
+      ],
+      "provides": [],
+      "events": []
     }
   }
 }

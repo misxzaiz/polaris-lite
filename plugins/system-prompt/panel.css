@@ -1,0 +1,87 @@
+/**
+ * system-prompt 插件面板样式。只消费宿主令牌（plite-tokens.css），
+ * 与 theme-switcher / token-ledger 同款纪律：不写死颜色，浅/深主题自适应。
+ */
+.sp-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sp-select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-size: 13px;
+}
+
+.sp-btn {
+  padding: 7px 16px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 8px;
+  background: var(--plite-accent-bg, #eef);
+  color: var(--plite-accent-fg, inherit);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sp-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sp-btn-ghost {
+  background: transparent;
+}
+
+.sp-editor {
+  flex: 1;
+  min-height: 120px;
+  resize: none;
+  padding: 12px;
+  border: 1px solid var(--plite-border, #ccc);
+  border-radius: 10px;
+  background: var(--plite-bg, transparent);
+  color: var(--plite-fg, inherit);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sp-editor:focus {
+  outline: none;
+  border-color: var(--plite-accent-fg, #68a);
+}
+
+.sp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 22px;
+}
+
+.sp-note {
+  font-size: 12px;
+  color: var(--plite-fg-dim, #888);
+}
+
+.sp-note-err {
+  color: var(--plite-danger, #c33);
+}

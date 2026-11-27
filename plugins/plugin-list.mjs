@@ -28,6 +28,8 @@ export const PLUGIN_LIST = [
   { id: 'html-preview', config: 'html-preview/vite.config.ts', dist: 'html-preview/dist', order: 15 },
   { id: 'pocket-ledger', config: 'pocket-ledger/vite.config.ts', dist: 'pocket-ledger/dist', order: 16 },
   { id: 'kv-store', config: 'kv-store/vite.config.ts', dist: 'kv-store/dist', order: 17 },
+  // system-prompt：会话级自定义系统提示词（panel 编辑 + service 注入 runner）
+  { id: 'system-prompt', config: 'system-prompt/vite.config.ts', dist: 'system-prompt/dist', order: 18 },
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 18 },
   // Git 能力（cap.git 提供方，server 半边）+ Git 面板（消费方；requires 保证 core 先装配）
   { id: 'git-core', config: 'git-core/vite.config.ts', dist: 'git-core/dist', order: 23 },

@@ -987,6 +987,16 @@ export function createServerPart(options = {}) {
     sysParts.push(' 用 files 工具读文件时：path 传相对工作区根的相对路径；要读其它项目目录（如仓库根）的文件，先调 roots 拿到对应根的 id，再用该 rootId+相对路径，不要把绝对路径当 path 传。');
     // agent 型引擎（自带工具循环）的提示追加段由引擎适配器声明，runner 零引擎知识
     if (run.engine?.systemHint) sysParts.push(` ${run.engine.systemHint}`);
+    // 用户自定义系统提示词（system-prompt 插件提供，经 service 表按 sessionId 取）：
+    // 追加而非替换——内置段（实例身份/工具语义/环境纪律）必须保留在前，否则
+    // 换工作区/多实例时 AI 失去环境感知。service 不存在（插件未装）时静默跳过。
+    try {
+      const spService = registry?.getService?.('system-prompt');
+      const sp = spService?.get?.(run.sessionId);
+      if (typeof sp === 'string' && sp.trim()) {
+        sysParts.push(`\n\n以下是用户为本会话设定的自定义指令（优先级高于以上默认行为描述，但不得违反环境纪律）：\n${sp.trim()}`);
+      }
+    } catch { /* 提示词服务不可用：无注入继续 */ }
     const shadow = [{ role: 'system', content: sysParts.join('') }];
     // 多轮会话 shadow 延续：同会话上一 run 的 shadow 仍在（服务端常驻），优先续用——
     // 它包含完整工具调用过程（前端 history 只有可见文本，工具结果会丢）。
