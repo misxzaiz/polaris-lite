@@ -16,6 +16,7 @@ import {
   migrateFromIndexedDb,
   shiftMonth,
   subscribeLedger,
+  type Totals,
   type UsageRecord,
 } from './ledgerStore';
 import './token-ledger.css';
@@ -77,16 +78,22 @@ export function LedgerPanel() {
   const [page, setPage] = useState(1);
   const bootRef = useRef(false);
 
+  // 视图切换：flow=流水明细 stats=统计
+  const [view, setView] = useState<'flow' | 'stats'>('flow');
+  // 完整聚合（统计视图数据源；月键值对象很小，常驻无压力）
+  const [totals, setTotals] = useState<Totals | null>(null);
+
   /* --- 加载函数 --- */
 
   const loadAll = useCallback(async (m: string) => {
-    const totals = await loadTotals();
-    setGrandIn(totals.grand.in);
-    setGrandOut(totals.grand.out);
-    setGrandCached(totals.grand.cached);
-    setGrandRealIn(totals.grand.realIn ?? totals.grand.in);
-    setGrandTurns(totals.grand.turns);
-    setGrandEst(totals.grand.est);
+    const t = await loadTotals();
+    setTotals(t);
+    setGrandIn(t.grand.in);
+    setGrandOut(t.grand.out);
+    setGrandCached(t.grand.cached);
+    setGrandRealIn(t.grand.realIn ?? t.grand.in);
+    setGrandTurns(t.grand.turns);
+    setGrandEst(t.grand.est);
     const ms = await listMonths();
     setMonths(ms);
     setRows(await loadMonthRows(m));
@@ -194,6 +201,59 @@ export function LedgerPanel() {
 
   const maxDay = Math.max(1, ...days.map((d) => d.paidIn + d.cached + d.out));
 
+  /* --- 统计视图派生：全部来自 totals 聚合（轻量，不翻明细） --- */
+
+  /** 今日：当前月 totals 的今天键；月份不在当月时为空 */
+  const todayAgg = useMemo(() => {
+    if (!totals) return null;
+    const now = new Date();
+    const mk = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dd = String(now.getDate()).padStart(2, '0');
+    return totals.months[mk]?.[dd] ?? null;
+  }, [totals]);
+
+  /** 近 7 天（含今日，按天倒序）：从 totals 直接取，跨月自动拼接 */
+  const last7 = useMemo(() => {
+    if (!totals) return [];
+    const out: { date: string; t: number; agg: NonNullable<Totals['months'][string][string]> }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const dd = String(d.getDate()).padStart(2, '0');
+      const agg = totals.months[mk]?.[dd];
+      if (agg) out.push({ date: `${mk}-${dd}`, t: d.getTime(), agg });
+    }
+    return out;
+  }, [totals]);
+
+  /** 选中月的逐日统计行（升序，供统计表） */
+  const monthDayRows = useMemo(() => {
+    if (!totals) return [];
+    const dm = totals.months[month] ?? {};
+    return Object.entries(dm)
+      .map(([dd, a]) => ({ dd, ...a }))
+      .sort((a, b) => a.dd.localeCompare(b.dd));
+  }, [totals, month]);
+
+  /** 模型分布（当月明细聚合，按总 token 降序） */
+  const modelStats = useMemo(() => {
+    const map = new Map<string, { in: number; out: number; cached: number; turns: number }>();
+    for (const r of rows) {
+      const key = r.model || '未知';
+      const b = map.get(key) ?? { in: 0, out: 0, cached: 0, turns: 0 };
+      b.in += r.inputTokens;
+      b.out += r.outputTokens;
+      b.cached += r.cachedTokens ?? 0;
+      b.turns += 1;
+      map.set(key, b);
+    }
+    return [...map.entries()]
+      .map(([model, v]) => ({ model, ...v, total: v.in + v.out }))
+      .sort((a, b) => b.total - a.total);
+  }, [rows]);
+
+
   /* --- 明细分页：每页 50 条，独立于月翻页 --- */
   const PAGE_SIZE = 50;
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -261,6 +321,22 @@ export function LedgerPanel() {
             ›
           </button>
         </div>
+        <div className="tlg-seg" role="group" aria-label="视图">
+          <button
+            type="button"
+            className={`tlg-seg-btn${view === 'flow' ? ' is-on' : ''}`}
+            onClick={() => setView('flow')}
+          >
+            流水
+          </button>
+          <button
+            type="button"
+            className={`tlg-seg-btn${view === 'stats' ? ' is-on' : ''}`}
+            onClick={() => setView('stats')}
+          >
+            统计
+          </button>
+        </div>
         <div className="tlg-actions">
           <button type="button" className="tlg-btn" onClick={onExport} disabled={visible.length === 0}>
             导出
@@ -309,6 +385,7 @@ export function LedgerPanel() {
             </div>
           </div>
 
+          {view === 'flow' ? (<>
           {/* 当月小计 */}
           <div className="tlg-month-sum">
             <span><b>{month}</b> 小计</span>
@@ -317,24 +394,37 @@ export function LedgerPanel() {
             <span>{mStats.turns} 轮{mStats.estPct > 0 ? ` · 估 ${mStats.estPct}%` : ''}</span>
           </div>
 
-          {/* 当月每日柱状图 */}
+          {/* 当月每日柱状图（每月 31 列，柱内三段堆叠） */}
           <div className="tlg-chart">
-            {days.length === 0 ? (
-              <div className="tlg-chart-empty">本月当前筛选下没有记录</div>
-            ) : (
-              days.map((d) => (
-                <button
-                  key={d.t}
-                  type="button"
-                  className="tlg-col"
-                  title={`${fmtDay(d.t)}：输入 ${fmtFull(d.paidIn + d.cached)}（缓存 ${fmtFull(d.cached)}）· 输出 ${fmtFull(d.out)} · ${d.turns} 轮${isToday(d.t) ? '（今天）' : ''}`}
-                  onClick={() => setPickSession('')}
-                >
-                  <i className="tlg-seg tlg-s-out" style={{ height: `${(d.out / maxDay) * 100}%` }} />
-                  <i className="tlg-seg tlg-s-cache" style={{ height: `${(d.cached / maxDay) * 100}%` }} />
-                  <i className="tlg-seg tlg-s-in" style={{ height: `${(d.paidIn / maxDay) * 100}%` }} />
-                </button>
-              ))
+            <div className="tlg-chart-head">
+              <span>每日用量</span>
+              <span className="tlg-chart-hint">{month}</span>
+            </div>
+            <div className="tlg-bars">
+              {days.length === 0 ? (
+                <div className="tlg-chart-empty" style={{ width: '100%' }}>本月当前筛选下没有记录</div>
+              ) : (
+                days.map((d) => (
+                  <button
+                    key={d.t}
+                    type="button"
+                    className="tlg-bcol"
+                    title={`${fmtDay(d.t)}：输入 ${fmtFull(d.paidIn + d.cached)}（缓存 ${fmtFull(d.cached)}）· 输出 ${fmtFull(d.out)} · ${d.turns} 轮${isToday(d.t) ? '（今天）' : ''}`}
+                    onClick={() => setPickSession('')}
+                  >
+                    <i className="tlg-seg tlg-s-out" style={{ height: `${(d.out / maxDay) * 100}%` }} />
+                    <i className="tlg-seg tlg-s-cache" style={{ height: `${(d.cached / maxDay) * 100}%` }} />
+                    <i className="tlg-seg tlg-s-in" style={{ height: `${(d.paidIn / maxDay) * 100}%` }} />
+                  </button>
+                ))
+              )}
+            </div>
+            {days.length > 0 && (
+              <div className="tlg-axis">
+                {days.map((d) => (
+                  <span key={d.t}>{fmtDay(d.t)}</span>
+                ))}
+              </div>
             )}
           </div>
           <div className="tlg-legend">
@@ -440,6 +530,148 @@ export function LedgerPanel() {
                 ›
               </button>
             </div>
+          )}
+          </>
+          ) : (
+          <div className="tlg-stats">
+            {/* 今日卡片 */}
+            <div className="tlg-today">
+              <div className="tlg-today-cell">
+                <div className="tlg-k">今日总 token</div>
+                <div className="tlg-v tlg-v-sm">
+                  {todayAgg ? fmtTokens(todayAgg.in + todayAgg.out) : '0'}
+                </div>
+                <div className="tlg-sub">
+                  {todayAgg
+                    ? `输入 ${fmtTokens(todayAgg.in)} + 输出 ${fmtTokens(todayAgg.out)} · ${todayAgg.turns} 轮`
+                    : '今天还没有对话'}
+                </div>
+              </div>
+              <div className="tlg-today-cell">
+                <div className="tlg-k">
+                  <i className="tlg-dot tlg-d-cache" aria-hidden="true" />今日缓存命中
+                </div>
+                <div className="tlg-v tlg-v-sm">
+                  {fmtTokens(todayAgg?.cached ?? 0)}
+                  {todayAgg?.realIn ? <small> {Math.round((todayAgg.cached / todayAgg.realIn) * 100)}%</small> : null}
+                </div>
+                <div className="tlg-sub">{todayAgg ? `真实轮 ${todayAgg.turns - todayAgg.est} / 估算轮 ${todayAgg.est}` : '—'}</div>
+              </div>
+            </div>
+
+            {/* 近 7 天迷你条 */}
+            <div className="tlg-week">
+              <div className="tlg-chart-head">
+                <span>近 7 天</span>
+                <span className="tlg-chart-hint">点击流水视图可看每日明细</span>
+              </div>
+              <div className="tlg-bars">
+                {last7.length === 0 ? (
+                  <div className="tlg-chart-empty" style={{ width: '100%' }}>近 7 天暂无记录</div>
+                ) : (
+                  (() => {
+                    const mw = Math.max(1, ...last7.map((d) => d.agg.in + d.agg.out));
+                    return last7.map((d) => {
+                      const total = d.agg.in + d.agg.out;
+                      const cachePct = total ? (d.agg.cached / total) * 100 : 0;
+                      return (
+                        <button
+                          key={d.date}
+                          type="button"
+                          className="tlg-bcol"
+                          title={`${d.date}：输入 ${fmtFull(d.agg.in)}（缓存 ${fmtFull(d.agg.cached)}）· 输出 ${fmtFull(d.agg.out)} · ${d.agg.turns} 轮`}
+                        >
+                          <i className="tlg-seg tlg-s-out" style={{ height: `${(d.agg.out / mw) * 100}%` }} />
+                          <i className="tlg-seg tlg-s-cache" style={{ height: `${(cachePct * d.agg.in / mw) || 0}%` }} />
+                          <i className="tlg-seg tlg-s-in" style={{ height: `${((d.agg.in - d.agg.cached) / mw) * 100}%` }} />
+                        </button>
+                      );
+                    });
+                  })()
+                )}
+              </div>
+              <div className="tlg-axis">
+                {last7.map((d) => {
+                  const dd = new Date(d.date + 'T00:00:00');
+                  return <span key={d.date}>{`${dd.getMonth() + 1}/${dd.getDate()}`}</span>;
+                })}
+              </div>
+            </div>
+
+            {/* 选中月逐日统计表 */}
+            <div className="tlg-daily-wrap">
+              <div className="tlg-chart-head">
+                <span>{month} 逐日</span>
+                <span className="tlg-chart-hint">来自天级聚合，非明细</span>
+              </div>
+              <table className="tlg-table tlg-daily">
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th className="tlg-ta-r">轮次</th>
+                    <th className="tlg-ta-r">输入</th>
+                    <th className="tlg-ta-r">缓存</th>
+                    <th className="tlg-ta-r">命中%</th>
+                    <th className="tlg-ta-r">输出</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthDayRows.length === 0 ? (
+                    <tr><td colSpan={6} className="tlg-table-empty">本月暂无记录</td></tr>
+                  ) : (
+                    monthDayRows.map((r) => (
+                      <tr key={r.dd}>
+                        <td className="tlg-mut">{r.dd}</td>
+                        <td className="tlg-ta-r">{r.turns}</td>
+                        <td className="tlg-ta-r tlg-c-in">{fmtTokens(r.in)}</td>
+                        <td className="tlg-ta-r">{fmtTokens(r.cached)}</td>
+                        <td className="tlg-ta-r">{r.realIn ? `${Math.round((r.cached / r.realIn) * 100)}%` : '—'}</td>
+                        <td className="tlg-ta-r tlg-c-out">{fmtTokens(r.out)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {monthDayRows.length > 0 && (
+                  <tfoot>
+                    <tr>
+                      <td>合计</td>
+                      <td className="tlg-ta-r">{monthDayRows.reduce((s, r) => s + r.turns, 0)}</td>
+                      <td className="tlg-ta-r tlg-c-in">{fmtTokens(monthDayRows.reduce((s, r) => s + r.in, 0))}</td>
+                      <td className="tlg-ta-r">{fmtTokens(monthDayRows.reduce((s, r) => s + r.cached, 0))}</td>
+                      <td className="tlg-ta-r">—</td>
+                      <td className="tlg-ta-r tlg-c-out">{fmtTokens(monthDayRows.reduce((s, r) => s + r.out, 0))}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+
+            {/* 模型分布 */}
+            <div className="tlg-models">
+              <div className="tlg-chart-head">
+                <span>模型分布（{month}）</span>
+                <span className="tlg-chart-hint">按总 token 降序</span>
+              </div>
+              {modelStats.length === 0 ? (
+                <div className="tlg-chart-empty">本月暂无记录</div>
+              ) : (
+                modelStats.map((m) => {
+                  const max = modelStats[0].total;
+                  return (
+                    <div key={m.model} className="tlg-model-row" title={`${m.model}：输入 ${fmtFull(m.in)} · 输出 ${fmtFull(m.out)} · ${m.turns} 轮`}>
+                      <div className="tlg-model-name">{m.model}</div>
+                      <div className="tlg-model-bar">
+                        <i className="tlg-model-fill tlg-s-in" style={{ width: `${(m.in / max) * 100}%` }} />
+                        <i className="tlg-model-fill tlg-s-cache" style={{ width: `${(m.cached / max) * 100}%` }} />
+                        <i className="tlg-model-fill tlg-s-out" style={{ width: `${(m.out / max) * 100}%` }} />
+                      </div>
+                      <div className="tlg-model-num">{fmtTokens(m.total)}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
           )}
         </>
       )}

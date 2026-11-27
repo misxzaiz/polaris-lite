@@ -57,7 +57,7 @@ interface DayAgg {
   cachedTurns?: number;
 }
 
-interface Totals {
+export interface Totals {
   grand: DayAgg;
   /** 'YYYY-MM' → { 'DD' (两位) → DayAgg } */
   months: Record<string, Record<string, DayAgg>>;

@@ -343,6 +343,89 @@
 .tlg-empty strong { display: block; margin-bottom: 6px; color: var(--text-soft); font-size: var(--plite-fs-md); }
 .tlg-empty p { margin: 0; font-size: var(--plite-fs-xs); line-height: 1.7; color: var(--text-faint); }
 
+
+/* ---- 统计视图 ---- */
+.tlg-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.tlg-today {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-md);
+  overflow: hidden;
+  flex: none;
+}
+.tlg-today-cell { background: var(--bg-elevated); padding: 10px 12px 9px; }
+.tlg-v-sm { font-size: 19px; }
+.tlg-week {
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-md);
+  padding: 10px 12px 8px;
+  flex: none;
+}
+.tlg-daily-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-md);
+  padding: 10px 12px 8px;
+  flex: none;
+}
+.tlg-daily th,
+.tlg-daily td { padding: 4px 6px; }
+.tlg-models {
+  border: 1px solid var(--border);
+  border-radius: var(--plite-radius-md);
+  padding: 10px 12px;
+  flex: none;
+}
+.tlg-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+.tlg-model-name {
+  width: 34%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-soft);
+}
+.tlg-model-bar {
+  flex: 1;
+  min-width: 0;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+  display: flex;
+}
+.tlg-model-fill {
+  display: block;
+  height: 100%;
+  min-width: 0;
+}
+.tlg-model-fill.tlg-s-in { border-radius: 3px 0 0 3px; }
+.tlg-model-num {
+  width: 52px;
+  text-align: right;
+  font-family: var(--plite-font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--plite-fs-xs);
+  color: var(--text-dim);
+}
+
 @media (prefers-reduced-motion: reduce) {
     .tlg-seg-btn,
   .tlg-btn,
