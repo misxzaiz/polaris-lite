@@ -7,7 +7,7 @@
  * - 审批卡：warning 色边 + 三按钮（允许一次 / 总是允许该前缀 / 拒绝）；
  *   resolved 后收敛为一行回执（ShieldCheck/ShieldX 语义用文字代替，不引图标库）。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { resolveApproval } from './index';
 import { copyText } from '../shared/copyText';
 import type { ToolCardData, ToolCardMessage } from './store';
@@ -185,11 +185,15 @@ function extractHtmlFromPartialJson(partial: string): string {
  *  只写一次，之后经 postMessage 收增量 html 追加进 body，不重载文档——
  *  换 srcDoc = iframe 销毁重建（白屏一帧 + CSS 重初始化），是此前预览闪烁的主因。
  *  子页回传 {type:'height', h} 供外层做整页可见的自适应量测。
- *  缩进字面量经 JSON.stringify 注入，内容含换行/引号也安全。 */
+ *  函数源码必须原样内联并立即执行：不能用 JSON.stringify 包一层——那会把
+ *  IIFE 变成字符串字面量，监听器永不安装，实时预览整块空白（线上踩坑）。
+ *  防御性转义 </script 防函数体意外闭合脚本标签。 */
 const STREAM_BOOTSTRAP =
   '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:system-ui,sans-serif}</style></head><body></body>' +
-  '<script>(' + JSON.stringify(`(${bootstrapSource.toString()})()`) + ')<\/script></html>';
+  '<script>(' + bootstrapSource.toString().replace(/<\/script/gi, '<\\/script') + ')()<\/script></html>';
 
+/** 必须自包含：函数体只依赖 window/document 等全局——构建产物里经
+ *  toString() 注入 srcdoc 子页独立执行，引用闭包/导入变量在子页全是未定义。 */
 function bootstrapSource() {
   window.addEventListener('message', (e) => {
     const d = e.data || {};
@@ -199,6 +203,9 @@ function bootstrapSource() {
       (e.source as Window | null)?.postMessage({ type: 'height', h }, e.origin as string);
     }
   });
+  // 就绪握手：监听器装好即回执，父页收到才投递——srcdoc 的 load 事件与子页
+  // 脚本就绪之间存在竞态（实测 chunk 会落在窗口初始化空档被丢弃），不能靠时序猜。
+  (window.parent as Window).postMessage({ type: 'ready' }, '*');
 }
 
 /** 流式预览（render 类大参数工具 running 态）：源码流 + 实时预览双 Tab。
@@ -216,34 +223,62 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
   const [tab, setTab] = useState<'code' | 'live'>('code');
   const codeRef = useRef<HTMLPreElement>(null);
   const [follow, setFollow] = useState(true); // 源码流是否贴底跟随
-  // live iframe：doc=累计已写入的 html（去重比较），pending=节流窗口内未写入的尾帧
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const writtenRef = useRef('');
+  // live iframe：htmlRef=最新累计 html；sentRef=已送达「当前」iframe 的字符数
+  // （iframe 重挂即归零）；loadedRef=子页 bootstrap 是否就绪（onLoad 后才投递）
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const htmlRef = useRef('');
+  const sentRef = useRef(0);
+  const loadedRef = useRef(false);
   const [fit, setFit] = useState<{ h: number; scale: number } | null>(null);
 
   // 实时预览增量写入：持久 iframe + 差量追加（见组件注释）。
   // postMessage 异步且轻，逐帧直写；CSS transition 负责容器高度平滑，
   // 不再需要 srcDoc 节流（无重载即无闪烁）。尾帧因「每帧直写」天然不丢。
-  useEffect(() => {
+  // 投递时机只认子页 ready 握手（onLoad 与子页脚本就绪存在竞态，不可作为信号）：
+  // ready 前到达的内容先攒在 htmlRef，握手后补发全量——切 Tab 重挂 iframe 后
+  // （html 未变、[html] effect 不再触发）也靠这条补发，否则整块永远空白。
+  const flush = useCallback(() => {
     const frame = frameRef.current;
-    const diff = html.slice(writtenRef.current.length);
-    if (!frame || !frame.contentWindow || !diff) return;
-    writtenRef.current = html;
+    if (!frame || !frame.contentWindow || !loadedRef.current) return;
+    const now = htmlRef.current;
+    if (now.length < sentRef.current) sentRef.current = 0; // 异常缩短：全量重发兜底
+    const diff = now.slice(sentRef.current);
+    if (!diff) return;
+    sentRef.current = now.length;
     frame.contentWindow.postMessage({ type: 'chunk', html: diff }, '*');
-  }, [html]);
+  }, []);
 
-  // 高度回传（整页可见量测）
+  // 只在元素真正（重）挂载时归零进度——ref 回调每次渲染都会以 null/el 成对触发，
+  // 用 frameRef.current !== el 区分真实挂载，防止渲染期误清已投递进度。
+  const attachFrame = useCallback((el: HTMLIFrameElement | null) => {
+    if (el && frameRef.current !== el) { sentRef.current = 0; loadedRef.current = false; }
+    frameRef.current = el;
+  }, []);
+
+  useEffect(() => {
+    htmlRef.current = html;
+    flush();
+  }, [html, flush]);
+
+  // 高度回传（整页可见量测）+ 子页就绪握手：只认当前 iframe 发来的消息，
+  // 多张 render 卡同时流式时互不串扰 scale。ready 到达即视为可投递并补发积压。
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const d = e.data as { type?: string; h?: number } | null;
-      if (d?.type === 'height' && typeof d.h === 'number') {
-        const scale = d.h > STREAM_FIT_CAP ? STREAM_FIT_CAP / d.h : 1;
-        setFit({ h: d.h, scale });
+      if (!d) return;
+      if (d.type === 'ready' && e.source === frameRef.current?.contentWindow) {
+        loadedRef.current = true;
+        flush();
+        return;
       }
+      if (d.type !== 'height' || typeof d.h !== 'number') return;
+      if (e.source !== frameRef.current?.contentWindow) return;
+      const scale = d.h > STREAM_FIT_CAP ? STREAM_FIT_CAP / d.h : 1;
+      setFit({ h: d.h, scale });
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, []);
+  }, [flush]);
 
   // 源码流贴底跟随
   useEffect(() => {
@@ -287,7 +322,7 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
             sandbox="allow-scripts allow-forms allow-pointer-lock"
             referrerPolicy="no-referrer"
             srcDoc={STREAM_BOOTSTRAP}
-            ref={frameRef}
+            ref={attachFrame}
             style={done ? undefined : (fit && fit.scale < 1
               ? { transform: `scale(${fit.scale})`, width: `${100 / fit.scale}%` }
               : undefined)}
