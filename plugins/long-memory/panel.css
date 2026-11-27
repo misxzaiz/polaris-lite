@@ -192,17 +192,88 @@
   color: var(--plite-fg-muted, #888);
 }
 
+/* 条目外框：行 + 可选展开区。点击行切换展开（桌面/移动通用）。 */
+.lm-item-wrap {
+  border-bottom: 1px solid var(--plite-border-muted, rgba(128, 128, 128, 0.15));
+}
+
+.lm-item-wrap:last-child {
+  border-bottom: none;
+}
+
 .lm-item {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
   font-size: 13px;
-  border-bottom: 1px solid var(--plite-border-muted, rgba(128, 128, 128, 0.15));
+  cursor: pointer;
+  min-height: 36px;
 }
 
-.lm-item:last-child {
-  border-bottom: none;
+.lm-item:active {
+  background: var(--plite-accent-bg, rgba(128, 128, 128, 0.08));
+}
+
+/* 编辑态下取消点击切换语义（输入框不应触发展开/收起） */
+.lm-item:focus-visible {
+  outline: 1px solid var(--plite-accent, #66f);
+  outline-offset: -1px;
+}
+
+.lm-item-caret {
+  flex-shrink: 0;
+  color: var(--plite-fg-muted, #888);
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  transition: transform 0.18s ease;
+}
+
+.lm-item-open > .lm-item .lm-item-caret {
+  transform: rotate(90deg);
+}
+
+/* ---- 展开区：完整文本 + 理由 + 时间 + 操作 ---- */
+.lm-detail {
+  padding: 0 10px 10px 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.lm-detail-text {
+  color: var(--plite-fg, inherit);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lm-detail-meta {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--plite-border, #ccc);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lm-detail-reason {
+  color: var(--plite-fg-muted, #888);
+}
+
+.lm-detail-reason b {
+  font-weight: 600;
+  color: var(--plite-fg, inherit);
+}
+
+.lm-detail-time {
+  font-size: 11px;
+  color: var(--plite-fg-muted, #888);
+}
+
+.lm-detail-acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .lm-item-kind {
@@ -226,20 +297,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--plite-fg, inherit);
-}
-
-.lm-item-reason {
-  cursor: help;
-  color: var(--plite-fg-muted, #888);
-  flex-shrink: 0;
-  font-size: 12px;
-}
-
-.lm-item-time {
-  font-size: 11px;
-  color: var(--plite-fg-muted, #888);
-  white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .lm-item-edit {
@@ -267,4 +324,35 @@
 
 .lm-note-err {
   color: var(--plite-danger, #c33);
+}
+
+/* ===== 移动端媒体查询 =====
+ * 宿主同款断点。两件事：
+ * 1. 高度兜底：手机端面板抽屉是 fixed + overflow-y:auto，父级链无确定高度，
+ *    height:100% 退化为内容高 → .lm-list 弹性空间为 0、列表塌陷（2026-11-25
+ *    plite-guide 同款踩坑，git-panel/html-preview 均以 calc(100dvh - …) 兜底）。
+ *    96px ≈ 抽屉关闭栏 44 + 触控余量；与 git-panel 口径一致。
+ * 2. 密度与触控：工具行换行防溢出（86vw 抽屉内宽约 296px），触控目标放大。 */
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+  .lm-panel {
+    height: calc(100dvh - 96px);
+  }
+
+  .lm-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .lm-search {
+    min-width: 120px;
+  }
+
+  .lm-btn {
+    min-height: 32px;
+    padding: 5px 10px;
+  }
+
+  .lm-add-input,
+  .lm-item-edit {
+    min-height: 32px;
+  }
 }

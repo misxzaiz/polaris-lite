@@ -72,6 +72,7 @@ export function LongMemoryPanel(): JSX.Element {
   const [newText, setNewText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
   // 初次加载 + 手动刷新共用
@@ -222,35 +223,49 @@ export function LongMemoryPanel(): JSX.Element {
               : '没有匹配的记忆条目。'}
           </div>
         ) : shown.map((it) => (
-          <div key={it.id} className="lm-item">
-            <span className={`lm-item-kind ${it.kind}`} title={it.kind === 'config' ? '配置偏好' : '对话事实'}>
-              {it.kind === 'config' ? '配置' : '事实'}
-            </span>
-            {editingId === it.id ? (
-              <>
-                <input
-                  className="lm-item-edit"
-                  value={editDraft}
-                  onChange={(e) => setEditDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(); if (e.key === 'Escape') setEditingId(null); }}
-                  autoFocus
-                />
-                <button type="button" className="lm-btn" onClick={() => void saveEdit()}>保存</button>
-                <button type="button" className="lm-btn lm-btn-ghost" onClick={() => setEditingId(null)}>取消</button>
-              </>
-            ) : (
-              <>
-                <span className="lm-item-text" title={it.text}>{it.text}</span>
-                {it.reason && <span className="lm-item-reason" title={`记录理由：${it.reason}`}>ⓘ</span>}
-                <span className="lm-item-time">{fmtTime(it.createdAt)}</span>
-                <button
-                  type="button"
-                  className="lm-btn lm-btn-ghost"
-                  onClick={() => { setEditingId(it.id); setEditDraft(it.text); }}
-                  title="编辑"
-                >改</button>
-                <button type="button" className="lm-btn lm-btn-danger" onClick={() => void delItem(it.id)} title="删除">删</button>
-              </>
+          <div key={it.id} className={`lm-item-wrap ${openId === it.id ? 'lm-item-open' : ''}`}>
+            <div
+              className="lm-item"
+              role="button"
+              tabIndex={0}
+              aria-expanded={openId === it.id}
+              onClick={() => { if (editingId !== it.id) setOpenId(openId === it.id ? null : it.id); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (editingId !== it.id) { setOpenId(openId === it.id ? null : it.id); e.preventDefault(); } } }}
+            >
+              <span className={`lm-item-kind ${it.kind}`} title={it.kind === 'config' ? '配置偏好' : '对话事实'}>
+                {it.kind === 'config' ? '配置' : '事实'}
+              </span>
+              {editingId === it.id ? (
+                <>
+                  <input
+                    className="lm-item-edit"
+                    value={editDraft}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(); if (e.key === 'Escape') setEditingId(null); }}
+                    autoFocus
+                  />
+                  <button type="button" className="lm-btn" onClick={() => void saveEdit()}>保存</button>
+                  <button type="button" className="lm-btn lm-btn-ghost" onClick={() => setEditingId(null)}>取消</button>
+                </>
+              ) : (
+                <>
+                  <span className="lm-item-text">{it.text}</span>
+                  <span className="lm-item-caret" aria-hidden="true">▶</span>
+                </>
+              )}
+            </div>
+            {editingId !== it.id && openId === it.id && (
+              <div className="lm-detail">
+                <div className="lm-detail-text">{it.text}</div>
+                <div className="lm-detail-meta">
+                  {it.reason && <div className="lm-detail-reason"><b>理由：</b>{it.reason}</div>}
+                  <div className="lm-detail-time">记录于 {fmtTime(it.createdAt)}{it.updatedAt ? ` · 更新于 ${fmtTime(it.updatedAt)}` : ''}</div>
+                  <div className="lm-detail-acts">
+                    <button type="button" className="lm-btn" onClick={() => { setEditingId(it.id); setEditDraft(it.text); }} title="编辑">改</button>
+                    <button type="button" className="lm-btn lm-btn-danger" onClick={() => void delItem(it.id)} title="删除">删</button>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         ))}
