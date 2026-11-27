@@ -120,6 +120,14 @@
         "user.prompt"
       ]
     },
+    "token-ledger": {
+      "capabilities": [],
+      "provides": [],
+      "events": [
+        "cap.ai.chat:event",
+        "cap.ai.chat.runner:event"
+      ]
+    },
     "interactive-cards": {
       "capabilities": [
         "cap.config"

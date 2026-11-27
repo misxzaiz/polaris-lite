@@ -72,6 +72,9 @@ export const PLUGIN_LIST = [
   // deploy-panel = 9826 分析实例一键部署（server 端点是 detached worker 发布器；
   // 仅 PLITE_DEPLOY_PANEL=1 的实例挂载，见 ecosystem.config.cjs 的 9826 env）
   { id: 'deploy-panel', config: 'deploy-panel/vite.config.ts', dist: 'deploy-panel/dist', order: 41 },
+  // token-ledger = Token 总用量台账（ai.usage 事件旁听记账 + IndexedDB 持久化
+  // + ai-events requests 表历史回填 + panel 看板；纯前端，可卸载可替换）
+  { id: 'token-ledger', config: 'token-ledger/vite.config.ts', dist: 'token-ledger/dist', order: 42 },
 ].sort((a, b) => a.order - b.order);
 
 /** 是否启用（缺省 true）——server-registry 用它过滤 server 半边 */
