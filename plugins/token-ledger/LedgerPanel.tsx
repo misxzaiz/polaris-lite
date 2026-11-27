@@ -1,15 +1,20 @@
 /**
- * Token 台账面板：总用量 + 每日趋势 + 逐轮流水。
+ * Token 台账面板 v2：电脑存储（cap.kv）+ 按月分页。
  *
- * 面板 320px（内容约 296px）单列布局，原型中四栏大数压缩为 2×2 网格。
- * 数字全部 tabular-nums + 等宽，账目对齐优先。
+ * 数据流：大数/柱状图 ← totals 聚合键；流水明细 ← 按月翻页（内存中只有一个月）。
+ * 面板 320px（内容约 296px）单列布局，数字 tabular-nums 对齐。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   backfillFromRequests,
   buildLedgerExport,
   clearLedger,
-  loadRecentUsage,
+  currentMonthKey,
+  listMonths,
+  loadMonthRows,
+  loadTotals,
+  migrateFromIndexedDb,
+  shiftMonth,
   subscribeLedger,
   type UsageRecord,
 } from './ledgerStore';
@@ -42,97 +47,137 @@ function sessionTail(id: string): string {
   return id.length > 12 ? `…${id.slice(-8)}` : id;
 }
 
-/* ---------------- 统计 ---------------- */
-
-interface DayBucket {
-  t: number;
-  rows: UsageRecord[];
-  paidIn: number;
-  cached: number;
-  out: number;
-}
-
-function bucketByDay(rows: UsageRecord[], days: number): DayBucket[] {
-  const out: DayBucket[] = [];
-  for (let d = days - 1; d >= 0; d--) {
-    const t = new Date(Date.now() - d * 864e5);
-    t.setHours(0, 0, 0, 0);
-    const dayRows = rows.filter((r) => new Date(r.at).toDateString() === t.toDateString());
-    out.push({
-      t: t.getTime(),
-      rows: dayRows,
-      paidIn: dayRows.reduce((s, r) => s + Math.max(0, r.inputTokens - (r.cachedTokens ?? 0)), 0),
-      cached: dayRows.reduce((s, r) => s + (r.cachedTokens ?? 0), 0),
-      out: dayRows.reduce((s, r) => s + r.outputTokens, 0),
-    });
-  }
-  return out;
+function isToday(ts: number): boolean {
+  return new Date(ts).toDateString() === new Date().toDateString();
 }
 
 /* ---------------- 面板 ---------------- */
 
 export function LedgerPanel() {
+  // 聚合态（totals 键，轻量）
+  const [grandIn, setGrandIn] = useState<number | null>(null);
+  const [grandOut, setGrandOut] = useState(0);
+  const [grandCached, setGrandCached] = useState(0);
+  const [grandTurns, setGrandTurns] = useState(0);
+  const [grandEst, setGrandEst] = useState(0);
+
+  // 当月态
+  const [month, setMonth] = useState<string>(currentMonthKey());
   const [rows, setRows] = useState<UsageRecord[]>([]);
-  const [range, setRange] = useState<7 | 14 | 30>(14);
-  const [pickDay, setPickDay] = useState<number | null>(null);
+  const [months, setMonths] = useState<string[]>([]);
+
+  // 筛选
   const [pickModel, setPickModel] = useState('');
   const [pickSession, setPickSession] = useState('');
   const [showEstimated, setShowEstimated] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [backfillNote, setBackfillNote] = useState<string | null>(null);
-  const autoBackfill = useRef(false);
 
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const bootRef = useRef(false);
+
+  /* --- 加载函数 --- */
+
+  const loadAll = useCallback(async (m: string) => {
+    const totals = await loadTotals();
+    setGrandIn(totals.grand.in);
+    setGrandOut(totals.grand.out);
+    setGrandCached(totals.grand.cached);
+    setGrandTurns(totals.grand.turns);
+    setGrandEst(totals.grand.est);
+    const ms = await listMonths();
+    setMonths(ms);
+    setRows(await loadMonthRows(m));
+  }, []);
+
+  /* --- 挂载：迁移/回填 → 首载（api 已由插件 setup 注入 store） --- */
   useEffect(() => {
+    if (bootRef.current) return;
+    bootRef.current = true;
     let alive = true;
-    const refresh = () => {
-      void loadRecentUsage(5000).then((list) => {
-        if (alive) setRows(list);
-      });
-    };
-    refresh();
-    const off = subscribeLedger(refresh);
+    void (async () => {
+      const mig = await migrateFromIndexedDb();
+      const bf = await backfillFromRequests();
+      if (!alive) return;
+      const parts: string[] = [];
+      if (mig > 0) parts.push(`已迁移本机旧台账 ${mig} 条`);
+      if (bf > 0) parts.push(`已从网络取证回填 ${bf} 条`);
+      if (parts.length > 0) setNote(parts.join('；'));
+      await loadAll(currentMonthKey());
+    })();
+    const off = subscribeLedger(() => {
+      void loadAll(monthRef.current);
+    });
     return () => {
       alive = false;
       off();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 首次打开面板：从 ai-events 的 requests 表回填历史 usage（只跑一次）
+  const monthRef = useRef(month);
   useEffect(() => {
-    if (autoBackfill.current) return;
-    autoBackfill.current = true;
-    void backfillFromRequests().then((n) => {
-      if (n > 0) setBackfillNote(`已从网络取证回填 ${n} 条历史用量`);
-      void loadRecentUsage(5000).then((list) => setRows(list));
-    });
-  }, []);
+    monthRef.current = month;
+  }, [month]);
 
-  /* 全量（不含 range 筛选）用于过滤选项 */
+  /* --- 翻月 --- */
+  const gotoMonth = useCallback(
+    (m: string) => {
+      setMonth(m);
+      setPickModel('');
+      setPickSession('');
+      void loadMonthRows(m).then(setRows);
+    },
+    [],
+  );
+
+  const shift = useCallback(
+    (delta: number) => {
+      const next = shiftMonth(month, delta);
+      gotoMonth(next);
+    },
+    [month, gotoMonth],
+  );
+
+  /* --- 当前视图派生 --- */
+
   const models = useMemo(() => [...new Set(rows.map((r) => r.model ?? ''))].filter(Boolean).sort(), [rows]);
   const sessions = useMemo(() => [...new Set(rows.map((r) => r.sessionId))].sort(), [rows]);
 
-  const visible = useMemo(() => {
-    const from = Date.now() - range * 864e5;
-    return rows.filter(
-      (r) =>
-        r.at >= from &&
-        (!pickDay || new Date(r.at).toDateString() === new Date(pickDay).toDateString()) &&
-        (!pickModel || r.model === pickModel) &&
-        (!pickSession || r.sessionId === pickSession) &&
-        (showEstimated || !r.estimated),
-    );
-  }, [rows, range, pickDay, pickModel, pickSession, showEstimated]);
+  const visible = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          (!pickModel || r.model === pickModel) &&
+          (!pickSession || r.sessionId === pickSession) &&
+          (showEstimated || !r.estimated),
+      ),
+    [rows, pickModel, pickSession, showEstimated],
+  );
 
-  const days = useMemo(() => bucketByDay(visible, range), [visible, range]);
+  /** 当月按天聚合（柱状图） */
+  const days = useMemo(() => {
+    const map = new Map<string, { t: number; paidIn: number; cached: number; out: number; turns: number }>();
+    for (const r of visible) {
+      const d = new Date(r.at);
+      d.setHours(0, 0, 0, 0);
+      const k = String(d.getTime());
+      const b = map.get(k) ?? { t: d.getTime(), paidIn: 0, cached: 0, out: 0, turns: 0 };
+      b.paidIn += Math.max(0, r.inputTokens - (r.cachedTokens ?? 0));
+      b.cached += r.cachedTokens ?? 0;
+      b.out += r.outputTokens;
+      b.turns += 1;
+      map.set(k, b);
+    }
+    return [...map.values()].sort((a, b) => a.t - b.t);
+  }, [visible]);
 
-  const stats = useMemo(() => {
+  const mStats = useMemo(() => {
     const inT = visible.reduce((s, r) => s + r.inputTokens, 0);
     const outT = visible.reduce((s, r) => s + r.outputTokens, 0);
     const caT = visible.reduce((s, r) => s + (r.cachedTokens ?? 0), 0);
     const dur = visible.reduce((s, r) => s + (r.durationMs ?? 0), 0);
     const estC = visible.filter((r) => r.estimated).length;
     return {
-      total: inT + outT,
       inT,
       outT,
       caT,
@@ -145,55 +190,60 @@ export function LedgerPanel() {
   }, [visible]);
 
   const maxDay = Math.max(1, ...days.map((d) => d.paidIn + d.cached + d.out));
-
   const shownRows = visible.slice(0, 300);
 
   const onExport = () => {
     if (visible.length === 0) return;
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '');
-    const blob = new Blob([buildLedgerExport(visible, `range:${range}:${visible.length}`)], {
-      type: 'application/json',
-    });
+    const blob = new Blob([buildLedgerExport(visible, `month:${month}`)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `token-ledger-${stamp}.json`;
+    a.download = `token-ledger-${month}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1200);
+    void stamp;
   };
 
   const onClear = async () => {
     if (busy) return;
-    if (!window.confirm('清空本机保存的全部 token 台账？该操作不可撤销。')) return;
+    if (!window.confirm('清空保存在服务端的全部 token 台账？该操作不可撤销。')) return;
     setBusy(true);
     await clearLedger();
     setBusy(false);
-    setPickDay(null);
     setPickModel('');
     setPickSession('');
+    setMonth(currentMonthKey());
+    await loadAll(currentMonthKey());
   };
 
-  const hasData = rows.length > 0;
+  const hasData = grandIn !== null && (grandTurns > 0 || rows.length > 0);
 
   return (
     <div className="tlg-root">
-      {/* 时间范围 */}
+      {/* 时间范围 → 月翻页 */}
       <div className="tlg-bar">
-        <div className="tlg-seg" role="group" aria-label="时间范围">
-          {([7, 14, 30] as const).map((d) => (
-            <button
-              key={d}
-              type="button"
-              className={`tlg-seg-btn${range === d ? ' is-on' : ''}`}
-              aria-pressed={range === d}
-              onClick={() => {
-                setRange(d);
-                setPickDay(null);
-              }}
-            >
-              {d} 天
-            </button>
-          ))}
+        <div className="tlg-seg" role="group" aria-label="月份">
+          <button type="button" className="tlg-seg-btn" onClick={() => shift(-1)} aria-label="上一月">‹</button>
+          <select
+            className="tlg-select tlg-month-sel"
+            value={month}
+            onChange={(e) => gotoMonth(e.target.value)}
+            aria-label="选择月份"
+          >
+            {(months.length > 0 ? months : [month]).map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="tlg-seg-btn"
+            onClick={() => shift(1)}
+            aria-label="下一月"
+            disabled={month >= currentMonthKey()}
+          >
+            ›
+          </button>
         </div>
         <div className="tlg-actions">
           <button type="button" className="tlg-btn" onClick={onExport} disabled={visible.length === 0}>
@@ -213,90 +263,68 @@ export function LedgerPanel() {
       {!hasData ? (
         <div className="tlg-empty">
           <strong>还没有用量记录</strong>
-          <p>发一轮对话后，引擎在流末发出 ai.usage，这里会逐轮记账：输入、输出、缓存命中与速率。记录只留在本机。</p>
+          <p>
+            发一轮对话后，引擎在流末发出 ai.usage，这里会逐轮记账。台账保存在实例数据目录（服务端
+            sqlite），换浏览器或清缓存数据仍在。
+          </p>
         </div>
       ) : (
         <>
-          {/* 大数（2×2） */}
+          {/* 大数：结转累计（跨月总账） */}
           <div className="tlg-hero">
             <div className="tlg-cell tlg-cell-main">
               <div className="tlg-k">累计总 token</div>
               <div className="tlg-v">
-                {fmtTokens(stats.total)} <small>tok</small>
+                {fmtTokens((grandIn ?? 0) + grandOut)} <small>tok</small>
               </div>
               <div className="tlg-sub">
-                输入 {fmtTokens(stats.inT)} + 输出 {fmtTokens(stats.outT)} · {stats.turns} 轮
+                输入 {fmtTokens(grandIn ?? 0)} + 输出 {fmtTokens(grandOut)} · {grandTurns} 轮
               </div>
             </div>
             <div className="tlg-cell">
               <div className="tlg-k">
-                <i className="tlg-dot tlg-d-in" aria-hidden="true" />付费输入
+                <i className="tlg-dot tlg-d-in" aria-hidden="true" />缓存命中
               </div>
-              <div className="tlg-v tlg-c-in">{fmtTokens(stats.inT - stats.caT)}</div>
-              <div className="tlg-sub">缓存命中 {fmtTokens(stats.caT)}（{stats.cachePct}%）</div>
-            </div>
-            <div className="tlg-cell">
-              <div className="tlg-k">
-                <i className="tlg-dot tlg-d-out" aria-hidden="true" />输出
+              <div className="tlg-v tlg-c-in">
+                {fmtTokens(grandCached)}
+                <small>{grandIn ? ` ${Math.round((grandCached / (grandIn ?? 1)) * 100)}%` : ''}</small>
               </div>
-              <div className="tlg-v tlg-c-out">{fmtTokens(stats.outT)}</div>
-              <div className="tlg-sub">均值 {stats.tps.toFixed(1)} tok/s</div>
-            </div>
-            <div className="tlg-cell">
-              <div className="tlg-k">
-                <i className="tlg-dot tlg-d-est" aria-hidden="true" />估算占比
-              </div>
-              <div className="tlg-v tlg-c-est">{stats.estPct}%</div>
-              <div className="tlg-sub">{stats.estC}/{stats.turns} 轮为字符估算</div>
+              <div className="tlg-sub">估算轮次 {grandEst}（供应商未回 usage）</div>
             </div>
           </div>
 
-          {/* 每日趋势 */}
+          {/* 当月小计 */}
+          <div className="tlg-month-sum">
+            <span><b>{month}</b> 小计</span>
+            <span>输入 {fmtTokens(mStats.inT)}</span>
+            <span>输出 {fmtTokens(mStats.outT)}</span>
+            <span>{mStats.turns} 轮{mStats.estPct > 0 ? ` · 估 ${mStats.estPct}%` : ''}</span>
+          </div>
+
+          {/* 当月每日柱状图 */}
           <div className="tlg-chart">
-            <div className="tlg-chart-head">
-              每日用量
-              <span className="tlg-chart-hint">{pickDay != null ? '再次点击当日柱子取消筛选' : '点击柱子筛当日流水'}</span>
-            </div>
-            <div className="tlg-bars">
-              {days.map((d) => {
-                const total = d.paidIn + d.cached + d.out;
-                const off = pickDay != null && d.t !== pickDay && new Date(d.t).toDateString() !== (pickDay ? new Date(pickDay).toDateString() : '');
-                const title =
-                  total > 0
-                    ? `${fmtDay(d.t)}：付费输入 ${fmtFull(d.paidIn)} · 缓存 ${fmtFull(d.cached)} · 输出 ${fmtFull(d.out)} · ${d.rows.length} 轮`
-                    : `${fmtDay(d.t)}：无用量`;
-                return (
-                  <button
-                    key={d.t}
-                    type="button"
-                    className={`tlg-bcol${off ? ' is-off' : ''}${pickDay === d.t ? ' is-pick' : ''}`}
-                    title={title}
-                    aria-label={title}
-                    onClick={() => setPickDay(pickDay === d.t ? null : d.t)}
-                  >
-                    {total > 0 ? (
-                      <>
-                        {d.out > 0 && <i className="tlg-seg tlg-s-out" style={{ height: `${(d.out / maxDay) * 100}%` }} />}
-                        {d.cached > 0 && <i className="tlg-seg tlg-s-cache" style={{ height: `${(d.cached / maxDay) * 100}%` }} />}
-                        {d.paidIn > 0 && <i className="tlg-seg tlg-s-in" style={{ height: `${(d.paidIn / maxDay) * 100}%` }} />}
-                      </>
-                    ) : (
-                      <i className="tlg-seg tlg-s-none" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="tlg-axis">
-              {days.map((d) => (
-                <span key={d.t}>{fmtDay(d.t)}</span>
-              ))}
-            </div>
-            <div className="tlg-legend">
-              <i><b className="tlg-dot tlg-d-in" />付费输入</i>
-              <i><b className="tlg-dot tlg-d-cache" />缓存命中</i>
-              <i><b className="tlg-dot tlg-d-out" />输出</i>
-            </div>
+            {days.length === 0 ? (
+              <div className="tlg-chart-empty">本月当前筛选下没有记录</div>
+            ) : (
+              days.map((d) => (
+                <button
+                  key={d.t}
+                  type="button"
+                  className="tlg-col"
+                  title={`${fmtDay(d.t)}：输入 ${fmtFull(d.paidIn + d.cached)}（缓存 ${fmtFull(d.cached)}）· 输出 ${fmtFull(d.out)} · ${d.turns} 轮${isToday(d.t) ? '（今天）' : ''}`}
+                  onClick={() => setPickSession('')}
+                >
+                  <i className="tlg-seg tlg-s-out" style={{ height: `${(d.out / maxDay) * 100}%` }} />
+                  <i className="tlg-seg tlg-s-cache" style={{ height: `${(d.cached / maxDay) * 100}%` }} />
+                  <i className="tlg-seg tlg-s-in" style={{ height: `${(d.paidIn / maxDay) * 100}%` }} />
+                </button>
+              ))
+            )}
+          </div>
+          <div className="tlg-legend">
+            <i><b className="tlg-dot tlg-d-in" />付费输入</i>
+            <i><b className="tlg-dot tlg-d-cache" />缓存命中</i>
+            <i><b className="tlg-dot tlg-d-out" />输出</i>
           </div>
 
           {/* 流水筛选 */}
@@ -319,7 +347,7 @@ export function LedgerPanel() {
             </label>
           </div>
 
-          {/* 流水表 */}
+          {/* 流水表：本月明细 */}
           <div className="tlg-table-wrap">
             <table className="tlg-table">
               <thead>
@@ -361,22 +389,24 @@ export function LedgerPanel() {
               <tfoot>
                 <tr>
                   <td colSpan={2}>筛选合计（{visible.length} 轮）</td>
-                  <td className="tlg-ta-r tlg-c-in">{fmtTokens(stats.inT)}</td>
-                  <td className="tlg-ta-r">{fmtTokens(stats.caT)}</td>
-                  <td className="tlg-ta-r tlg-c-out">{fmtTokens(stats.outT)}</td>
+                  <td className="tlg-ta-r tlg-c-in">{fmtTokens(mStats.inT)}</td>
+                  <td className="tlg-ta-r">{fmtTokens(mStats.caT)}</td>
+                  <td className="tlg-ta-r tlg-c-out">{fmtTokens(mStats.outT)}</td>
                   <td />
                 </tr>
               </tfoot>
             </table>
           </div>
           {visible.length > shownRows.length && (
-            <div className="tlg-more">展示最近 {shownRows.length} / {visible.length} 条</div>
+            <div className="tlg-more">展示最近 {shownRows.length} / {visible.length} 条；更早记录请翻上月</div>
           )}
         </>
       )}
 
-      {backfillNote && <div className="tlg-note">{backfillNote}</div>}
-      <div className="tlg-privacy">台账保存在本机 IndexedDB，不离开浏览器；卸载插件重装后数据仍在。</div>
+      {note && <div className="tlg-note">{note}</div>}
+      <div className="tlg-privacy">
+        台账经 cap.kv 保存在实例数据目录（服务端 sqlite），换浏览器/清缓存数据仍在；明细保留最近 24 个月。
+      </div>
     </div>
   );
 }

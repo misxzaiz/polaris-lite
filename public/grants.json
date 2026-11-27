@@ -121,7 +121,9 @@
       ]
     },
     "token-ledger": {
-      "capabilities": [],
+      "capabilities": [
+        "cap.kv"
+      ],
       "provides": [],
       "events": [
         "cap.ai.chat:event",
