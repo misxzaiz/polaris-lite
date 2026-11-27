@@ -57,6 +57,27 @@ export function createServerPart(options = {}) {
   const publicGrants = join(repoRoot, 'public', 'grants.json');
   const distGrants = join(repoRoot, 'dist', 'grants.json');
 
+  /** dataDir 里已安装的外置插件 id 列表（安装态权威源；registry 被构建冲洗也不丢） */
+  function extInstalledIds() {
+    try {
+      if (!existsSync(extPluginsDir)) return [];
+      return readdirSync(extPluginsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && existsSync(join(extPluginsDir, d.name, 'plugin.js')))
+        .map((d) => d.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /** 外置插件 bundle 指纹（缓存破坏用；与 installDir 双写 registry 的 ?v= 同源约定） */
+  function extBundleVersion(id) {
+    try {
+      return createHash('sha256').update(readFileSync(join(extPluginsDir, id, 'plugin.js'))).digest('hex').slice(0, 8);
+    } catch {
+      return '0';
+    }
+  }
+
   function loadSources() {
     try {
       if (!existsSync(sourcesPath)) return [];
@@ -443,6 +464,32 @@ export function createServerPart(options = {}) {
       const mime = MIME[extname(file)] ?? 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-store' });
       return res.end(readFileSync(target));
+    }
+
+    // /plugins/registry.json：外置插件条目动态合并——build:plugins 会按内置清单重新生成
+    // registry（外置插件不在构建清单里，每次构建/deploy 必然被冲掉），而安装态永存 dataDir。
+    // 服务侧实时合并静态 registry + dataDir 已装目录，前端拿到的永远是完整清单，
+    // 「已安装但 tab 消失」的加载/安装态解耦问题从根上消除。免鉴权（与静态 registry 同级公开清单）。
+    if (pathname === '/plugins/registry.json') {
+      const merged = { plugins: [] };
+      for (const f of [distRegistry, publicRegistry]) {
+        try {
+          const base = JSON.parse(readFileSync(f, 'utf8'));
+          if (Array.isArray(base.plugins) && base.plugins.length) { merged.plugins = base.plugins; break; }
+        } catch { /* 下一份 */ }
+      }
+      for (const id of extInstalledIds()) {
+        if (merged.plugins.some((p) => p && p.id === id)) continue; // 静态侧已有（构建双写未冲掉时）防重复
+        const hasStyle = existsSync(join(extPluginsDir, id, 'style.css'));
+        merged.plugins.push({
+          id,
+          module: '/ext-plugins/' + id + '/plugin.js?v=' + extBundleVersion(id),
+          enabled: true,
+          ...(hasStyle ? { style: '/ext-plugins/' + id + '/style.css?v=' + extBundleVersion(id) } : {}),
+        });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify(merged));
     }
 
     if (!pathname.startsWith('/api/market/')) return next?.();

@@ -200,6 +200,59 @@ test('market: http 源 —— 清单/包下载 + sha256 强校验 + 落盘（本
   }
 });
 
+test('market: registry 动态合并——构建冲洗后外置插件条目不丢（已安装但 tab 消失的根因修复）', async (t) => {
+  const { dataDir, marketDir, repoRoot, call } = await tempEnv(t);
+  // 造源：两个外置插件（一个带 style）
+  const pk1 = writePackage(marketDir, 'ext-a', {
+    manifest: { id: 'ext-a', name: 'Ext A', version: '1.0.0', capabilities: [], provides: [], events: [] },
+    js: 'export const manifest={id:"ext-a"};',
+    css: '.a{}',
+  });
+  const pk2 = writePackage(marketDir, 'ext-b', {
+    manifest: { id: 'ext-b', name: 'Ext B', version: '1.0.0', capabilities: [], provides: [], events: [] },
+    js: 'export const manifest={id:"ext-b"};',
+  });
+  writeFileSync(join(marketDir, 'index.json'), JSON.stringify({ version: 1, plugins: [pk1, pk2] }));
+
+  const addSrc = await call('/api/market/sources', { name: 'test-local', type: 'dir', ref: marketDir });
+  assert.equal(addSrc.status, 200, '添加源');
+  const inst1 = await call('/api/market/install', { source: 'test-local', id: 'ext-a' });
+  assert.equal(inst1.status, 200, '安装 ext-a');
+  await call('/api/market/install', { source: 'test-local', id: 'ext-b' });
+
+  // 安装后 registry 合并：静态基座(builtin-x) + 两个外置插件
+  const afterInstall = await call('/plugins/registry.json');
+  assert.equal(afterInstall.status, 200);
+  const ids1 = afterInstall.json.plugins.map((p) => p.id).sort();
+  assert.deepEqual(ids1, ['builtin-x', 'ext-a', 'ext-b'], '安装后 registry 含全部插件');
+  const extA = afterInstall.json.plugins.find((p) => p.id === 'ext-a');
+  assert.match(extA.module, /^\/ext-plugins\/ext-a\/plugin.js\?v=/, 'module 指向 /ext-plugins 自服务');
+  assert.match(extA.style, /^\/ext-plugins\/ext-a\/style.css\?v=/, 'style 条目');
+  assert.equal(typeof extA.enabled, 'boolean');
+
+  // 模拟构建冲洗：registry.json 被 build:plugins 重新生成（只剩内置插件）
+  const washed = { plugins: [{ id: 'builtin-x', module: '/plugins/builtin-x/plugin.js?v=1', enabled: true }] };
+  writeFileSync(join(repoRoot, 'public', 'plugins', 'registry.json'), JSON.stringify(washed));
+  writeFileSync(join(repoRoot, 'dist', 'plugins', 'registry.json'), JSON.stringify(washed));
+
+  const afterWash = await call('/plugins/registry.json');
+  const ids2 = afterWash.json.plugins.map((p) => p.id).sort();
+  assert.deepEqual(ids2, ['builtin-x', 'ext-a', 'ext-b'], '构建冲洗后外置插件条目仍在（动态合并）');
+
+  // 卸载后条目消失
+  await call('/api/market/uninstall', { id: 'ext-a' });
+  const afterUninstall = await call('/plugins/registry.json');
+  const ids3 = afterUninstall.json.plugins.map((p) => p.id).sort();
+  assert.deepEqual(ids3, ['builtin-x', 'ext-b'], '卸载后条目移除');
+
+  // 坏 registry 兜底：静态侧全坏时外置插件仍可加载
+  writeFileSync(join(repoRoot, 'public', 'plugins', 'registry.json'), '{broken');
+  writeFileSync(join(repoRoot, 'dist', 'plugins', 'registry.json'), '{broken');
+  const broken = await call('/plugins/registry.json');
+  const ids4 = broken.json.plugins.map((p) => p.id);
+  assert.deepEqual(ids4, ['ext-b'], '静态 registry 坏掉时兜底只剩外置（可用）');
+});
+
 test('market: 卸载 + PLITE_MARKET=0 旁路', async (t) => {
   const { dataDir, marketDir, call } = tempEnv(t);
   const entry = writePackage(marketDir, 'tmp-tool', {
