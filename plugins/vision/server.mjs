@@ -98,8 +98,13 @@ export function createServerPart(options = {}) {
     const [pathname] = (req.url ?? '').split('?');
     if (!pathname.startsWith('/api/vision/')) return next?.();
 
+    // 登录门禁：会话 cookie 或本地回环 Bearer 二选一（agent-runner 服务端编排
+    // loopback 调用走 Bearer，与 agent-bash/fs/preview/media-push 同一纪律）。
+    const authHeader = String(req.headers?.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const bearerValid = !!(bearerToken && (options.verifyTempToken ?? (() => false))(bearerToken));
     const session = options.getSession?.(req);
-    if (!session) {
+    if (!session && !bearerValid) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }
