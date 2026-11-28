@@ -25,8 +25,12 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { registerOpenPanelTool } from './tool.mjs';
 
 export function createServerPart(options = {}) {
+  // AI 工具面：open_panel（把版本面板内嵌进对话；详见 tool.mjs 注释）
+  if (options.registry) registerOpenPanelTool(options.registry);
+
   const getSession = options.getSession;
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const versionFile = resolve(dataDir, 'app-updater-version.json');

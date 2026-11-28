@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilityHandler, LitePlugin, SlotHostApi } from '@sdk';
+import { CHANNEL_ARTIFACT_RENDERERS } from '@sdk';
 import './panel.css';
 
 const LAST_CHECK_KEY = 'app-updater.last-check.v1';
@@ -581,6 +582,14 @@ export const appUpdaterPlugin: LitePlugin = {
   setup(api: SlotHostApi) {
     startBackgroundWatcher(api);
     api.registerCapability.register('cap.app.updater', createUpdaterHandler());
+    // 内嵌面板：把 VersionPanel 同时注册成 artifact 渲染器（rendererType=app-updater.version）。
+    // AI 工具 open_panel emit artifact.created 后，chat-lite 的 ArtifactSlot 会取这里的组件
+    // 直接渲染在消息流里——与右侧面板同一组件、同一数据源（fetch 自取，无 props 依赖）。
+    // VersionPanel 无外部 props、数据自取（fetch /api/deploy/status 等），内嵌渲染零适配。
+    const w = window as unknown as Record<string, Record<string, unknown>>;
+    const reg = (w[CHANNEL_ARTIFACT_RENDERERS] ?? {});
+    reg['app-updater.version'] = () => VersionPanel();
+    w[CHANNEL_ARTIFACT_RENDERERS] = reg;
   },
 };
 
