@@ -73,14 +73,23 @@ function audioGestureUnlock() {
 }
 
 function autoplayEnabled(): boolean {
-  try { return localStorage.getItem(AUTOPLAY_KEY) !== 'off'; } catch { return true; }
+  try { return localStorage.getItem(AUTOPLAY_KEY) === 'on'; } catch { return false; }
 }
 
-function AudioDeck({ url, title, bytes }: { url: string; title: string; bytes?: number }) {
+/** 全局：同一 callId 只自动播一次（防「实时卡 + 落库卡重挂载」双播、防重开会话回放） */
+const __autoPlayed = new Set<string>();
+function markAutoPlayed(callId: string): boolean {
+  if (__autoPlayed.has(callId)) return false;
+  __autoPlayed.add(callId);
+  return true;
+}
+
+function AudioDeck({ url, title, bytes, callId }: { url: string; title: string; bytes?: number; callId: string }) {
   const ref = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [pending, setPending] = useState(false);
   const [speedIdx, setSpeedIdx] = useState(0);
+  const [autoplayFlag, setAutoplayFlag] = useState<'on' | 'off'>(() => (autoplayEnabled() ? 'on' : 'off'));
   const [prog, setProg] = useState(0);           // 0..1
   const [t, setT] = useState({ cur: 0, dur: 0 });
 
@@ -95,10 +104,11 @@ function AudioDeck({ url, title, bytes }: { url: string; title: string; bytes?: 
     });
   }
 
-  // 挂载即试播（方案 A 核心）
+  // 挂载即试播（仅当：开关开启 + 该 callId 本页生命周期内首挂载）；
+  // 默认 off：重开会话/历史卡一律静默，需手动点播放。
   useEffect(() => {
     const el = ref.current;
-    if (!el || !autoplayEnabled()) return;
+    if (!el || !autoplayEnabled() || !markAutoPlayed(callId)) return;
     el.play().then(() => {
       setPending(false);
     }).catch(() => {
@@ -111,7 +121,7 @@ function AudioDeck({ url, title, bytes }: { url: string; title: string; bytes?: 
       const i = __audioPending.indexOf(el);
       if (i >= 0) __audioPending.splice(i, 1);
     };
-  }, [url]);
+  }, [url, callId]);
 
   // 播放事件绑定
   useEffect(() => {
@@ -190,6 +200,14 @@ function AudioDeck({ url, title, bytes }: { url: string; title: string; bytes?: 
           </div>
         </div>
         <button className="mp-audio-speed" onClick={cycleSpeed}>{speedLabel}×</button>
+        <button
+          className="mp-audio-speed"
+          title={autoplayEnabled() ? '自动播放：开（点击关闭）' : '自动播放：关（点击开启）'}
+          onClick={() => {
+            try { localStorage.setItem(AUTOPLAY_KEY, autoplayEnabled() ? 'off' : 'on'); } catch { /* 忽略 */ }
+            setAutoplayFlag(autoplayEnabled() ? 'on' : 'off');
+          }}
+        >{autoplayFlag === 'on' ? '自动播放开' : '自动播放关'}</button>
       </div>
     </div>
   );
@@ -448,7 +466,7 @@ export function MediaCard({ callId, title, data }: MediaCardProps) {
   } else if (kind === 'video') {
     body = <div className="mp-media"><video className="mp-video" src={url} controls preload="metadata" playsInline /></div>;
   } else if (kind === 'audio') {
-    body = <AudioDeck url={url} title={title} bytes={bytes} />;
+    body = <AudioDeck url={url} title={title} bytes={bytes} callId={callId} />;
   } else if (kind === 'sheet') {
     body = id ? <SheetView id={id} url={url} ext={ext} /> : <a className="mp-dl-btn" href={url} download>下载</a>;
   } else if (kind === 'pdf') {
