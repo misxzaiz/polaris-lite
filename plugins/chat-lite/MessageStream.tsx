@@ -343,6 +343,7 @@ export function MessageStream() {
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId));
   const bottomRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [showTop, setShowTop] = useState(false);
   const [missed, setMissed] = useState(0);
@@ -380,6 +381,31 @@ export function MessageStream() {
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
+  }, [activeId]);
+
+  // 布局增长跟滚（ResizeObserver）：流式预览舞台长高、产物面板挂载/展开、图片
+  // 加载都会让对话变高，但不触发文本类跟滚 effect 的依赖（msgCount/lastContent），
+  // 最新回复会被顶出屏外只能手动滚。RO 在这些增长的每一帧（含 CSS 高度过渡）
+  // 触发，atBottom 时 rAF 直设贴底——连续、平滑、无一次性测量的欠账。
+  useEffect(() => {
+    const conv = conversationRef.current;
+    const el = streamRef.current;
+    if (!conv || !el) return;
+    let frame = 0;
+    const pin = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (!atBottomRef.current) return;
+        el.scrollTop = el.scrollHeight;
+      });
+    };
+    const ro = new ResizeObserver(pin);
+    ro.observe(conv);
+    return () => {
+      ro.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, [activeId]);
 
   const messages = session?.messages ?? [];
@@ -488,7 +514,7 @@ export function MessageStream() {
   return (
     <div className="stream-area">
       <div className="chat-stream" data-testid="message-stream" ref={streamRef}>
-        <div className="chat-conversation">
+        <div className="chat-conversation" ref={conversationRef}>
           {messages.map((m) =>
             isToolCard(m) ? (
               <ToolCard key={m.id} msg={m as ToolCardMessage} />
