@@ -85,6 +85,14 @@ export const PLUGIN_LIST = [
   { id: 'session-hud', config: 'session-hud/vite.config.ts', dist: 'session-hud/dist', order: 43 },
   // image-push：AI 推送电脑图片到对话（push_image 工具 + image 产物渲染器 + 缩放查看器）
   { id: 'image-push', config: 'image-push/vite.config.ts', dist: 'image-push/dist', order: 44 },
+  // vision：AI 看图（look 工具，视觉模型识别，纯文本返回）
+  { id: 'vision', config: 'vision/vite.config.ts', dist: 'vision/dist', order: 46 },
+  // voice-tts：AI 说话（speak 工具，MiMo TTS 合成 → media-push 音频卡）
+  { id: 'voice-tts', config: 'voice-tts/vite.config.ts', dist: 'voice-tts/dist', order: 47 },
+  // image-gen：AI 文生图（draw 工具，上游可配，产物走 media-push 图片卡）
+  { id: 'image-gen', config: 'image-gen/vite.config.ts', dist: 'image-gen/dist', order: 48 },
+  // video-gen：AI 文生视频（video 工具，异步任务轮询，产物走 media-push 视频卡）
+  { id: 'video-gen', config: 'video-gen/vite.config.ts', dist: 'video-gen/dist', order: 49 },
   // media-push：AI 推送任意文件到对话（push_media 工具 + 八 kind 卡片 + 伪全屏 + 卡内交互）
   { id: 'media-push', config: 'media-push/vite.config.ts', dist: 'media-push/dist', order: 45 },
 ].sort((a, b) => a.order - b.order);

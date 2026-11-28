@@ -56,6 +56,14 @@ const RAW_SERVER_PLUGINS = [
   { id: 'voice-radio', entry: './voice-radio/server.mjs' },
   // image-push：AI 推送电脑图片（/api/img/* 落盘直出 + push_image 工具）
   { id: 'image-push', entry: './image-push/server.mjs' },
+  // vision：AI 看图（/api/vision/look，providers.json 选视觉模型）
+  { id: 'vision', entry: './vision/server.mjs' },
+  // voice-tts：AI 说话（/api/voice-tts/speak，MiMo TTS → media-push 音频卡）
+  { id: 'voice-tts', entry: './voice-tts/server.mjs' },
+  // image-gen：AI 文生图（/api/image-gen/draw，上游可配 images API）
+  { id: 'image-gen', entry: './image-gen/server.mjs' },
+  // video-gen：AI 文生视频（/api/video-gen/video，异步任务提交+轮询）
+  { id: 'video-gen', entry: './video-gen/server.mjs' },
   // media-push：AI 推送任意文件（/api/media/* 嗅探落盘直出切片 + push_media 工具）
   { id: 'media-push', entry: './media-push/server.mjs' },
   // translate：百度翻译代理（签名 + 错误码中文化 + LRU 缓存；SecretKey 只在服务端）

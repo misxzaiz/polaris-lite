@@ -475,6 +475,26 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "vision": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "voice-tts": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "image-gen": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
+    "video-gen": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }

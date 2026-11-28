@@ -76,7 +76,65 @@
   border-radius: 6px;
   background: #000;
 }
-.mp-media audio { width: 100%; }
+/* ---- audio：磁带台播放器（同族「电台」语言：磁带轮 + 波形 + 倍速） ---- */
+.mp-audio {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--plite-line, rgba(127, 127, 127, 0.22));
+  border-radius: 12px;
+  transition: border-color 0.25s;
+}
+.mp-audio.playing { border-color: rgba(45, 212, 191, 0.45); }
+.mp-audio-reel {
+  width: 44px; height: 44px; flex-shrink: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(127,127,127,0.14) 0 38%, rgba(127,127,127,0.05) 39% 100%);
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  position: relative; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: inherit; transition: transform 0.2s;
+}
+.mp-audio-reel:hover { transform: scale(1.06); }
+.mp-audio-reel::before, .mp-audio-reel::after {
+  content: ''; position: absolute; width: 11px; height: 11px;
+  border: 2px solid rgba(127, 127, 127, 0.35); border-radius: 50%;
+}
+.mp-audio-reel::before { left: 2px; top: 50%; transform: translateY(-50%); }
+.mp-audio-reel::after { right: 2px; top: 50%; transform: translateY(-50%); }
+.mp-audio.playing .mp-audio-reel::before,
+.mp-audio.playing .mp-audio-reel::after { animation: mp-reel-spin 2.4s linear infinite; }
+@keyframes mp-reel-spin { to { transform: translateY(-50%) rotate(360deg); } }
+.mp-audio-wavebox { flex: 1; min-width: 0; }
+.mp-audio-rows { display: flex; align-items: center; gap: 12px; }
+.mp-audio-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-audio-meta { font-size: 10.5px; opacity: 0.6; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.mp-audio-waves { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 6px; cursor: pointer; }
+.mp-audio-bar { width: 3px; border-radius: 2px; background: rgba(127, 127, 127, 0.3); transition: background 0.2s; }
+.mp-audio-bar.on { background: rgba(45, 212, 191, 0.9); }
+.mp-audio-speed {
+  flex-shrink: 0; background: none; color: inherit;
+  border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 7px;
+  padding: 4px 9px; font-size: 11px; cursor: pointer;
+  font-variant-numeric: tabular-nums; font-family: inherit;
+}
+.mp-audio-speed:hover { border-color: rgba(45, 212, 191, 0.7); }
+/* 待播提示条（自动播放被拒时出现） */
+.mp-audio-pending {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px dashed rgba(250, 204, 21, 0.4);
+  background: rgba(250, 204, 21, 0.05);
+  border-radius: 9px; padding: 7px 11px;
+  font-size: 11.5px; color: rgba(250, 204, 21, 0.9);
+  margin-bottom: 8px;
+}
+.mp-audio-pending-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(250, 204, 21, 0.9); flex-shrink: 0;
+  animation: mp-pend 1s infinite;
+}
+@keyframes mp-pend { 50% { opacity: 0.3; } }
 
 /* ---- pdf ---- */
 .mp-pdf {

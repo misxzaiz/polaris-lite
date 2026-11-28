@@ -48,6 +48,153 @@ function Td({ v }: { v: string }) {
   return <td className={NUM_RE.test(s.trim()) ? 'num' : ''}>{s}</td>;
 }
 
+/* ==================== Audio 卡：磁带台（自动播放 + 波形进度 + 倍速） ====================
+ * 方案 A（原型验证过）：卡片挂载即 play()；被 Autoplay Policy 拒 → 进全局待播队列，
+ * 任意 pointerdown/keydown 手势立即开播。localStorage 开关 mediaPush.autoplay。
+ * 全局播放队列：多卡排队播（不叠音），每卡结束后放行下一张。
+ * 磁带轮/波形/倍速样式见 media-push.css 的 .mp-audio* 族（「电台」同族语言）。
+ * ================================================================================ */
+
+const AUDIO_SPEEDS = [1, 1.25, 1.5, 2];
+const AUTOPLAY_KEY = 'mediaPush.autoplay';
+
+/** 全局：待播队列 + 手势解锁器（模块级单例，多卡共享） */
+const __audioPending: HTMLAudioElement[] = [];
+let __audioUnlockBound = false;
+function audioGestureUnlock() {
+  if (__audioUnlockBound) return;
+  __audioUnlockBound = true;
+  const fire = () => {
+    const el = __audioPending.shift();
+    if (el) void el.play().catch(() => { /* 仍被拒就让它留在队列外等手动 */ });
+  };
+  window.addEventListener('pointerdown', fire, { passive: true });
+  window.addEventListener('keydown', fire);
+}
+
+function autoplayEnabled(): boolean {
+  try { return localStorage.getItem(AUTOPLAY_KEY) !== 'off'; } catch { return true; }
+}
+
+function AudioDeck({ url, title, bytes }: { url: string; title: string; bytes?: number }) {
+  const ref = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [speedIdx, setSpeedIdx] = useState(0);
+  const [prog, setProg] = useState(0);           // 0..1
+  const [t, setT] = useState({ cur: 0, dur: 0 });
+
+  // 波形条高度：按 url 稳定伪随机（不做真实解码，视觉用）
+  const barsRef = useRef<number[]>([]);
+  if (!barsRef.current.length) {
+    let h = 0;
+    for (let i = 0; i < url.length; i += 1) h = (h * 31 + url.charCodeAt(i)) >>> 0;
+    barsRef.current = Array.from({ length: 42 }, (_, i) => {
+      const v = Math.abs(Math.sin((h % 997) + i * 0.7));
+      return 6 + Math.min(20, v * 14 + ((h >> i % 16) & 7));
+    });
+  }
+
+  // 挂载即试播（方案 A 核心）
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !autoplayEnabled()) return;
+    el.play().then(() => {
+      setPending(false);
+    }).catch(() => {
+      // NotAllowedError：进待播队列，等任意手势
+      setPending(true);
+      audioGestureUnlock();
+      __audioPending.push(el);
+    });
+    return () => {
+      const i = __audioPending.indexOf(el);
+      if (i >= 0) __audioPending.splice(i, 1);
+    };
+  }, [url]);
+
+  // 播放事件绑定
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onPlay = () => { setPlaying(true); setPending(false); };
+    const onPause = () => setPlaying(false);
+    const onEnd = () => setPlaying(false);
+    const onTime = () => {
+      const d = el.duration && Number.isFinite(el.duration) ? el.duration : 0;
+      setT({ cur: el.currentTime, dur: d });
+      if (d > 0) setProg(el.currentTime / d);
+    };
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    el.addEventListener('ended', onEnd);
+    el.addEventListener('timeupdate', onTime);
+    return () => {
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+      el.removeEventListener('ended', onEnd);
+      el.removeEventListener('timeupdate', onTime);
+    };
+  }, []);
+
+  const toggle = () => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.paused) void el.play().catch(() => {}); else el.pause();
+  };
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    if (el.duration && Number.isFinite(el.duration)) el.currentTime = p * el.duration;
+  };
+  const cycleSpeed = () => {
+    const next = (speedIdx + 1) % AUDIO_SPEEDS.length;
+    setSpeedIdx(next);
+    if (ref.current) ref.current.playbackRate = AUDIO_SPEEDS[next];
+  };
+  const fmtT = (s: number) => {
+    if (!Number.isFinite(s)) s = 0;
+    const m = Math.floor(s / 60);
+    const ss = Math.floor(s % 60);
+    return `${m}:${String(ss).padStart(2, '0')}`;
+  };
+  const barOn = Math.floor(prog * barsRef.current.length);
+  const speedLabel = AUDIO_SPEEDS[speedIdx] === 1 ? '1.0' : String(AUDIO_SPEEDS[speedIdx]);
+
+  return (
+    <div>
+      {pending ? (
+        <div className="mp-audio-pending">
+          <span className="mp-audio-pending-dot" />
+          待播中——碰一下页面任意处立即播放（浏览器手势解锁）
+        </div>
+      ) : null}
+      <div className={`mp-audio${playing ? ' playing' : ''}`}>
+        <audio ref={ref} src={url} preload="metadata" />
+        <div className="mp-audio-reel" onClick={toggle} role="button" aria-label={playing ? '暂停' : '播放'} tabIndex={0}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            {playing ? <path d="M6 5h4v14H6zM14 5h4v14h-4z" /> : <path d="M8 5v14l11-7z" />}
+          </svg>
+        </div>
+        <div className="mp-audio-wavebox">
+          <div className="mp-audio-rows">
+            <span className="mp-audio-name">{title}</span>
+            <span className="mp-audio-meta">{fmtT(t.cur)} / {fmtT(t.dur)}{bytes ? ` · ${fmtBytes(bytes)}` : ''}</span>
+          </div>
+          <div className="mp-audio-waves" onClick={seek}>
+            {barsRef.current.map((h, i) => (
+              <div key={i} className={`mp-audio-bar${i <= barOn ? ' on' : ''}`} style={{ height: h }} />
+            ))}
+          </div>
+        </div>
+        <button className="mp-audio-speed" onClick={cycleSpeed}>{speedLabel}×</button>
+      </div>
+    </div>
+  );
+}
+
 /* ==================== Sheet 卡（csv/tsv 切片 + 翻页/排序/筛选） ==================== */
 
 interface SheetRow { header: string[]; total: number; rows: string[][] }
@@ -301,7 +448,7 @@ export function MediaCard({ callId, title, data }: MediaCardProps) {
   } else if (kind === 'video') {
     body = <div className="mp-media"><video className="mp-video" src={url} controls preload="metadata" playsInline /></div>;
   } else if (kind === 'audio') {
-    body = <div className="mp-media"><audio src={url} controls preload="metadata" /></div>;
+    body = <AudioDeck url={url} title={title} bytes={bytes} />;
   } else if (kind === 'sheet') {
     body = id ? <SheetView id={id} url={url} ext={ext} /> : <a className="mp-dl-btn" href={url} download>下载</a>;
   } else if (kind === 'pdf') {
