@@ -461,6 +461,11 @@
       "provides": [],
       "events": []
     },
+    "cron-agent": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
+    },
     "image-push": {
       "capabilities": [],
       "provides": [],

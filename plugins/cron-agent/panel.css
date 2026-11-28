@@ -1,0 +1,122 @@
+/* cron-agent 面板样式：与 long-memory 面板同暗色基调 */
+
+.cron-panel {
+  padding: 16px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.cr-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cr-title { font-size: 15px; font-weight: 600; }
+.cr-sub { font-size: 11px; opacity: 0.55; margin-top: 2px; }
+
+.cr-btn {
+  border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px;
+  cursor: pointer; background: rgba(128, 140, 180, 0.15); color: inherit;
+}
+.cr-btn.primary { background: #3d6df2; color: #fff; }
+.cr-btn.ghost { background: rgba(128, 140, 180, 0.12); }
+.cr-btn.ghost.danger:hover { background: rgba(220, 80, 80, 0.25); }
+.cr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.cr-tip {
+  font-size: 12px; padding: 8px 12px; border-radius: 6px;
+  background: rgba(61, 109, 242, 0.12); color: #9fc1ff;
+}
+
+.cr-empty {
+  font-size: 12px; opacity: 0.55; padding: 28px 16px; text-align: center;
+  border: 1px dashed rgba(128, 140, 180, 0.25); border-radius: 8px;
+}
+
+.cr-list { display: flex; flex-direction: column; gap: 10px; }
+
+.cr-task {
+  border: 1px solid rgba(128, 140, 180, 0.2); border-radius: 10px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(128, 140, 180, 0.05);
+}
+.cr-task.disabled { opacity: 0.55; }
+
+.cr-task-row1 { display: flex; align-items: center; gap: 8px; }
+.cr-task-name { font-size: 13px; font-weight: 600; }
+
+.cr-task-prompt {
+  font-size: 12px; opacity: 0.75; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.cr-task-meta { display: flex; gap: 8px; font-size: 11px; opacity: 0.6; flex-wrap: wrap; }
+.cr-task-meta.dim { opacity: 0.45; }
+.cr-cron { font-family: monospace; color: #9fe6a8; }
+.cr-model { opacity: 0.8; }
+
+.cr-task-error {
+  font-size: 11px; color: #ff9d80; background: rgba(220, 80, 80, 0.1);
+  padding: 4px 8px; border-radius: 4px;
+}
+
+.cr-badge { font-size: 10px; border-radius: 8px; padding: 1px 8px; }
+.cr-badge.on { background: rgba(60, 200, 120, 0.18); color: #7fe6a0; }
+.cr-badge.off { background: rgba(128, 140, 180, 0.15); opacity: 0.8; }
+.cr-badge.run { background: rgba(61, 109, 242, 0.2); color: #9fc1ff; }
+.cr-badge.err { background: rgba(220, 80, 80, 0.2); color: #ff9d80; }
+
+.cr-task-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.cr-runs {
+  border-top: 1px solid rgba(128, 140, 180, 0.15); padding-top: 6px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.cr-run { display: flex; gap: 10px; font-size: 10px; opacity: 0.55; align-items: baseline; }
+.cr-run-st { font-family: monospace; min-width: 52px; }
+.cr-run-st.done { color: #7fe6a0; }
+.cr-run-st.failed { color: #ff9d80; }
+.cr-run-st.running { color: #9fc1ff; }
+.cr-run-st.skipped { opacity: 0.7; }
+.cr-run-err { color: #ff9d80; }
+
+/* ---- 弹窗 ---- */
+
+.cr-modal-bg {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.cr-modal {
+  background: var(--bg-panel, #1a1e2b); border: 1px solid rgba(128, 140, 180, 0.3);
+  border-radius: 12px; width: 500px; max-width: 100%; max-height: 90vh; overflow: auto;
+  padding: 18px; display: flex; flex-direction: column; gap: 10px;
+}
+.cr-modal-title { font-size: 14px; font-weight: 600; }
+
+.cr-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.cr-field > span:first-child { opacity: 0.6; }
+
+.cr-field input, .cr-field textarea, .cr-field select {
+  background: rgba(128, 140, 180, 0.08); border: 1px solid rgba(128, 140, 180, 0.25);
+  border-radius: 6px; color: inherit; padding: 7px 10px; font-size: 12px; font-family: inherit;
+}
+.cr-field textarea { min-height: 64px; resize: vertical; }
+.cr-field input:focus, .cr-field textarea:focus, .cr-field select:focus { outline: 1px solid #3d6df2; }
+
+.cr-hint { font-size: 10px; opacity: 0.45; }
+
+.cr-cron-input { font-family: monospace; }
+
+.cr-model-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.cr-model-row select:disabled { opacity: 0.4; }
+
+.cr-chk-row { display: flex; gap: 14px; font-size: 12px; }
+.cr-chk-row label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+
+.cr-modal-err { font-size: 11px; color: #ff9d80; }
+
+.cr-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

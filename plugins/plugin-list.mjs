@@ -32,6 +32,8 @@ export const PLUGIN_LIST = [
   { id: 'system-prompt', config: 'system-prompt/vite.config.ts', dist: 'system-prompt/dist', order: 18 },
   // long-memory：长期记忆（记忆池 kv 存储 + seedShadow 注入 + memory 工具 + 面板/设置分区）
   { id: 'long-memory', config: 'long-memory/vite.config.ts', dist: 'long-memory/dist', order: 19 },
+  // cron-agent：定时 AI 任务（到点触发完整编排 + cron_tasks 工具 + 定时任务面板）
+  { id: 'cron-agent', config: 'cron-agent/vite.config.ts', dist: 'cron-agent/dist', order: 19 },
   { id: 'browser-lite', config: 'browser-lite/vite.config.ts', dist: 'browser-lite/dist', order: 18 },
   // Git 能力（cap.git 提供方，server 半边）+ Git 面板（消费方；requires 保证 core 先装配）
   { id: 'git-core', config: 'git-core/vite.config.ts', dist: 'git-core/dist', order: 23 },

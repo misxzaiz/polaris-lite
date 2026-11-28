@@ -72,6 +72,9 @@ const RAW_SERVER_PLUGINS = [
   // cookie-jar 会话 + 跟 302 + {{vault:id}} 服务端注入。面向商城外部插件（只有 UI
   // 半边、不能自带 server.mjs）访问无 CORS 上游/OAuth2 登录链的公共地基，非业务专属。
   { id: 'http-gateway', entry: './http-gateway/server.mjs' },
+  // cron-agent：定时 AI 任务（到点以独立会话调 /api/agent/start 触发完整编排；
+  // cron_tasks 工具 + /api/cron/* 面板接口；纯 server 半边，同 agent-runner 惯例）
+  { id: 'cron-agent', entry: './cron-agent/server.mjs' },
 ];
 
 /** 与前端清单共享 enabled：前端关掉的插件，server 半边也不挂载。
