@@ -65,7 +65,21 @@ function readArtifactToolNames(): Set<string> {
   return raw instanceof Set ? (raw as Set<string>) : new Set<string>();
 }
 
-/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；非空 text / interactive / notice / truncated 打断 */
+/**
+ * 归组打断谓词（六层保底第 4 层 · 单一口径，2026-11-28）：非空 text / interactive /
+ * notice / truncated 打断连续过程组；tool 归组、thinking 吸收、artifact 随组渲染不打断。
+ * 历史事故：identifyGroups 与渲染层 owner 各自手写打断口径 → 分叉 → 组序号漂移 →
+ * groups[漂移号] 越界读 items → 整页白屏（2026-11-22，含多次自动续写的长工具轮次
+ * 会话打开即崩）。单一谓词消除「两处口径」这个根因类；owner 守卫仍是最后兜底。
+ * 注意：artifact 归位回溯（下方）的「跨段停」故意只停非空 text——那是更窄的
+ * 「跨正文段」语义，与本谓词不同，勿混用。
+ */
+export function isGroupBreaker(b: AsstBlock): boolean {
+  if (b.type === 'text') return b.text.trim().length > 0;
+  return b.type === 'interactive' || b.type === 'notice' || b.type === 'truncated';
+}
+
+/** 识别连续过程块（tool + 夹在其间的 thinking）为一个组；打断口径全走 isGroupBreaker */
 function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[] }[] {
   const groups: { start: number; items: GroupItem[] }[] = [];
   let current: GroupItem[] = [];
@@ -89,15 +103,9 @@ function identifyGroups(blocks: AsstBlock[]): { start: number; items: GroupItem[
       if (current.length > 0) current.push({ kind: 'thinking', block: b });
       return;
     }
-    if (b.type === 'text' && b.text.trim().length > 0) flush();
-    // 交互卡同样是「用户行动点」：提问前后的工具属两段独立过程。若不打断分组，
-    // 交互卡会被压到整条消息所有工具之下（多张还会叠加），直到正文出现才归位。
-    if (b.type === 'interactive') flush();
-    // notice/truncated（自动续写/截断提示）独立渲染，同样打断分组——必须与下方
-    // renderBlocks 的 owner 口径完全一致：owner 把这两类当作打断，这里若仍并组，
-    // 组序号会相对 owner 永久漂移 +1，下次成组后 groups[漂移号] 越界读 items →
-    // 整页白屏（2026-11-22 事故：含多次自动续写的长工具轮次会话打开即崩）。
-    if (b.type === 'notice' || b.type === 'truncated') flush();
+    // 交互卡同样是「用户行动点」：提问前后的工具属两段独立过程（不打断会被压到
+    // 整条消息所有工具之下叠加）；notice/truncated（自动续写/截断提示）独立渲染。
+    if (isGroupBreaker(b)) flush();
   });
   flush();
   return groups;

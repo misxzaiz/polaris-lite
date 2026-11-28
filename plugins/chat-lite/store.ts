@@ -15,6 +15,7 @@ import type { Attachment } from './attachments';
 import { loadWorkspacePrefs } from './workspace-prefs';
 import { loadSessionDefaults } from './session-defaults';
 import { openLiveIfNeeded } from './liveOverlay';
+import { normalizeMessages } from './normalize';
 import {
   createSync, cacheGetAll, cachePutAll, cacheDelete, pullSession, pushSession, pushMessages, pushMeta, deleteSessionRemote,
   type SyncHandle, type SessionSnapshot, type SyncStatus, type ConflictInfo, type LoopRunState,
@@ -285,7 +286,8 @@ function applyServerSnapshot(snap: SessionSnapshot): void {
   if (!incoming || typeof incoming.id !== 'string') return;
   const clean = {
     ...incoming,
-    messages: (incoming.messages ?? []).map((m) => ({ ...m, streaming: false })),
+    // 摄入归一（六层保底第 2 层）：毒块/坏会话在进 store 前整形，不再直达渲染层
+    messages: normalizeMessages((incoming.messages ?? []).map((m) => ({ ...m, streaming: false }))),
   };
   versions[incoming.id] = snap.version;
   // 服务端已有消息回填「已推」表：这些不需要（也不能）再从本端推——
@@ -799,7 +801,7 @@ void (async () => {
   if (cached.length > 0) {
     const sessions = sortSessions(cached.map(e => ({
       ...e.session,
-      messages: (e.session.messages ?? []).map(m => ({ ...m, streaming: false })),
+      messages: normalizeMessages((e.session.messages ?? []).map(m => ({ ...m, streaming: false }))),
     })));
     for (const e of cached) versions[e.session.id] = e.version;
     // activeId 恢复（spec v0.2）：本机 UI 态键优先（刷新前正开着的会话）；
