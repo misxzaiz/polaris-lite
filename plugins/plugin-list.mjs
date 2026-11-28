@@ -85,6 +85,8 @@ export const PLUGIN_LIST = [
   { id: 'session-hud', config: 'session-hud/vite.config.ts', dist: 'session-hud/dist', order: 43 },
   // image-push：AI 推送电脑图片到对话（push_image 工具 + image 产物渲染器 + 缩放查看器）
   { id: 'image-push', config: 'image-push/vite.config.ts', dist: 'image-push/dist', order: 44 },
+  // media-push：AI 推送任意文件到对话（push_media 工具 + 八 kind 卡片 + 伪全屏 + 卡内交互）
+  { id: 'media-push', config: 'media-push/vite.config.ts', dist: 'media-push/dist', order: 45 },
 ].sort((a, b) => a.order - b.order);
 
 /** 是否启用（缺省 true）——server-registry 用它过滤 server 半边 */

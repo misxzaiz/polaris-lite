@@ -56,6 +56,8 @@ const RAW_SERVER_PLUGINS = [
   { id: 'voice-radio', entry: './voice-radio/server.mjs' },
   // image-push：AI 推送电脑图片（/api/img/* 落盘直出 + push_image 工具）
   { id: 'image-push', entry: './image-push/server.mjs' },
+  // media-push：AI 推送任意文件（/api/media/* 嗅探落盘直出切片 + push_media 工具）
+  { id: 'media-push', entry: './media-push/server.mjs' },
   // translate：百度翻译代理（签名 + 错误码中文化 + LRU 缓存；SecretKey 只在服务端）
   { id: 'translate', entry: './translate/server.mjs' },
   // pocket-ledger / starter-suggestions：无自有 HTTP 路由，仅注册各自的 AI 工具声明

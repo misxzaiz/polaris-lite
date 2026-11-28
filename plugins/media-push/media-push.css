@@ -1,0 +1,330 @@
+/* ===== media-push：对话内任意媒体卡（八 kind）+ 伪全屏（popover top layer） =====
+ * 门禁纪律（tests/arch.test.mjs + lintPluginCss）：不触碰宿主命名空间或全局根，
+ * 视口级铺满由 UA 对 [popover]:popover-open 的默认样式提供（fixed + inset 0），
+ * 作者源只写外观——同 image-push 查看器与 html-preview 全屏的同一结论。 */
+
+/* ---- 卡壳（对齐 image-push .ip-card 的卡片语言） ---- */
+.mp-card {
+  margin: 6px 0 2px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: rgba(127, 127, 127, 0.08);
+}
+.mp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+}
+.mp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.mp-title {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.mp-meta {
+  font-size: 10.5px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.mp-full-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mp-full-btn:hover { opacity: 1; border-color: currentColor; }
+.mp-body { padding: 10px; }
+.mp-missing {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 6px 0;
+}
+
+/* ---- image ---- */
+.mp-media img.mp-img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+
+/* ---- video / audio ---- */
+.mp-media video.mp-video {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  border-radius: 6px;
+  background: #000;
+}
+.mp-media audio { width: 100%; }
+
+/* ---- pdf ---- */
+.mp-pdf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+}
+.mp-pdf-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(192, 57, 47, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mp-pdf-info { flex: 1; min-width: 0; font-size: 12px; opacity: 0.75; }
+.mp-dl-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 7px;
+  background: rgba(29, 78, 216, 0.9);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.mp-dl-btn:hover { background: rgba(61, 108, 240, 0.95); }
+
+/* ---- text/code ---- */
+.mp-code {
+  background: rgba(127, 127, 127, 0.1);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.mp-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+  font-size: 10.5px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  opacity: 0.6;
+}
+.mp-code-copy {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.mp-code-copy:hover { opacity: 1; }
+.mp-code-body {
+  padding: 9px 11px;
+  font-size: 11px;
+  line-height: 1.65;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  white-space: pre;
+  overflow: auto;
+  max-height: 200px;
+  opacity: 0.85;
+}
+.mp-code-trunc {
+  padding: 5px 11px;
+  font-size: 10.5px;
+  opacity: 0.5;
+  border-top: 1px dashed rgba(127, 127, 127, 0.25);
+}
+
+/* ---- archive ---- */
+.mp-tree {
+  font-size: 11.5px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  line-height: 2;
+  opacity: 0.85;
+}
+.mp-tree-dir {
+  font-weight: 700;
+  cursor: pointer;
+}
+.mp-tree-dir:hover { text-decoration: underline; }
+.mp-tree-kids { padding-left: 16px; }
+.mp-tree-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mp-tree-row:hover { text-decoration: underline; }
+.mp-tree-sz { opacity: 0.5; font-size: 10px; flex-shrink: 0; }
+
+/* ---- sheet ---- */
+.mp-sheet-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.mp-stab {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  opacity: 0.65;
+}
+.mp-stab.on {
+  background: rgba(31, 122, 77, 0.85);
+  border-color: rgba(31, 122, 77, 0.85);
+  color: #fff;
+  font-weight: 600;
+  opacity: 1;
+}
+.mp-tbl-wrap { overflow: auto; max-height: 300px; }
+.mp-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.mp-tbl th {
+  text-align: left;
+  padding: 5px 8px;
+  background: rgba(127, 127, 127, 0.1);
+  font-weight: 600;
+  opacity: 0.7;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.mp-tbl th:hover { opacity: 1; }
+.mp-tbl td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.12);
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+.mp-tbl tr:hover td { background: rgba(127, 127, 127, 0.07); }
+.mp-tbl td.num { text-align: right; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; }
+.mp-sheet-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.65;
+  flex-wrap: wrap;
+}
+.mp-sheet-foot .gap { flex: 1; }
+.mp-filter {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  width: 120px;
+}
+.mp-filter:focus { outline: none; border-color: currentColor; }
+.mp-pgbtn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mp-pgbtn:hover:not(:disabled) { border-color: currentColor; }
+.mp-pgbtn:disabled { opacity: 0.3; cursor: default; }
+.mp-pginfo {
+  font-size: 10.5px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  min-width: 60px;
+  text-align: center;
+}
+.mp-err {
+  font-size: 11.5px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(192, 57, 47, 0.09);
+  color: rgba(192, 57, 47, 0.9);
+}
+
+/* ---- 伪全屏（popover top layer） ----
+ * 覆盖 UA 默认框样式（margin:auto + fit-content → 居中小方块坑，image-push 实测）；
+ * display:none 闭态 + :popover-open 显态，卡片主视图 DOM 搬运进来（状态保留）。 */
+.mp-fs {
+  display: none;
+  background: rgba(10, 10, 12, 0.97);
+}
+.mp-fs:popover-open {
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+.mp-fs-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  flex-shrink: 0;
+}
+.mp-fs-bar .mp-title { color: #fff; opacity: 0.9; }
+.mp-fs-bar .mp-meta { color: #fff; opacity: 0.5; }
+.mp-fs-stage {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px;
+}
+.mp-fs-close {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mp-fs-close:hover { background: rgba(255, 255, 255, 0.24); }
+/* 全屏态内的暗色适配：卡片内容默认跟宿主题走，全屏底是暗的，局部提亮 */
+.mp-fs-stage .mp-card, .mp-fs-stage .mp-code, .mp-fs-stage .mp-tbl th, .mp-fs-stage .mp-tbl td, .mp-fs-stage .mp-tree, .mp-fs-stage .mp-pdf-info, .mp-fs-stage .mp-sheet-foot, .mp-fs-stage .mp-code-trunc { color: #e6e9f0; border-color: rgba(255, 255, 255, 0.15); }
+.mp-fs-stage .mp-tbl tr:hover td { background: rgba(255, 255, 255, 0.06); }
+.mp-fs-stage .mp-filter, .mp-fs-stage .mp-pgbtn, .mp-fs-stage .mp-stab { color: #e6e9f0; border-color: rgba(255, 255, 255, 0.25); background: transparent; }
+.mp-fs-stage video, .mp-fs-stage img { max-height: none; }

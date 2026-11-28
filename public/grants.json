@@ -470,6 +470,11 @@
       "capabilities": [],
       "provides": [],
       "events": []
+    },
+    "media-push": {
+      "capabilities": [],
+      "provides": [],
+      "events": []
     }
   }
 }
