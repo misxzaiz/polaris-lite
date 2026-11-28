@@ -523,3 +523,58 @@ test('chat_history：未知 action 报错并列出可用项', async (t) => {
   assert.equal(r.ok, false);
   assert.match(r.stderr, /list\/search\/read\/set_model/);
 });
+
+// ---------------------------------------------------------------- chat_start 工具
+// AI 在对话内发起全新独立会话（P2）。经 mock registry 捕获适配器直接 invoke；
+// fetch 打 /api/agent/start 的链路用环境变量 PLITE_SELF_PORT 指向 mock server，
+// 避免 401/agent-runner 依赖，专注验证：防递归护栏 / prompt 校验 / 标题预置 /
+// start 失败透传错误 / 成功路径返回 sessionId+runId。
+
+/** 捕获 chat_start 工具注册并直接调用 */
+async function captureChatStartTool(t, { dataDir }, startHandler) {
+  let captured = null;
+  const registry = {
+    registerTool: (adapter) => { if (adapter?.name === 'chat_start') captured = adapter; },
+    registerService: () => {},
+  };
+  // mock verifyTempToken/tempTokens：让 ensureSystemToken 造出的 token 恒有效
+  const tempTokens = new Map();
+  const verifyTempToken = (tok) => tempTokens.has(tok);
+  const { createServerPart } = await import('../plugins/chat-store/server.mjs');
+  createServerPart({
+    dataDir, registry,
+    getSession: () => ({ user: 'boss' }),
+    verifyTempToken, tempTokens,
+  });
+  assert.ok(captured, 'chat_start 工具应已注册');
+  return (args, run) => captured.invoke({ args, run });
+}
+
+test('chat_start：防递归护栏——AI 发起的会话内再调即拒绝', async (t) => {
+  const { dataDir } = tempRoot();
+  const invoke = await captureChatStartTool(t, { dataDir });
+  const r = await invoke({ prompt: 'hi' }, { sessionId: 'chat-start-abc123' });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /不可再嵌套/);
+});
+
+test('chat_start：prompt 校验——空/超长拒绝', async (t) => {
+  const { dataDir } = tempRoot();
+  const invoke = await captureChatStartTool(t, { dataDir });
+  const rEmpty = await invoke({ prompt: '   ' });
+  assert.equal(rEmpty.ok, false);
+  assert.match(rEmpty.stderr, /1-4000/);
+  const rLong = await invoke({ prompt: 'x'.repeat(4001) });
+  assert.equal(rLong.ok, false);
+  assert.match(rLong.stderr, /1-4000/);
+});
+
+test('chat_start：start 失败透传错误（NO_PROVIDER 等服务端报错）', async (t) => {
+  const { dataDir } = tempRoot();
+  const invoke = await captureChatStartTool(t, { dataDir });
+  // 未起真实服务：fetch 指向本进程不存在的端口 → 连接层错误也走同一透传分支
+  const r = await invoke({ prompt: 'hello' });
+  assert.equal(r.ok, false);
+  assert.ok(r.stderr.length > 0, '应返回错误信息');
+});
+

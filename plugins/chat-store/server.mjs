@@ -40,7 +40,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 
 const MAX_SESSION_BYTES = 4 * 1024 * 1024; // 单会话 4MB（附件 base64 大图可能到 MB 级）
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -417,6 +417,137 @@ export function createServerPart(options = {}) {
             return { ok: true, stdout: JSON.stringify({ ok: true, sessionId: sid, ...applied, note: '下一轮对话生效' }), stderr: '' };
           }
           return { ok: false, stdout: '', stderr: `unknown action: ${action}（可用：list/search/read/set_model）` };
+        } catch (e) {
+          return { ok: false, stdout: '', stderr: String(e?.message ?? e) };
+        }
+      },
+    });
+  }
+  // ------------------------------------------------------------------
+  // chat_start 工具（AI 可用）：AI 在对话内发起一个全新独立会话
+  // ------------------------------------------------------------------
+  // P2（docs/chat-history-tool-plan.md）：内部即 POST /api/agent/start，
+  // 新 sessionId + modelRef 透传，run/审批/工具/推送全套走 runner 既有编排。
+  // 防递归护栏：invoke 上下文带 run（发起方 run）——若发起方自身已是 AI run
+  //（其 sessionId 以 'chat-start-' 前缀标记），拒绝再套娃（深度恒为 1）。
+  if (options.registry?.registerTool) {
+    const selfPort = Number(process.env.PORT ?? 5000);
+    const verifyTempToken = options.verifyTempToken;
+    const tempTokens = options.tempTokens;
+    let systemToken = null;
+    /** 系统级临时凭证（同 cron-agent/agent-runner ensureSystemToken 模式） */
+    function ensureSystemToken() {
+      try {
+        if (systemToken && verifyTempToken?.(systemToken)) return systemToken;
+        const ownerName = (() => {
+          try {
+            const { resolve: rsv, existsSync: ex, readFileSync: rf } = globalThis.__pliteNodeFs;
+            if (ex && rf) {
+              const f = rsv(dataDir, 'auth-owner.json');
+              if (ex(f)) return String(JSON.parse(rf(f, 'utf8')).username ?? 'root');
+            }
+          } catch { /* */ }
+          return 'root';
+        })();
+        const token = randomBytes(24).toString('hex');
+        tempTokens?.set?.(token, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, owner: ownerName });
+        systemToken = token;
+        return token;
+      } catch { return null; }
+    }
+    let cookieSession = null; // { cookie, expiresAt }
+    async function obtainSessionCookie(token) {
+      if (!token) return null;
+      if (cookieSession && cookieSession.expiresAt > Date.now() + 60_000) return cookieSession;
+      const resp = await fetch(`http://127.0.0.1:${selfPort}/api/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}', signal: AbortSignal.timeout(10_000),
+      });
+      const setCookie = resp.headers.get('set-cookie');
+      if (!resp.ok || !setCookie) return null;
+      const sid = /plite\.sid=([^;]+)/.exec(setCookie)?.[1];
+      if (!sid) return null;
+      cookieSession = { cookie: `plite.sid=${sid}`, expiresAt: Date.now() + 60 * 60 * 1000 };
+      return cookieSession;
+    }
+
+    options.registry.registerTool({
+      name: 'chat_start',
+      // 发起一个新会话即产生真实 AI 消耗，保留审批（用户确认成本合理）
+      noApproval: false,
+      descriptor: {
+        type: 'function',
+        function: {
+          name: 'chat_start',
+          description:
+            '以指定模型发起一个全新的独立 AI 对话（新会话，不接续当前上下文）。prompt 为首轮用户消息（1-4000 字），' +
+            'modelRef 可选 {engineId?, providerId?, modelId?, option?}（留空跟随默认引擎/模型）。' +
+            '返回新会话的 sessionId 与 runId，结果由 runner 落会话档，用户可在侧栏打开查看。' +
+            '防套娃：由 AI 工具发起的会话内不可再调本工具。',
+          parameters: {
+            type: 'object',
+            properties: {
+              prompt: { type: 'string', description: '新会话的首轮用户消息（必填，1-4000 字）' },
+              modelRef: { type: 'object', description: '模型选择 {engineId?, providerId?, modelId?, option?}（可选）' },
+              title: { type: 'string', description: '新会话标题（可选，缺省由首条消息生成）' },
+            },
+            required: ['prompt'],
+          },
+        },
+      },
+      invoke: async ({ args, run }) => {
+        if (hardOff) return { ok: false, stdout: '', stderr: 'chat-store 已被 PLITE_CHAT_STORE=0 禁用' };
+        try {
+          // 防递归：当前 run 若本身就是 chat_start 发起的会话（sessionId 前缀标记），拒绝
+          const originSessionId = String(run?.sessionId ?? '');
+          if (originSessionId.startsWith('chat-start-')) {
+            return { ok: false, stdout: '', stderr: '拒绝：本会话由 AI 工具发起，不可再嵌套 chat_start（防无限套娃）' };
+          }
+          const prompt = String(args?.prompt ?? '').trim();
+          if (!prompt || prompt.length > 4000) return { ok: false, stdout: '', stderr: 'prompt 需 1-4000 字' };
+          const modelRef = (args?.modelRef && typeof args.modelRef === 'object' && !Array.isArray(args.modelRef)) ? args.modelRef : {};
+          const cleanRef = {};
+          for (const k of ['engineId', 'providerId', 'modelId', 'option']) {
+            if (modelRef[k] !== undefined) cleanRef[k] = modelRef[k];
+          }
+          const sessionId = `chat-start-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+          // 标题预置（首条消息落档后 chat-store 会用其生成标题；显式传入则直接写档）
+          if (args?.title && typeof args.title === 'string' && args.title.trim()) {
+            try {
+              await lock(sessionId, () => {
+                writeRecord(sessionId, { version: 1, updatedAt: Date.now(), session: { id: sessionId, title: String(args.title).trim().slice(0, 80), createdAt: Date.now(), messages: [] } });
+                return null;
+              });
+              notifyIndex(sessionId);
+            } catch { /* 标题写失败不阻断发起 */ }
+          }
+          const token = ensureSystemToken();
+          const sess = await obtainSessionCookie(token);
+          const headers = { 'Content-Type': 'application/json' };
+          if (sess) headers.Cookie = sess.cookie;
+          const payload = {
+            sessionId,
+            messageId: `m-cs-${Date.now().toString(36)}`,
+            prompt,
+            device: 'chat_start（AI 发起）',
+            ...cleanRef,
+          };
+          const resp = await fetch(`http://127.0.0.1:${selfPort}/api/agent/start`, {
+            method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000),
+          });
+          const text = await resp.text().catch(() => '');
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch { /* */ }
+          if (!resp.ok) {
+            const errText = json?.error ?? (text.slice(0, 200) || 'unknown');
+            return { ok: false, stdout: '', stderr: `start 失败(${resp.status}): ${errText}` };
+          }
+          audit({ op: 'chat-start', sessionId, originSessionId, modelRef: cleanRef, runId: json?.runId ?? null });
+          return {
+            ok: true,
+            stdout: JSON.stringify({ ok: true, sessionId, runId: json?.runId ?? null, note: '新会话已发起，runner 正在执行，结果落会话档，用户可在侧栏打开' }),
+            stderr: '',
+          };
         } catch (e) {
           return { ok: false, stdout: '', stderr: String(e?.message ?? e) };
         }
