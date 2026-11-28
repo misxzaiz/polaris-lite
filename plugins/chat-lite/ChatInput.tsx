@@ -12,7 +12,6 @@
  */
 import { useState, useLayoutEffect, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import type { AiEngineInfo } from '@sdk';
 import { sendUserMessage, interruptChat, enqueuePending, clearPending, sendPendingNow, editPending, removePendingItem, onCompose } from './index';
 import { useSessionStore } from './store';
 import {
@@ -24,12 +23,9 @@ import { SwipeIndicator } from './SwipeIndicator';
 import { PaperclipIcon, SendIcon, StopIcon, QueueIcon, PlusIcon } from './icons';
 import { SessionSettingsPanel } from './SessionSettingsPanel';
 import { WorkspacePickerBody } from './WorkspacePickerBody';
-import { onRootsChanged } from './workspace-prefs';
-import { loadSessionDefaults, saveSessionDefaults, clearSessionDefaults } from './session-defaults';
-import { getEngines, loadEngines } from './engineCatalog';
+import { useTrustMode, useEnginesList, useSessionSettingsCore } from './settingsModel';
 import { ContextMeter } from './ContextMeter';
 import './chat-input.css';
-import { SRV } from './serverApi';
 
 const MAX_CHARS = 200_000;
 // 增高的 min/max 不再在 JS 里硬编码：直接读 textarea 的计算样式（CSS 里用 dvh 做视口自适应，
@@ -80,28 +76,8 @@ function saveDraft(sessionId: string, text: string): void {
 }
 
 export function ChatInput() {
-  // 信任模式徽标（完全信任 = yolo；数据源服务端配置，切换即改服务端裁决模式）
-  const [trustMode, setTrustMode] = useState<boolean | null>(null);
-  const refreshTrust = useCallback(async () => {
-    try {
-      const r = await fetch(`${SRV.tool}/config`, { credentials: 'include' });
-      if (!r.ok) { setTrustMode(null); return; }
-      const j = (await r.json()) as { mode?: string };
-      setTrustMode(j.mode === 'yolo');
-    } catch { setTrustMode(null); }
-  }, []);
-  const toggleTrust = useCallback(async () => {
-    try {
-      const r = await fetch(`${SRV.tool}/config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ mode: trustMode ? 'confirm' : 'yolo' }),
-      });
-      if (r.ok) setTrustMode(((await r.json()) as { mode?: string }).mode === 'yolo');
-    } catch { /* 配置不可达：保持原态 */ }
-  }, [trustMode]);
-  useEffect(() => { void refreshTrust(); }, [refreshTrust]);
+  // 信任模式徽标（完全信任 = yolo）：数据层在 settingsModel（右栏「设置」面板同源）
+  const { trustMode, trustTitle, trustLabel, toggleTrust, refreshTrust } = useTrustMode();
 
   const [text, setText] = useState('');
   const [tooLong, setTooLong] = useState(false);
@@ -124,72 +100,21 @@ export function ChatInput() {
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interruptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const activeId = useSessionStore((s) => s.activeId);
   const streaming = useSessionStore((s) =>
     s.sessions.find((x) => x.id === s.activeId)?.messages.some((m) => m.streaming),
   );
-  const queueItems = useSessionStore((s) => (s.activeId ? (s.pending[s.activeId] ?? []) : []));
-  const queueLen = queueItems.length;
-  /** 当前会话绑定的工作区（file-browser 登记的根；null=跟随全局默认） */
-  const sessionWorkspaceId = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.workspaceId ?? null);
-  /** 关联只读目录（可读不可写，命令仍在主目录执行） */
-  const sessionLinkedIds = useSessionStore(
-    (s) => s.sessions.find((x) => x.id === s.activeId)?.linkedWorkspaceIds ?? [],
-  );
-  /** 会话级模型引用（引擎 / 供应商 / 模型 / 自带变体统一一组 id） */
-  const sessionModelRef = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId)?.modelRef);
-  const sessionProviderId = sessionModelRef?.providerId;
-  const sessionModelId = sessionModelRef?.modelId;
-  const sessionEngineId = sessionModelRef?.engineId;
-  const sessionOption = sessionModelRef?.option;
-  const setSessionModelRef = useSessionStore((s) => s.setSessionModelRef);
-  /** 新会话默认配置（会话设置面板「记住当前配置」写入；createSession 读取注入） */
-  const [sessionDefaults, setSessionDefaults] = useState(() => loadSessionDefaults());
-  const defaultRef = sessionDefaults.modelRef;
-  const hasAnyDefault = !!defaultRef && Object.keys(defaultRef).length > 0;
-  const defaultsActive = !!activeId && !!defaultRef
-    && defaultRef.engineId === sessionEngineId
-    && defaultRef.providerId === sessionProviderId
-    && defaultRef.modelId === sessionModelId
-    && defaultRef.option === sessionOption;
-  /** 切换「记住当前配置」：已生效则取消（回跟随全局），否则把当前 modelRef 快照写入偏好 */
-  const toggleSessionDefaults = useCallback(() => {
-    const cur = loadSessionDefaults();
-    const cr = cur.modelRef ?? {};
-    const same = !!activeId
-      && cr.engineId === sessionEngineId
-      && cr.providerId === sessionProviderId
-      && cr.modelId === sessionModelId
-      && cr.option === sessionOption;
-    const next = same
-      ? clearSessionDefaults()
-      : saveSessionDefaults({ modelRef: {
-          ...(sessionEngineId ? { engineId: sessionEngineId } : {}),
-          ...(sessionProviderId ? { providerId: sessionProviderId } : {}),
-          ...(sessionModelId ? { modelId: sessionModelId } : {}),
-          ...(sessionOption ? { option: sessionOption } : {}),
-        } });
-    setSessionDefaults(next);
-  }, [activeId, sessionEngineId, sessionProviderId, sessionModelId, sessionOption]);
+  // ---- 会话设置核心数据（settingsModel 单一出处）：activeId/标题/模型引用/新会话默认/
+  //      工作区绑定与显示名/待发队列。右栏「设置」面板消费同一出处，防两份实现漂移。 ----
+  const {
+    activeId, sessionTitle,
+    sessionEngineId, sessionProviderId, sessionModelId, sessionOption, setSessionModelRef,
+    defaultsActive, hasAnyDefault, toggleSessionDefaults,
+    sessionWorkspaceId, wsLabel, wsMissing, sessionLinkedIds,
+    setSessionWorkspace, setSessionLinkedWorkspaces, createSession,
+    queueItems, queueLen,
+  } = useSessionSettingsCore();
   /** 引擎目录：只来自 cap.ai.engine（插件声明）。面板打开时刷新一次，新增引擎无需改这里。 */
-  const [engines, setEngines] = useState<AiEngineInfo[]>(() => getEngines());
-  useEffect(() => {
-    void loadEngines().then(setEngines);
-  }, [assistantOpen]);
-  /** 会话标题（会话设置面板头部展示）：未设置（「新会话」）时回退用户第一句，与侧栏 displayTitle 同口径 */
-  const sessionTitle = useSessionStore((s) => {
-    const cur = s.sessions.find((x) => x.id === s.activeId);
-    if (!cur) return '会话设置';
-    return cur.title !== '新会话' ? cur.title : (cur.messages[0]?.content?.slice(0, 18) ?? '新会话');
-  });
-  const setSessionWorkspace = useSessionStore((s) => s.setSessionWorkspace);
-  const setSessionLinkedWorkspaces = useSessionStore((s) => s.setSessionLinkedWorkspaces);
-  const createSession = useSessionStore((s) => s.createSession);
-  /** 工作区显示名（file-browser 维护 names/labels；经全局事件桥同步） */
-  const [wsLabel, setWsLabel] = useState<string | null>(null);
-  /** 绑定失效（root 被移除/盘符不在）：必须显性提示，不能装作正常 */
-  const [wsMissing, setWsMissing] = useState(false);
-  const [wsRev, setWsRev] = useState(0);
+  const engines = useEnginesList(assistantOpen);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !tooLong;
 
@@ -247,28 +172,6 @@ export function ChatInput() {
     document.addEventListener('pointerdown', onDown, true);
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [pickerOpen]);
-
-  // 根表变化（登记/改名/删除）时重取名称：file-browser 广播 → index.ts 转成 roots 变更
-  useEffect(() => onRootsChanged(() => setWsRev((v) => v + 1)), []);
-
-  // 会话工作区显示名：解析当前绑定
-  useEffect(() => {
-    if (!sessionWorkspaceId) { setWsLabel(null); setWsMissing(false); return; }
-    let alive = true;
-    void (async () => {
-      try {
-        const r = await fetch(`${SRV.fs}/roots`, { credentials: 'include' });
-        const j = (await r.json()) as { roots?: { id: string; label: string }[] };
-        const match = j.roots?.find((x) => x.id === sessionWorkspaceId);
-        if (!alive) return;
-        setWsLabel(match?.label ?? sessionWorkspaceId);
-        setWsMissing(!match);
-      } catch {
-        if (alive) { setWsLabel(sessionWorkspaceId); setWsMissing(false); }
-      }
-    })();
-    return () => { alive = false; };
-  }, [sessionWorkspaceId, wsRev]);
 
   /** 附件统一入口：校验（单件 + 整批）→ 转 Attachment */
   const addFiles = useCallback(async (files: File[]) => {
@@ -562,10 +465,6 @@ export function ChatInput() {
   const placeholder = streaming
     ? '回复生成中，可继续输入并排入队列…'
     : '向 Polaris 提问，或记录一个想法…';
-  const trustTitle = trustMode
-    ? '信任模式：AI 可直接执行命令（点击关闭）'
-    : '审批模式：命令需确认（点击开启信任）';
-  const trustLabel = trustMode ? '信任模式' : '审批模式';
 
   return (
     <div

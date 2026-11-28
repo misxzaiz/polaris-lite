@@ -17,6 +17,7 @@ import type { Attachment } from './attachments';
 import { SessionSidebar } from './SessionSidebar';
 import { MessageStream } from './MessageStream';
 import { ChatInput } from './ChatInput';
+import { ChatSettingsPanel } from './ChatSettingsPanel';
 import { notifyRootsChanged } from './workspace-prefs';
 import { setRunnerGlobalConsumer, startRunnerRun, resolveRunnerApproval, interruptRunnerRun, restoreRunnerRuns, probeRunner, resumeRunnerRun, setRunnerRestoreHandler, findRunningRun } from './runnerBridge';
 import { createLiveTurn, attachRunnerLive } from './liveTurn';
@@ -141,6 +142,9 @@ export const chatLitePlugin: LitePlugin = {
         { slot: 'sidebar', component: 'SessionSidebar', order: 1 },
         { slot: 'stream', component: 'MessageStream', order: 1 },
         { slot: 'input', component: 'ChatInput', order: 1 },
+        // 右栏「设置」面板：会话设置的全量视图 + 展示分区编辑器本体（浮层是快捷入口，
+        // 分区显隐可配置；被隐藏的功能在这里永远找得回来）。order 35 紧挨通知(34)。
+        { slot: 'panel', component: 'ChatSettingsPanel', order: 35, title: '设置' },
       ],
     },
   },
@@ -776,6 +780,6 @@ export function clearPending(): void {
   if (st.activeId) st.clearPending(st.activeId);
 }
 
-export const chatComponents = { SessionSidebar, MessageStream, ChatInput };
+export const chatComponents = { SessionSidebar, MessageStream, ChatInput, ChatSettingsPanel };
 
 export default chatLitePlugin;

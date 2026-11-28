@@ -18,6 +18,7 @@ import { type PendingSend } from './store';
 import { ShareDrawerRows } from './ShareDrawer';
 import { ChevronRightIcon } from './icons';
 import { SRV } from './serverApi';
+import { onPrefsChanged, readPanelHeight, readSectionPrefs, writePanelHeight, type SettingsSectionPrefs } from './settingsPrefs';
 
 // ---- 抽屉状态桥（与 workspace-layout/stateBridge 同纪律，chat-lite 就地轻量实现）----
 // 通道名经 @sdk 登记；防环纪律：监听方只同步本地订阅者，**不得**再派发。
@@ -78,7 +79,8 @@ interface PopupPos { left: number; width: number; bottom: number; maxHeight: num
  * HTTP 出处纪律）。开关语义：关闭=停用注入与写入、记忆保留不清空（文案明示，防
  * 「我关了它怎么还记得」的惊吓时刻）。服务不可达（插件未装/禁用）时整分区隐藏
  * ——「插件被禁用 → 端点消失」是 P0-4 的兜底语义，不算 bug。 */
-function MemoryRows(): JSX.Element | null {
+/** 长期记忆分区（右栏「设置」面板复用同一实现，导出防漂移） */
+export function MemoryRows(): JSX.Element | null {
   const [info, setInfo] = useState<{ enabled: boolean; count: number } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -144,7 +146,8 @@ interface GuardrailCfg {
   defaults: { maxTurns: number; maxToolCalls: number };
 }
 
-function GuardrailRows(): JSX.Element | null {
+/** 循环护栏分区（右栏「设置」面板复用同一实现，导出防漂移） */
+export function GuardrailRows(): JSX.Element | null {
   const [cfg, setCfg] = useState<GuardrailCfg | null>(null);
   const [busy, setBusy] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -352,6 +355,39 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
   const [modelPos, setModelPos] = useState<PopupPos | null>(null);
   const modelPopRef = useRef<HTMLDivElement>(null);
 
+  // ---- 展示分区偏好：浮层按配置过滤分区；编辑器在右栏「设置」面板（全量视图），
+  //      隐藏的分区永远找得回来。变更经 settingsPrefs 广播即时同步。 ----
+  const [sectionPrefs, setSectionPrefs] = useState<SettingsSectionPrefs>(() => readSectionPrefs());
+  useEffect(() => onPrefsChanged(() => setSectionPrefs(readSectionPrefs())), []);
+
+  // ---- 浮层高度：拖顶边把手调整，localStorage 持久化（null=自适应现状）。
+  //      拖动以「起始高度 + 纵向位移」计算，上限=输入条顶部可用空间，下限 240px。 ----
+  const [heightPx, setHeightPx] = useState<number | null>(() => readPanelHeight());
+  const heightDragRef = useRef<{ startY: number; startH: number; maxH: number } | null>(null);
+  const onGripDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const bar = barRef.current?.getBoundingClientRect();
+    if (!bar) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    heightDragRef.current = { startY: e.clientY, startH: popRef.current?.offsetHeight ?? 320, maxH: Math.max(240, bar.top - 8) };
+  };
+  const onGripMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const d = heightDragRef.current;
+    if (!d) return;
+    setHeightPx(Math.max(240, Math.min(d.maxH, d.startH + (d.startY - e.clientY))));
+  };
+  const onGripEnd = (): void => {
+    if (!heightDragRef.current) return;
+    heightDragRef.current = null;
+    setHeightPx((h) => { writePanelHeight(h); return h; });
+  };
+  /** 双击把手恢复自适应（清掉固定高度偏好） */
+  const onGripReset = (): void => {
+    heightDragRef.current = null;
+    setHeightPx(null);
+    writePanelHeight(null);
+  };
+
   // ---- 面板定位：贴住输入条上方（挂载即定位 + 视口变化跟随）----
   useEffect(() => {
     const update = () => {
@@ -491,14 +527,32 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
 
   return createPortal(
     <>
-      {/* 面板本体：chat-ws-pop 同款卡片（absolute + body 定位） */}
+      {/* 面板本体：chat-ws-pop 同款卡片（absolute + body 定位）。
+          高度：拖过把手后为固定 px（clamp 到可用空间），否则维持自适应 maxHeight。 */}
       <div
         ref={popRef}
         className="chat-ws-pop chat-settings-pop"
         role="dialog"
         aria-label="会话设置"
-        style={{ left: panelPos.left, bottom: panelPos.bottom, width: panelPos.width, maxHeight: panelPos.maxHeight }}
+        style={{
+          left: panelPos.left, bottom: panelPos.bottom, width: panelPos.width, maxHeight: panelPos.maxHeight,
+          ...(heightPx !== null ? { height: Math.min(heightPx, panelPos.maxHeight) } : {}),
+        }}
       >
+        {/* 顶边拖拽把手：拖动调整面板高度；双击恢复自适应 */}
+        <div
+          className="chat-settings-grip"
+          onPointerDown={onGripDown}
+          onPointerMove={onGripMove}
+          onPointerUp={onGripEnd}
+          onPointerCancel={onGripEnd}
+          onDoubleClick={onGripReset}
+          role="separator"
+          aria-label="调整面板高度"
+          title="拖动调整面板高度；双击恢复自适应"
+        >
+          <span className="chat-settings-grip-pill" aria-hidden="true" />
+        </div>
         <div className="chat-picker-head chat-settings-head">
           <span className="chat-picker-title">会话设置</span>
           {/* 会话标题展示：未设置（「新会话」）时回退用户第一句（SessionSidebar displayTitle 同款口径） */}
@@ -538,7 +592,8 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
           <button className="chat-picker-done" onClick={onDone}>完成</button>
         </div>
         <div className="chat-settings-body">
-          {/* ===== 模型（会话级覆盖）===== */}
+          {/* ===== 模型（会话级覆盖）—— 分区显隐经 settingsPrefs 配置 ===== */}
+          {sectionPrefs.model && (<>
           <div className="chat-assistant-sec">模型</div>
           {/* AI 引擎行：列表来自 cap.ai.engine（各引擎插件的 manifest 声明），
               chat-lite 不认识任何具体引擎 id；默认引擎即「跟随全局」。 */}
@@ -632,8 +687,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               {defaultsActive ? '新会话沿用' : hasAnyDefault ? '另有默认' : '跟随全局'}
             </span>
           </button>
+          </>)}
 
           {/* ===== 执行：工作目录（打开现有选择浮层，浮层不自动关）+ 执行模式 ===== */}
+          {sectionPrefs.execute && (<>
           <div className="chat-assistant-sec">执行</div>
           <button
             className="chat-assistant-row chat-row-btn"
@@ -664,12 +721,16 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
           )}
           {/* 循环护栏（agent-runner runLoop 上限配置；服务不可达时整分区隐藏） */}
           <GuardrailRows />
+          </>)}
 
           {/* ===== 长期记忆：全局开关（long-memory 插件 HTTP；不可达=分区隐藏）===== */}
+          {sectionPrefs.memory && (<>
           <div className="chat-assistant-sec">记忆</div>
           <MemoryRows />
+          </>)}
 
           {/* ===== 待发队列 ===== */}
+          {sectionPrefs.queue && (<>
           <div className="chat-assistant-sec">待发队列</div>
           {queueLen === 0 ? (
             <div className="chat-assistant-row">
@@ -695,8 +756,10 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               ))}
             </div>
           )}
+          </>)}
 
           {/* ===== 消息通知：通知中心入口行（面板直达：点开右栏并停到「通知」Tab）===== */}
+          {sectionPrefs.notify && (<>
           <div className="chat-assistant-sec">通知</div>
           <button
             className="chat-assistant-row chat-row-btn chat-notify-row"
@@ -714,11 +777,27 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
             <span className="chat-notif-sum">{notifUnread > 0 ? `${notifUnread} 条未读` : '无未读'}</span>
             <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
           </button>
+          </>)}
 
           {/* ===== 分享（needs #069 v3）：网页链接（token+有效期）+ 本地导出（个人版 md / AI 分析版）。
               同源 HTTP 直连 transcript-share server 半边，无跨插件 cap 授权面。 ===== */}
+          {sectionPrefs.share && (<>
           <div className="chat-assistant-sec">分享</div>
           <ShareDrawerRows />
+          </>)}
+
+          {/* ===== 展示分区：编辑器在右栏「设置」面板（全量视图），这里只做深链入口。
+              无论隐藏了哪些分区，这条永远可见——保证配置永远可逆。 ===== */}
+          <button
+            className="chat-assistant-row chat-row-btn"
+            onClick={() => { openPanelDirect('设置'); onDone(); }}
+            title="配置会话设置展示哪些分区（在右侧设置面板中编辑）"
+          >
+            <span className="chat-assistant-key">展示分区</span>
+            <span className="chat-ws-chip">自定义…</span>
+            <span className="chat-row-aux">右侧面板</span>
+            <span className="chat-assistant-go" aria-hidden="true"><ChevronRightIcon /></span>
+          </button>
         </div>
       </div>
 

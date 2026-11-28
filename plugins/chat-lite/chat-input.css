@@ -824,3 +824,57 @@
 .chat-share-revoke { border: none; background: transparent; color: var(--plite-danger); font-size: 10px; padding: 0 2px; cursor: pointer; }
 .chat-share-note { font-size: 10.5px; }
 
+
+/* ===== 会话设置浮层：顶边拖拽把手（拖动调高；双击恢复自适应） ===== */
+.chat-settings-grip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.chat-settings-grip-pill {
+  width: 44px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background var(--plite-dur) var(--plite-ease);
+}
+.chat-settings-grip:hover .chat-settings-grip-pill,
+.chat-settings-grip:active .chat-settings-grip-pill { background: var(--accent); }
+
+/* ===== 右栏「设置」面板（ChatSettingsPanel）：全量视图 + 展示分区编辑器 ===== */
+.chat-setpage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 16px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+.chat-setpage-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 0 8px; }
+.chat-setpage-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 0 0 auto; }
+.chat-setpage-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 行内展开清单（替代浮层的锚定弹层：右栏无输入条锚点，行内展开触达更好） */
+.chat-setpage-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 2px 0 4px;
+  overflow: hidden;
+}
+.chat-setpage-list .chat-model-row { padding: 8px 12px; }
+.chat-setpage-ws { padding: 6px; }
+.chat-setpage-hint { font-size: 10.5px; color: var(--text-dim); padding: 4px 2px 6px; line-height: 1.5; }
