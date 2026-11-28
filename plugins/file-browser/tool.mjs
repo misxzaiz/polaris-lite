@@ -33,14 +33,18 @@ export function registerGrepTool(registry) {
       },
     },
     async invoke({ args, run, signal, host }) {
-      // 根解析：显式 rootId > 会话绑定根 > 登记表第一个非内建根（与 git 工具同链）
-      let rootId = args.rootId ?? run?.boundRootId ?? '';
+      // 根解析：显式 rootId > 会话绑定根（须为非内建登记根）> 登记表第一个非内建根
+      // > 绑定根兜底（与 git 工具同链）。默认会话绑定的是内建 workspace（基本为空），
+      // 直接拿它检索只会「扫描 1 个文件、无命中」逼模型换根重试（真机 E2E 实测）。
+      let rootId = args.rootId ?? '';
       if (!rootId) {
+        const bound = run?.boundRootId ?? '';
         try {
           const rr = await host.get('/api/fs/roots', signal);
           const roots = rr.json?.roots ?? [];
-          rootId = (roots.find((x) => !x.builtin) ?? roots[0])?.id ?? '';
-        } catch { /* 无根时走下面的报错 */ }
+          const nonBuiltin = roots.filter((x) => !x.builtin);
+          rootId = (bound && nonBuiltin.some((x) => x.id === bound)) ? bound : (nonBuiltin[0]?.id ?? bound);
+        } catch { rootId = bound; }
       }
       if (!rootId) return { ok: false, stdout: '', stderr: 'rootId required（无会话绑定根且无登记根）' };
       const r = await host.callEndpoint('/api/fs/grep', {

@@ -104,6 +104,32 @@ test('git tool: 根回退链——无绑定根时取登记表第一个非内建�
   assert.equal(gotRootId, 'r-repo');
 });
 
+test('git tool: 根回退链——绑定根是内建 workspace 时跳过，用第一个非内建根（真机 E2E 教训）', async () => {
+  const reg = mockRegistry();
+  registerGitTool(reg);
+  let gotRootId = '';
+  const host = mockHost(
+    async (p, body) => { gotRootId = body.rootId; return { ok: true, result: [] }; },
+    () => ({ roots: [{ id: 'r-builtin', builtin: true }, { id: 'r-repo', builtin: false }] }),
+  );
+  const r = await reg.adapters[0].invoke({ args: { action: 'branches' }, run: { boundRootId: 'r-builtin' }, host });
+  assert.equal(r.ok, true);
+  assert.equal(gotRootId, 'r-repo');
+});
+
+test('git tool: 根回退链——绑定根是非内建登记根时优先用绑定根', async () => {
+  const reg = mockRegistry();
+  registerGitTool(reg);
+  let gotRootId = '';
+  const host = mockHost(
+    async (p, body) => { gotRootId = body.rootId; return { ok: true, result: [] }; },
+    () => ({ roots: [{ id: 'r-builtin', builtin: true }, { id: 'r-repo', builtin: false }, { id: 'r-other', builtin: false }] }),
+  );
+  const r = await reg.adapters[0].invoke({ args: { action: 'branches' }, run: { boundRootId: 'r-other' }, host });
+  assert.equal(r.ok, true);
+  assert.equal(gotRootId, 'r-other');
+});
+
 test('git tool: dispatch 失败转可读错误', async () => {
   const reg = mockRegistry();
   registerGitTool(reg);

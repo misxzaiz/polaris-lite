@@ -77,15 +77,18 @@ export function registerGitTool(registry) {
         return { ok: false, stdout: '', stderr: `unknown git action: ${action}（可用：status/diff/file_diff/log/branches）` };
       }
 
-      // 根解析：显式 rootId > 会话绑定根 > 登记表第一个非内建根
-      // （内建 workspace 不是 git 仓库，dispatch 回退到它只会得到「不是 Git 仓库」）
-      let rootId = args.rootId ?? run?.boundRootId ?? '';
+      // 根解析：显式 rootId > 会话绑定根（须为非内建登记根）> 登记表第一个非内建根
+      // > 绑定根兜底。绑定根是内建 workspace（默认会话未绑仓库）时跳过——builtin
+      // 不是 git 仓库，dispatch 只会报「不是 Git 仓库」逼模型重试（真机 E2E 实测）。
+      let rootId = args.rootId ?? '';
       if (!rootId) {
+        const bound = run?.boundRootId ?? '';
         try {
           const rr = await host.get('/api/fs/roots', signal);
           const roots = rr.json?.roots ?? [];
-          rootId = (roots.find((x) => !x.builtin) ?? roots[0])?.id ?? '';
-        } catch { /* 保持空：dispatch 会回退并返回可读错误 */ }
+          const nonBuiltin = roots.filter((x) => !x.builtin);
+          rootId = (bound && nonBuiltin.some((x) => x.id === bound)) ? bound : (nonBuiltin[0]?.id ?? bound);
+        } catch { rootId = bound; }
       }
 
       const r = await host.callEndpoint('/api/git/dispatch', {
