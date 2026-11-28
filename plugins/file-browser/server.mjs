@@ -18,9 +18,12 @@
  * - 盘符一级目录不可登记为 root（等于把整机交给 AI）；
  * - 全只读：本文件不提供任何写接口；写入走 bash 工具的既有审批/审计链；
  * - 限额：目录单次 500 项；文本预览 ≤512KB；二进制 ≤1MB 且扩展名白名单；
- * - 审计：list/read 各落一行到 fs-audit.log。
+ * - 审计：list/read/grep 各落一行到 fs-audit.log；
+ * - grep（POST /api/fs/grep）：登记根内全文检索，跳过依赖/产物/二进制，
+ *   正则非法降级字面量；墙钟/文件数/命中数三重硬顶，结果供 AI grep 工具消费。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
+import { readdir, stat, readFile } from 'node:fs/promises';
 import { resolve, join, sep, extname, dirname } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
@@ -50,11 +53,97 @@ function pathDepth(p) {
   return norm.split(/[\\/]/).filter(Boolean).length;
 }
 
-import { registerFilesTool } from './tool.mjs';
+// ── /api/fs/grep：登记根内全文检索 ─────────────────────────────────────────
+// 依赖/产物/版本库目录是噪声与耗时大头，一律跳过；符号链接不跟进（防逃逸/环）。
+const GREP_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', 'coverage', '.vite', '.next',
+  '__pycache__', 'vendor', '.polaris-lite', '.polaris-lite-dev', '.tmp', 'tmp', 'cache',
+]);
+const GREP_SKIP_EXT = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp',
+  '.exe', '.dll', '.so', '.dylib', '.zip', '.gz', '.7z', '.rar', '.tar',
+  '.mp3', '.mp4', '.wav', '.avi', '.mov', '.wasm', '.class', '.jar', '.node',
+  '.pdb', '.ttf', '.otf', '.woff', '.woff2', '.pdf', '.docx', '.xlsx', '.pptx',
+  '.sqlite', '.db', '.lock',
+]);
+const GREP_MAX_FILE_BYTES = 1024 * 1024;   // 单文件上限（超大文件不读）
+const GREP_MAX_FILES = 20_000;             // 扫描文件数硬顶
+const GREP_WALL_MS = 8_000;                // 墙钟硬顶（walk 是异步让路的，但仍要兜底）
+const GREP_HITS_PER_FILE = 20;             // 单文件最多计 20 条命中（防单文件淹没结果）
+const GREP_TEXT_CAP = 300;                 // 单行命中文本截断
+
+/** 简易 glob（* → 段内任意，? → 单字符）→ 文件名/路径后缀匹配正则；非法则忽略。 */
+function grepGlobToRegExp(glob) {
+  try {
+    const body = glob.trim().replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
+    return new RegExp(`(^|/)${body}$`);
+  } catch { return null; }
+}
+
+async function grepScan(baseReal, { pattern, glob, ignoreCase, maxResults }) {
+  const started = Date.now();
+  const matches = [];
+  let totalMatches = 0;
+  let scanned = 0;
+  let truncated = false;
+  if (!pattern) return { ok: true, matches, totalMatches, truncated, scanned, durationMs: Date.now() - started };
+  // 非法正则降级为字面量匹配（模型偶尔会传未转义的 plain text）
+  let re;
+  try { re = new RegExp(pattern, ignoreCase ? 'i' : ''); }
+  catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'i' : ''); }
+  const includeRe = glob.trim() ? grepGlobToRegExp(glob) : null;
+
+  const stack = [baseReal];
+  while (stack.length) {
+    if (Date.now() - started > GREP_WALL_MS || scanned >= GREP_MAX_FILES) { truncated = true; break; }
+    const dir = stack.pop();
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue;
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (!GREP_SKIP_DIRS.has(ent.name)) stack.push(full);
+        continue;
+      }
+      if (!ent.isFile()) continue;
+      if (includeRe && !includeRe.test(ent.name) && !includeRe.test(full)) continue;
+      if (GREP_SKIP_EXT.has(extname(ent.name).toLowerCase())) continue;
+      scanned += 1;
+      if (scanned > GREP_MAX_FILES) { truncated = true; break; }
+      let buf;
+      try {
+        const st = await stat(full);
+        if (st.size === 0 || st.size > GREP_MAX_FILE_BYTES) continue;
+        buf = await readFile(full);
+      } catch { continue; }
+      // 二进制启发：头部 8KB 出现 NUL 即跳过（不追求精确，宁可漏检不喷二进制噪声）
+      if (buf.subarray(0, 8192).includes(0)) continue;
+      const text = buf.toString('utf8');
+      const rel = full.slice(baseReal.length + 1).replace(/\\/g, '/');
+      const lines = text.split('\n');
+      let hitsInFile = 0;
+      for (let i = 0; i < lines.length; i += 1) {
+        if (!re.test(lines[i])) continue;
+        hitsInFile += 1;
+        totalMatches += 1;
+        if (matches.length < maxResults) {
+          const line = lines[i];
+          matches.push({ path: rel, line: i + 1, text: line.length > GREP_TEXT_CAP ? `${line.slice(0, GREP_TEXT_CAP)}…` : line });
+        }
+        if (hitsInFile >= GREP_HITS_PER_FILE) break;
+      }
+      if (matches.length >= maxResults) { truncated = true; break; }
+    }
+  }
+  return { ok: true, matches, totalMatches, truncated, scanned, durationMs: Date.now() - started };
+}
+
+import { registerFilesTool, registerGrepTool } from './tool.mjs';
 
 export function createServerPart(options = {}) {
-  // 工具声明随插件：启用本插件即注册只读 files 工具；禁用即消失。
-  if (options.registry) registerFilesTool(options.registry);
+  // 工具声明随插件：启用本插件即注册只读 files/grep 工具；禁用即消失。
+  if (options.registry) { registerFilesTool(options.registry); registerGrepTool(options.registry); }
   const getSession = options.getSession;
   /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
@@ -460,6 +549,30 @@ export function createServerPart(options = {}) {
           return send(200, { isText: true, text, size: st.size, mtime: st.mtimeMs, truncated: head > 0 || tail > 0 });
         }
         return send(200, { isText: false, ext, mime: extMime(ext), data: buf.toString('base64'), size: st.size, mtime: st.mtimeMs });
+      }
+
+      // POST /api/fs/grep：登记根内全文检索（只读）。rootId 必填——L0 漫游是给面板
+      // 人工浏览的语义，AI 检索一律落在登记根内，边界与审计口径清晰。
+      if (pathname === '/api/fs/grep' && req.method === 'POST') {
+        const body = JSON.parse((await readBody()) || '{}');
+        const rootId = String(body.rootId ?? '');
+        const root = findRoot(rootId);
+        if (!root) return send(400, { error: 'unknown rootId', code: 'FS_ROOT_NOT_FOUND' });
+        const sv = safeResolve(root.path, String(body.path ?? ''));
+        if (sv.error) return send(403, sv);
+        const out = await grepScan(sv.real, {
+          pattern: String(body.pattern ?? ''),
+          glob: typeof body.glob === 'string' ? body.glob : '',
+          ignoreCase: body.ignoreCase === true,
+          maxResults: Math.min(Math.max(Number(body.maxResults) || 100, 1), 300),
+        });
+        audit({
+          at: Date.now(), op: 'grep', rootId, path: String(body.path ?? ''),
+          pattern: String(body.pattern ?? '').slice(0, 80), matches: out.matches.length,
+          truncated: out.truncated, scanned: out.scanned, durationMs: out.durationMs,
+          user: session?.user?.name,
+        });
+        return send(200, out);
       }
 
       return send(404, { error: 'unknown fs endpoint', code: 'FS_NOT_FOUND' });

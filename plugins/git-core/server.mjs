@@ -11,7 +11,9 @@
  *   写：batch_stage / batch_unstage / commit_changes / checkout_branch
  *
  * 安全设计（对齐 file-browser / agent-bash 的 server 半边）：
- * - 会话 cookie 硬门禁（getSession 注入）；PLITE_GIT=0 一键禁用；
+ * - 会话 cookie 或本地回环 Bearer 硬门禁（getSession/verifyTempToken 注入）；PLITE_GIT=0 一键禁用；
+ * - AI 工具面：tool.mjs 注册只读 git 工具（status/diff/file_diff/log/branches），
+ *   经 loopback dispatch 复用同一套白名单与审计；写动作仍只在面板人工操作；
  * - **工作区根白名单**：rootId 必须命中 file-browser 维护的 workspace-roots.json
  *   （与 agent-bash 的 cwd 校验同一份根表），realpath 防符号链接逃逸；
  * - 动作白名单：未登记动作 400（对齐 Polaris KNOWN_ACTIONS / unsupported_action）；
@@ -23,6 +25,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, appendFileSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
+
+import { registerGitTool } from './tool.mjs';
 
 const TIMEOUT_MS = 30_000;
 const OUT_LIMIT = 1024 * 1024;      // 单动作输出上限（git diff 可能很大）
@@ -189,7 +193,11 @@ function parseStatus(out) {
 }
 
 export function createServerPart(options = {}) {
+  // 工具声明随插件：启用本插件即注册只读 git 工具；禁用即消失。
+  if (options.registry) registerGitTool(options.registry);
   const getSession = options.getSession;
+  /** 临时 Bearer 凭证校验（auth-session 签发；仅本地回环 IP 可用） */
+  const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
   const auditFile = resolve(dataDir, 'git-audit.log');
   const hardOff = process.env.PLITE_GIT === '0';
@@ -208,7 +216,14 @@ export function createServerPart(options = {}) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: false, error: 'git api disabled (PLITE_GIT=0)', code: 'GIT_DISABLED' }));
     }
-    if (!getSession?.(req)) {
+    // 登录门禁：会话 cookie 或临时 Bearer 凭证二选一。Bearer 是 AI 工具 loopback
+    // 调用的通道（agent-runner 的 callToolEndpoint 只带系统 Bearer 不带 cookie）——
+    // 缺了它 git 工具必 401（system-token-401 事故同病灶）。
+    const authHeader = String(req.headers.authorization ?? '');
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const isLocal = (req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '') === '127.0.0.1';
+    const bearerValid = !!(bearerToken && isLocal && verifyTempToken(bearerToken));
+    if (!getSession?.(req) && !bearerValid) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: false, error: 'unauthorized', code: 'SESSION_REQUIRED' }));
     }
