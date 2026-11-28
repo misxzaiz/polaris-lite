@@ -417,3 +417,109 @@ test('PLITE_CHAT_STORE=0 一键禁用（端点退场，不回会话数据）', a
     delete process.env.PLITE_CHAT_STORE;
   }
 });
+
+// ---------------------------------------------------------------- chat_history 工具
+// AI 视角的历史会话检索（list/search/read/set_model）。经 mock registry 捕获
+// createServerPart 里注册的工具适配器，直接 invoke——不起 HTTP，专注工具逻辑。
+
+/** 捕获 chat_history 工具注册并直接调用 */
+async function captureChatHistoryTool(t, { dataDir }) {
+  let captured = null;
+  const registry = {
+    registerTool: (adapter) => { if (adapter?.name === 'chat_history') captured = adapter; },
+    registerService: () => {},
+  };
+  const { createServerPart } = await import('../plugins/chat-store/server.mjs');
+  const mw = createServerPart({ dataDir, registry, getSession: () => ({ user: 'boss' }) });
+  if (typeof mw === 'function') t.after(() => {}); // 中间件自身无需清理
+  assert.ok(captured, 'chat_history 工具应已注册');
+  return (args) => captured.invoke({ args });
+}
+
+test('chat_history：list 返回会话索引（跳过墓碑，按活跃时间倒序）', async (t) => {
+  const { dataDir } = tempRoot();
+  const c = await login(t, { dist: undefined, dataDir });
+  void c;
+  const invoke = await captureChatHistoryTool(t, { dataDir });
+  const r = await invoke({ action: 'list' });
+  assert.equal(r.ok, true, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.count, 0);
+  // 写两个会话再 list
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  const access = createChatStoreAccess({ dataDir });
+  access.writeRecord('s-a', { version: 1, updatedAt: 1, session: { ...mkSession('s-a', { lastActiveAt: 1 }), title: 'A' } });
+  access.writeRecord('s-b', { version: 1, updatedAt: 2, session: { ...mkSession('s-b', { lastActiveAt: 9 }), title: 'B' } });
+  const r2 = await invoke({ action: 'list' });
+  const p2 = JSON.parse(r2.stdout);
+  assert.equal(p2.count, 2);
+  assert.equal(p2.sessions[0].sessionId, 's-b'); // 更活跃在前
+});
+
+test('chat_history：search 命中标题与正文，返回片段；q 缺失报错', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  const access = createChatStoreAccess({ dataDir });
+  access.writeRecord('s-gold', { version: 1, updatedAt: 1, session: {
+    id: 's-gold', title: '理财复盘', createdAt: 1, lastActiveAt: 1,
+    messages: [
+      { id: 'm1', role: 'user', content: '我想买黄金 ETF 练手', createdAt: 1 },
+      { id: 'm2', role: 'assistant', content: '可以看看 000217', createdAt: 2 },
+    ],
+  } });
+  access.writeRecord('s-other', { version: 1, updatedAt: 2, session: {
+    id: 's-other', title: '别的', createdAt: 1, lastActiveAt: 2,
+    messages: [{ id: 'm1', role: 'user', content: '今天天气不错', createdAt: 1 }],
+  } });
+  const invoke = await captureChatHistoryTool(t, { dataDir });
+  const r = await invoke({ action: 'search', q: '黄金' });
+  assert.equal(r.ok, true);
+  const p = JSON.parse(r.stdout);
+  assert.equal(p.hits.length, 1);
+  assert.equal(p.hits[0].sessionId, 's-gold');
+  assert.ok(p.hits[0].snippet.includes('黄金'));
+  // 标题命中
+  const r2 = await invoke({ action: 'search', q: '理财' });
+  assert.equal(JSON.parse(r2.stdout).hits[0].matched, 'title');
+  // q 缺失
+  const r3 = await invoke({ action: 'search' });
+  assert.equal(r3.ok, false);
+  assert.match(r3.stderr, /q required/);
+});
+
+test('chat_history：read 返回转录（含 modelRef），不存在报错；set_model 写档生效', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  const access = createChatStoreAccess({ dataDir });
+  access.writeRecord('s-x', { version: 1, updatedAt: 1, session: {
+    id: 's-x', title: 'X', createdAt: 1, lastActiveAt: 1,
+    modelRef: { engineId: 'real', modelId: 'gpt-x' },
+    messages: [{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }],
+  } });
+  const invoke = await captureChatHistoryTool(t, { dataDir });
+  const r = await invoke({ action: 'read', sessionId: 's-x' });
+  const p = JSON.parse(r.stdout);
+  assert.equal(p.msgCount, 1);
+  assert.deepEqual(p.modelRef, { engineId: 'real', modelId: 'gpt-x' });
+  // 不存在
+  const r404 = await invoke({ action: 'read', sessionId: 's-none' });
+  assert.equal(r404.ok, false);
+  assert.match(r404.stderr, /not found/);
+  // set_model
+  const rsm = await invoke({ action: 'set_model', sessionId: 's-x', modelRef: { engineId: 'codebuddy', option: 'cli' } });
+  assert.equal(rsm.ok, true, rsm.stderr);
+  const back = access.readRecord('s-x');
+  assert.deepEqual(back.session.modelRef, { engineId: 'codebuddy', option: 'cli' });
+  assert.equal(back.version, 2); // 版本单调
+  // 空对象拒绝
+  const rbad = await invoke({ action: 'set_model', sessionId: 's-x', modelRef: {} });
+  assert.equal(rbad.ok, false);
+});
+
+test('chat_history：未知 action 报错并列出可用项', async (t) => {
+  const { dataDir } = tempRoot();
+  const invoke = await captureChatHistoryTool(t, { dataDir });
+  const r = await invoke({ action: 'bogus' });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /list\/search\/read\/set_model/);
+});

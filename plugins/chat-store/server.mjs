@@ -38,7 +38,7 @@
  *                                            客户端据此 pull 对账——版本比对幂等，乱序无害）；
  *                                            轮询兜底保留（SSE 断开/未送达时 30s 内收敛）
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -231,7 +231,198 @@ export function createServerPart(options = {}) {
   // 消费方经 server/adapter-registry 的 service 注册表取用，不认识 <dataDir>/chat-store 布局。
   const access = createChatStoreAccess({ dataDir, onAudit: audit, onIndexChange: (id) => notifyIndex(id) });
   const { readRecord, writeRecord, listRecords, sweepTombstones, mergeMessages, lock } = access;
+  const storeDir = access.storeDir; // 工具侧缓存 mtime 校验用（同一存储目录）
   options.registry?.registerService?.('chat-store', access);
+
+  // ------------------------------------------------------------------
+  // chat_history 工具（AI 可用）：历史会话的 list / search / read / set_model
+  // ------------------------------------------------------------------
+  // 动机：transcript 工具能读单会话但 AI 拿不到 sessionId；侧栏搜索是纯前端。
+  // 本工具补上「AI 视角的会话检索闭环」：搜到 → 读全 → （可选）换模型续聊。
+  // 只读为主；set_model 是唯一写操作（乐观锁，版本不符报 409 语义）。
+  if (options.registry?.registerTool) {
+    const HISTORY_FEEDBACK_CAP = 8 * 1024; // 反馈帽：与 transcript/mcp_ 惯例一致
+    const SEARCH_HITS_MAX = 20;            // 命中会话数上限
+    const SEARCH_SNIPPET = 120;            // 命中片段长度
+    /** 全文搜索缓存：sessionId → { mtime, msgs }（mtime 不变则复用已解析 messages） */
+    const searchCache = new Map();
+
+    /** 读取会话消息为纯文本数组（标题 + 全部消息正文；含缓存） */
+    function sessionTexts(rec) {
+      const session = rec?.session;
+      if (!session || !Array.isArray(session.messages)) return [];
+      return session.messages
+        .filter((m) => m && typeof m.content === 'string' && m.content.trim())
+        .map((m) => ({ role: m.role, content: m.content }));
+    }
+
+    /** 缓存版：sessionId → [{role, content}]（文件 mtime 变化才重新解析） */
+    function cachedTexts(id, rec) {
+      let mtime = 0;
+      try { mtime = statSync(join(storeDir, `${id}.json`)).mtimeMs; } catch { return { mtime: 0, texts: [] }; }
+      const hit = searchCache.get(id);
+      if (hit && hit.mtime === mtime) return hit;
+      const entry = { mtime, texts: sessionTexts(rec) };
+      searchCache.set(id, entry);
+      // 简单防膨胀：超过 512 条目时清最旧一半（会话量级 ≤ 数百，正常不会触顶）
+      if (searchCache.size > 512) {
+        const keys = [...searchCache.keys()].slice(0, 256);
+        for (const k of keys) searchCache.delete(k);
+      }
+      return entry;
+    }
+
+    /** 朴素全文搜索：标题 + 全部消息正文；返回命中会话摘要（限 SEARCH_HITS_MAX） */
+    function searchSessions(q) {
+      const needle = String(q ?? '').trim().toLowerCase();
+      if (!needle) return { error: 'q required' };
+      const hits = [];
+      for (const rec of listRecords()) {
+        if (rec.deletedAt) continue;
+        const session = rec.session ?? {};
+        const title = String(session.title ?? '');
+        let snippet = '';
+        let hitInTitle = title.toLowerCase().includes(needle);
+        let hitInBody = false;
+        const { texts } = cachedTexts(rec.session?.id, rec);
+        for (const t of texts) {
+          const lower = t.content.toLowerCase();
+          const idx = lower.indexOf(needle);
+          if (idx >= 0) {
+            hitInBody = true;
+            snippet = t.content.slice(Math.max(0, idx - 40), idx + SEARCH_SNIPPET).replace(/\s+/g, ' ');
+            break; // 每会话取首个命中片段即可
+          }
+        }
+        if (hitInTitle || hitInBody) {
+          hits.push({
+            sessionId: rec.session?.id,
+            title: title || '（无标题）',
+            msgCount: texts.length,
+            updatedAt: rec.updatedAt,
+            lastActiveAt: session.lastActiveAt ?? 0,
+            matched: hitInTitle ? 'title' : 'body',
+            snippet,
+          });
+        }
+        if (hits.length >= SEARCH_HITS_MAX) break;
+      }
+      hits.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      return { hits, total: hits.length };
+    }
+
+    /** 读单会话转录（标题/模型/消息对，正文截断到总帽） */
+    function readSessionTranscript(id) {
+      if (!ID_RE.test(String(id ?? ''))) return { error: 'sessionId invalid' };
+      const rec = readRecord(id);
+      if (!rec) return { error: 'session not found' };
+      const session = rec.session ?? {};
+      const msgs = (session.messages ?? []).map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : '',
+        createdAt: m.createdAt,
+      }));
+      return {
+        sessionId: id,
+        title: session.title ?? '（无标题）',
+        modelRef: session.modelRef ?? (session.engineId ? { engineId: session.engineId } : null),
+        codebuddyModel: session.codebuddyModel ?? null,
+        createdAt: session.createdAt,
+        lastActiveAt: session.lastActiveAt ?? 0,
+        msgCount: msgs.length,
+        messages: msgs,
+      };
+    }
+
+    options.registry.registerTool({
+      name: 'chat_history',
+      // 读历史无审批成本；set_model 是低风险配置写（用户可随时在 UI 再改）
+      noApproval: true,
+      descriptor: {
+        type: 'function',
+        function: {
+          name: 'chat_history',
+          description:
+            '历史会话检索与模型切换（只读为主）。action=list 列出会话（标题/时间/消息数，limit 可选默认 50）；' +
+            'search=全文搜索标题+全部消息正文（q 必填，返回 sessionId+命中片段）；' +
+            'read=读会话完整转录（sessionId 必填，含当时模型）；' +
+            'set_model=设置会话模型（sessionId+modelRef 必填，下一轮对话生效，版本冲突返回 409 语义需重读重试）。' +
+            '典型链路：search 拿 sessionId → read 看全文 → 向用户汇报或 set_model 换模型。',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['list', 'search', 'read', 'set_model'] },
+              sessionId: { type: 'string', description: '会话 id（read/set_model 必填）' },
+              q: { type: 'string', description: '搜索词（search 必填）' },
+              limit: { type: 'number', description: 'list 返回条数上限（默认 50，最大 200）' },
+              modelRef: { type: 'object', description: '模型选择 {engineId?, providerId?, modelId?, option?}（set_model 必填）' },
+            },
+            required: ['action'],
+          },
+        },
+      },
+      invoke: async ({ args }) => {
+        if (hardOff) return { ok: false, stdout: '', stderr: 'chat-store 已被 PLITE_CHAT_STORE=0 禁用' };
+        const action = String(args?.action ?? '');
+        try {
+          if (action === 'list') {
+            const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
+            const sessions = listRecords()
+              .filter((r) => !r.deletedAt)
+              .sort((a, b) => (b.session?.lastActiveAt ?? b.updatedAt ?? 0) - (a.session?.lastActiveAt ?? a.updatedAt ?? 0))
+              .slice(0, limit)
+              .map((r) => ({
+                sessionId: r.session?.id,
+                title: r.session?.title ?? '（无标题）',
+                msgCount: Array.isArray(r.session?.messages) ? r.session.messages.length : 0,
+                createdAt: r.session?.createdAt ?? 0,
+                lastActiveAt: r.session?.lastActiveAt ?? r.updatedAt ?? 0,
+              }));
+            return { ok: true, stdout: JSON.stringify({ count: sessions.length, sessions }).slice(0, HISTORY_FEEDBACK_CAP), stderr: '' };
+          }
+          if (action === 'search') {
+            const r = searchSessions(args.q);
+            if (r.error) return { ok: false, stdout: '', stderr: r.error };
+            return { ok: true, stdout: JSON.stringify(r).slice(0, HISTORY_FEEDBACK_CAP), stderr: '' };
+          }
+          if (action === 'read') {
+            const t = readSessionTranscript(args.sessionId);
+            if (t.error) return { ok: false, stdout: '', stderr: t.error };
+            return { ok: true, stdout: JSON.stringify(t).slice(0, HISTORY_FEEDBACK_CAP), stderr: '' };
+          }
+          if (action === 'set_model') {
+            const sid = String(args.sessionId ?? '').trim();
+            if (!ID_RE.test(sid)) return { ok: false, stdout: '', stderr: 'sessionId invalid' };
+            const modelRef = args.modelRef;
+            if (!modelRef || typeof modelRef !== 'object' || Array.isArray(modelRef)) {
+              return { ok: false, stdout: '', stderr: 'modelRef required (object {engineId?,providerId?,modelId?,option?})' };
+            }
+            const clean = {};
+            for (const k of ['engineId', 'providerId', 'modelId', 'option']) {
+              if (modelRef[k] !== undefined) clean[k] = modelRef[k];
+            }
+            if (Object.keys(clean).length === 0) return { ok: false, stdout: '', stderr: 'modelRef 不能为空对象' };
+            const applied = await lock(sid, () => {
+              const rec = readRecord(sid);
+              if (!rec) return { error: 'session not found' };
+              rec.session = rec.session ?? {};
+              rec.session.modelRef = clean;
+              const version = (Number(rec.version) || 0) + 1;
+              writeRecord(sid, { version, updatedAt: Date.now(), session: rec.session });
+              notifyIndex(sid);
+              audit({ op: 'set-model', sessionId: sid, modelRef: clean, version });
+              return { version, modelRef: clean };
+            });
+            if (applied.error) return { ok: false, stdout: '', stderr: applied.error };
+            return { ok: true, stdout: JSON.stringify({ ok: true, sessionId: sid, ...applied, note: '下一轮对话生效' }), stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: `unknown action: ${action}（可用：list/search/read/set_model）` };
+        } catch (e) {
+          return { ok: false, stdout: '', stderr: String(e?.message ?? e) };
+        }
+      },
+    });
+  }
   // loop-state 内部上报接口（agent-runner 编排 run 的「执行中」徽标；同进程直调）
   options.registry?.registerService?.('chat-loop-state', {
     /** run start/heartbeat/done（与 HTTP loop-state 端点同语义） */
