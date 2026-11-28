@@ -686,12 +686,13 @@ async function captureToolByName(t, { dataDir, toolName }) {
   const { createServerPart } = await import('../plugins/chat-store/server.mjs');
   createServerPart({ dataDir, registry, getSession: () => ({ user: 'boss' }) });
   assert.ok(captured, `${toolName} 工具应已注册`);
-  return { invoke: (args, run, signal) => captured.invoke({ args, run, signal }), services };
+  return { invoke: (args, run, signal) => captured.invoke({ args, run, signal }), services, adapter: captured };
 }
 
 test('sleep：基本等待与边界（1-120）', async (t) => {
   const { dataDir } = tempRoot();
-  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'sleep' });
+  const { invoke, adapter } = await captureToolByName(t, { dataDir, toolName: 'sleep' });
+  assert.equal(adapter.repeatable, true, 'sleep 必须标记 repeatable——同参重复调用是轮询设计内用法，豁免 runner 重复调用护栏');
   const bad0 = await invoke({ seconds: 0 });
   assert.equal(bad0.ok, false);
   assert.match(bad0.stderr, /1-120/);

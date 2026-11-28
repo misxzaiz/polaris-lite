@@ -55,6 +55,18 @@ test('agent-runner（服务端编排）：自动续写 burst 限次 + 三路径 
   assert.match(loopSrc, /message\.truncated/, 'burst 耗尽后仍落可见截断块（兜底 UI 的数据源）');
 });
 
+test('agent-runner：重复调用护栏豁免 repeatable 工具（sleep 轮询合法复用）', () => {
+  // 2026-11-28 实测：chat_start/continue 异步结果的「sleep→read 轮询」里，第 2 次
+  // 相同 sleep 被护栏判成重复调用→视为收敛→run 提前终止。repeatable: true 的
+  // 工具（sleep）必须从「全重复」判定中排除。
+  assert.match(loopSrc, /repeatableTool = \(name\) => registry\?\.getTool\?\.\(name\)\?\.repeatable === true/,
+    '护栏必须查适配器 repeatable 标记（工具插件声明，runner 零工具知识）');
+  assert.match(loopSrc, /every\(\(c\) => !repeatableTool\(c\.name\) && dispatchedCalls\.has\(callKey\(c\)\)\)/,
+    '全重复判定必须排除 repeatable 工具');
+  assert.match(read('plugins/chat-store/server.mjs'), /name: 'sleep',[\s\S]{0,200}repeatable: true/,
+    'sleep 适配器必须声明 repeatable: true');
+});
+
 test('agent-runner：resume 端点（无 prompt 直续 shadow + 并发单飞）', () => {
   assert.match(loopSrc, /\/api\/agent\/resume/, '服务端必须提供 resume 端点');
   assert.match(loopSrc, /shadow: \[\.\.\.snap\.shadow\]/, 'resume 复用上一 run 的 shadow 直接接续');

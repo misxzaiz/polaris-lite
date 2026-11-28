@@ -771,8 +771,12 @@ export function createServerPart(options = {}) {
         //   2) 正文非空（把正文视为收敛信号；正文为空时不视为收敛，但也不再
         //      原样执行重复调用——以工具结果形式回一条 nudge，逼下一轮产出正文）。
         const callKey = (c) => `${c.name}::${String(c.arguments ?? '')}`;
+        // repeatable 工具豁免（2026-11-28）：sleep 等轮询原语的同参重复调用是设计内
+        // 用法（chat_start/continue 异步结果的 sleep→read 轮询），护栏不把它当
+        // 「已收敛」信号——实测曾把第 2 次 sleep(seconds:20) 判成重复而提前收敛。
+        const repeatableTool = (name) => registry?.getTool?.(name)?.repeatable === true;
         const allRepeat = result.toolCalls.length > 0
-          && result.toolCalls.every((c) => dispatchedCalls.has(callKey(c)));
+          && result.toolCalls.every((c) => !repeatableTool(c.name) && dispatchedCalls.has(callKey(c)));
         if (allRepeat) {
           const hasText = result.text.trim().length > 0;
           for (const call of result.toolCalls) {

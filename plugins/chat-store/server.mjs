@@ -670,6 +670,9 @@ export function createServerPart(options = {}) {
     options.registry.registerTool({
       name: 'sleep',
       noApproval: true,
+      // 同参重复调用是设计内用法（sleep→read 轮询等待异步结果）——豁免 runner
+      // 重复调用护栏（否则第 2 次相同 sleep 会被判「已收敛」跳过、run 提前终止）
+      repeatable: true,
       descriptor: {
         type: 'function',
         function: {
