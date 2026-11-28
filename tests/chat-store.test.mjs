@@ -670,3 +670,171 @@ test('chat_start：系统凭证 owner 取真实注册用户（非 root 账号 40
   assert.ok(out.runId, '应返回 runId');
 });
 
+
+// ---------------------------------------------------------------- sleep 工具
+// chat_start/chat_continue 异步工作流的等待原语：sleep → chat_history read（带 running）
+// 轮询等待收敛。上限 120s/次（免审批工具不长期占用 run 并发槽），abort 感知（run 中断即返回）。
+
+/** 按名捕获工具适配器 + registerService 收集（sleep/chat_continue/running 态用例共用） */
+async function captureToolByName(t, { dataDir, toolName }) {
+  let captured = null;
+  const services = {};
+  const registry = {
+    registerTool: (adapter) => { if (adapter?.name === toolName) captured = adapter; },
+    registerService: (name, svc) => { services[name] = svc; },
+  };
+  const { createServerPart } = await import('../plugins/chat-store/server.mjs');
+  createServerPart({ dataDir, registry, getSession: () => ({ user: 'boss' }) });
+  assert.ok(captured, `${toolName} 工具应已注册`);
+  return { invoke: (args, run, signal) => captured.invoke({ args, run, signal }), services };
+}
+
+test('sleep：基本等待与边界（1-120）', async (t) => {
+  const { dataDir } = tempRoot();
+  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'sleep' });
+  const bad0 = await invoke({ seconds: 0 });
+  assert.equal(bad0.ok, false);
+  assert.match(bad0.stderr, /1-120/);
+  const badLong = await invoke({ seconds: 121 });
+  assert.equal(badLong.ok, false);
+  assert.match(badLong.stderr, /1-120/);
+  const badStr = await invoke({ seconds: 'abc' });
+  assert.equal(badStr.ok, false);
+  const t0 = Date.now();
+  const r = await invoke({ seconds: 1 });
+  assert.equal(r.ok, true, r.stderr);
+  assert.ok(Date.now() - t0 >= 900, '应实际等待约 1s');
+  assert.match(r.stdout, /已等待 1s/);
+});
+
+test('sleep：abort 感知——run 中断后立即返回不再空等', async (t) => {
+  const { dataDir } = tempRoot();
+  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'sleep' });
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 100);
+  const t0 = Date.now();
+  const r = await invoke({ seconds: 10 }, undefined, ac.signal);
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /中断/);
+  assert.ok(Date.now() - t0 < 2000, '应立即返回而非等满 10s');
+});
+
+// ---------------------------------------------------------------- chat_continue 工具
+// 往已存在会话追加下一轮（share3 实测痛点：chat_start 只能新开，续轮只能让用户手动）。
+// 模型缺省沿用会话档案 modelRef（保人设/引擎），显式覆盖逐键生效；单飞冲突（目标会话
+// 已有 run）显式报错让 AI sleep 重试；防套娃同 chat_start。
+
+test('chat_continue：防套娃护栏 / 校验 / 目标会话不存在', async (t) => {
+  const { dataDir } = tempRoot();
+  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'chat_continue' });
+  const guard = await invoke({ sessionId: 's-x', prompt: 'hi' }, { sessionId: 'chat-start-abc' });
+  assert.equal(guard.ok, false);
+  assert.match(guard.stderr, /不可再调/);
+  const badId = await invoke({ sessionId: 'bad id!', prompt: 'hi' });
+  assert.equal(badId.ok, false);
+  assert.match(badId.stderr, /sessionId invalid/);
+  const noPrompt = await invoke({ sessionId: 's-x', prompt: '   ' });
+  assert.equal(noPrompt.ok, false);
+  assert.match(noPrompt.stderr, /1-4000/);
+  const missing = await invoke({ sessionId: 's-none', prompt: 'hi' });
+  assert.equal(missing.ok, false);
+  assert.match(missing.stderr, /not found/);
+});
+
+/** mock loopback：登录发假 cookie，/api/agent/start 捕获 payload 并按脚本应答 */
+async function startLoopMock(t, handler) {
+  const bodies = [];
+  const loop = http.createServer((req, res) => {
+    const [pathname] = (req.url ?? '').split('?');
+    if (pathname === '/api/auth/login') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'plite.sid=mock; Path=/' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (pathname === '/api/agent/start' && req.method === 'POST') {
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => {
+        bodies.push(JSON.parse(raw || '{}'));
+        const resp = handler?.(bodies[bodies.length - 1]) ?? { status: 200, body: { ok: true, runId: 'r-cont-1' } };
+        res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(resp.body));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => loop.listen(0, '127.0.0.1', r));
+  t.after(() => loop.close());
+  const prev = process.env.PLITE_SELF_PORT;
+  process.env.PLITE_SELF_PORT = String(loop.address().port);
+  t.after(() => { if (prev === undefined) delete process.env.PLITE_SELF_PORT; else process.env.PLITE_SELF_PORT = prev; });
+  return bodies;
+}
+
+test('chat_continue：模型沿用会话档案 modelRef，显式覆盖逐键生效；成功返回 runId', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  const access = createChatStoreAccess({ dataDir });
+  access.writeRecord('s-cont', { version: 1, updatedAt: 1, session: {
+    id: 's-cont', title: '续轮目标', createdAt: 1, lastActiveAt: 1,
+    modelRef: { engineId: 'codebuddy', providerId: 'p1', modelId: 'cli-x', option: 'cli' },
+    messages: [{ id: 'm1', role: 'user', content: '上一轮', createdAt: 1 }],
+  } });
+  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'chat_continue' });
+  const bodies = await startLoopMock(t);
+
+  const r1 = await invoke({ sessionId: 's-cont', prompt: '下一轮' });
+  assert.equal(r1.ok, true, r1.stderr);
+  const out1 = JSON.parse(r1.stdout);
+  assert.equal(out1.runId, 'r-cont-1');
+  assert.equal(bodies[0].sessionId, 's-cont');
+  assert.equal(bodies[0].prompt, '下一轮');
+  assert.equal(bodies[0].engineId, 'codebuddy', '缺省沿用会话 modelRef');
+  assert.equal(bodies[0].modelId, 'cli-x');
+  assert.equal(bodies[0].device, 'chat_continue（AI 续轮）');
+
+  const r2 = await invoke({ sessionId: 's-cont', prompt: '再一轮', modelRef: { engineId: 'real' } });
+  assert.equal(r2.ok, true, r2.stderr);
+  assert.equal(bodies[1].engineId, 'real', '显式覆盖生效');
+  assert.equal(bodies[1].modelId, 'cli-x', '未覆盖键沿用会话档案');
+});
+
+test('chat_continue：目标会话 run 执行中——existing 冲突显式报错（prompt 不投递）', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  createChatStoreAccess({ dataDir }).writeRecord('s-busy', { version: 1, updatedAt: 1, session: {
+    id: 's-busy', title: '忙碌', createdAt: 1, lastActiveAt: 1, messages: [],
+  } });
+  const { invoke } = await captureToolByName(t, { dataDir, toolName: 'chat_continue' });
+  const bodies = await startLoopMock(t, () => ({ status: 200, body: { ok: true, existing: true, runId: 'r-busy', phase: 'running' } }));
+  const r = await invoke({ sessionId: 's-busy', prompt: 'hi' });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /未投递/);
+  assert.match(r.stderr, /sleep/);
+  assert.equal(bodies.length, 1, 'start 被调用过（冲突在响应侧识别）');
+});
+
+// ---------------------------------------------------------------- read 的 running 执行态
+// chat_start/chat_continue 的 run 异步执行，AI 以 sleep → read 轮询等待收敛；
+// running=false 才代表本轮已结束（runner 10s 心跳保活后长工具期间也真实）。
+
+test('chat_history：read 返回 running 执行态（loop-state start→true，done→false）', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  createChatStoreAccess({ dataDir }).writeRecord('s-run', { version: 1, updatedAt: 1, session: {
+    id: 's-run', title: '执行中会话', createdAt: 1, lastActiveAt: 1,
+    messages: [{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }],
+  } });
+  const { invoke, services } = await captureToolByName(t, { dataDir, toolName: 'chat_history' });
+  const before = JSON.parse((await invoke({ action: 'read', sessionId: 's-run' })).stdout);
+  assert.equal(before.running, false);
+  services['chat-loop-state'].report('s-run', 'start', { device: 'test' });
+  const during = JSON.parse((await invoke({ action: 'read', sessionId: 's-run' })).stdout);
+  assert.equal(during.running, true);
+  assert.equal(during.runPhase, 'running');
+  services['chat-loop-state'].report('s-run', 'done');
+  const after = JSON.parse((await invoke({ action: 'read', sessionId: 's-run' })).stdout);
+  assert.equal(after.running, false);
+});

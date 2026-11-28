@@ -332,6 +332,11 @@ export function createServerPart(options = {}) {
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt ?? 0,
         msgCount: msgs.length,
+        // 执行态（2026-11-28）：chat_start/chat_continue 的 run 异步执行，AI 以
+        // sleep → read 轮询等待收敛——running=false 才代表本轮已结束。
+        // （runner 10s 心跳保活后，长工具执行期间该状态也保持真实）
+        running: runningLoops.has(id),
+        runPhase: runningLoops.get(id)?.phase ?? null,
         messages: msgs,
       };
     }
@@ -487,6 +492,8 @@ export function createServerPart(options = {}) {
             '以指定模型发起一个全新的独立 AI 对话（新会话，不接续当前上下文）。prompt 为首轮用户消息（1-4000 字），' +
             'modelRef 可选 {engineId?, providerId?, modelId?, option?}（留空跟随默认引擎/模型）。' +
             '返回新会话的 sessionId 与 runId，结果由 runner 落会话档，用户可在侧栏打开查看。' +
+            '发起后结果异步产生：用 sleep 等待片刻再 chat_history read 查看回复（read 返回 running 状态，false 即已收敛）；' +
+            '要对该会话追加下一轮用 chat_continue。' +
             '防套娃：由 AI 工具发起的会话内不可再调本工具。',
           parameters: {
             type: 'object',
@@ -555,6 +562,142 @@ export function createServerPart(options = {}) {
         } catch (e) {
           return { ok: false, stdout: '', stderr: String(e?.message ?? e) };
         }
+      },
+    });
+
+    // chat_continue 工具（AI 可用）：往**已存在**的会话追加下一轮并发起执行。
+    // ------------------------------------------------------------------
+    // 动机（2026-11-28 钉住实例实测痛点）：chat_start 只能新开会话，AI 拿一个
+    // 已有会话（尤其是它自己 chat_start 出去的）毫无续轮手段，只能让用户手动
+    // 进侧栏聊。本工具补上「续轮」：POST /api/agent/start（同 sessionId+新 prompt），
+    // user 消息由 runner syncUserMessage 落档，编排/工具/审批全套照旧。
+    // 模型缺省沿用会话档案里的 modelRef（保住人设/引擎选择——续轮换模型会
+    // 撕裂人格），modelRef 参数可显式覆盖。目标会话已有 run 在跑时 agent/start
+    // 会忽略新 prompt（existing:true 单飞收敛），这里显式报错让 AI sleep 后重试。
+    // 防套娃同 chat_start：发起方为 chat-start- 前缀会话时拒绝（深度恒 1）。
+    options.registry.registerTool({
+      name: 'chat_continue',
+      // 续轮即产生真实 AI 消耗，同 chat_start 保留审批
+      noApproval: false,
+      descriptor: {
+        type: 'function',
+        function: {
+          name: 'chat_continue',
+          description:
+            '往一个已存在的会话追加下一轮对话并发起执行（不同于 chat_start 的新开会话）。sessionId 必填（须已存在的会话档），' +
+            'prompt 为追加的用户消息（1-4000 字）。模型缺省沿用该会话已存的 modelRef（保住人设/引擎），modelRef 参数可显式覆盖。' +
+            '返回 runId；目标会话若已有 run 在执行，本次 prompt 不投递并返回错误（请先 sleep 等待再重试）。' +
+            '执行进度：sleep 等待后用 chat_history read 轮询（read 返回 running 状态）。' +
+            '防套娃：由 AI 工具发起的会话（chat-start- 前缀）内不可再调本工具。',
+          parameters: {
+            type: 'object',
+            properties: {
+              sessionId: { type: 'string', description: '目标会话 id（必填，须已存在）' },
+              prompt: { type: 'string', description: '追加的用户消息（必填，1-4000 字）' },
+              modelRef: { type: 'object', description: '模型覆盖 {engineId?, providerId?, modelId?, option?}（可选，缺省沿用会话已存模型）' },
+            },
+            required: ['sessionId', 'prompt'],
+          },
+        },
+      },
+      invoke: async ({ args, run }) => {
+        if (hardOff) return { ok: false, stdout: '', stderr: 'chat-store 已被 PLITE_CHAT_STORE=0 禁用' };
+        try {
+          // 防递归：同 chat_start——chat-start- 前缀会话的 run 不得再续别的会话（深度恒 1）
+          const originSessionId = String(run?.sessionId ?? '');
+          if (originSessionId.startsWith('chat-start-')) {
+            return { ok: false, stdout: '', stderr: '拒绝：本会话由 AI 工具发起，不可再调 chat_continue（防无限套娃）' };
+          }
+          const sessionId = String(args?.sessionId ?? '').trim();
+          if (!ID_RE.test(sessionId)) return { ok: false, stdout: '', stderr: 'sessionId invalid' };
+          const prompt = String(args?.prompt ?? '').trim();
+          if (!prompt || prompt.length > 4000) return { ok: false, stdout: '', stderr: 'prompt 需 1-4000 字' };
+          const rec = readRecord(sessionId);
+          if (!rec || rec.deletedAt) return { ok: false, stdout: '', stderr: 'session not found（不存在或已删除）' };
+          // 模型解析：会话已存 modelRef 为基座，args.modelRef 逐键覆盖（保住未覆盖键）
+          const stored = (rec.session?.modelRef && typeof rec.session.modelRef === 'object' && !Array.isArray(rec.session.modelRef)) ? rec.session.modelRef : {};
+          const override = (args?.modelRef && typeof args.modelRef === 'object' && !Array.isArray(args.modelRef)) ? args.modelRef : {};
+          const flat = {};
+          for (const k of ['engineId', 'providerId', 'modelId', 'option']) {
+            const v = override[k] !== undefined ? override[k] : stored[k];
+            if (v !== undefined && v !== null && v !== '') flat[k] = v;
+          }
+          const token = ensureSystemToken();
+          const sess = await obtainSessionCookie(token);
+          const headers = { 'Content-Type': 'application/json' };
+          if (sess) headers.Cookie = sess.cookie;
+          const payload = {
+            sessionId,
+            messageId: `m-cc-${Date.now().toString(36)}`,
+            prompt,
+            device: 'chat_continue（AI 续轮）',
+            ...flat,
+          };
+          const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/agent/start`, {
+            method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000),
+          });
+          const text = await resp.text().catch(() => '');
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch { /* */ }
+          if (!resp.ok) {
+            const errText = json?.error ?? (text.slice(0, 200) || 'unknown');
+            return { ok: false, stdout: '', stderr: `start 失败(${resp.status}): ${errText}` };
+          }
+          // 单飞冲突：runner 对「已有 run 在跑」的会话直接返回 existing，新 prompt 被忽略
+          if (json?.existing) {
+            return { ok: false, stdout: '', stderr: '目标会话已有 run 在执行中，本次 prompt 未投递——请用 sleep 等待其完成后再续轮' };
+          }
+          audit({ op: 'chat-continue', sessionId, originSessionId, modelRef: flat, runId: json?.runId ?? null });
+          return {
+            ok: true,
+            stdout: JSON.stringify({ ok: true, sessionId, runId: json?.runId ?? null, note: '下一轮已发起，runner 执行中；sleep 等待后用 chat_history read 查看（read 带 running 状态）' }),
+            stderr: '',
+          };
+        } catch (e) {
+          return { ok: false, stdout: '', stderr: String(e?.message ?? e) };
+        }
+      },
+    });
+
+    // sleep 工具（AI 可用）：等待原语——chat_start/chat_continue 异步工作流的配套。
+    // ------------------------------------------------------------------
+    // 动机（share3 实测痛点）：chat_start 发起的 run 异步执行，AI 只能连发
+    // 「再读一次」硬轮询。sleep 让 AI 以 sleep → chat_history read（带 running）
+    // 循环等待结果；任何长任务轮询也通用。随会话工具族放在 chat-store，
+    // 避免为单个工具新建插件。上限 120s/次：免审批工具不应长期占用 run
+    // 并发槽（MAX_CONCURRENT_RUNS）；更长等待由 AI 多次调用拼出。
+    // abort 感知：run 被中断时立即返回，不空等。
+    options.registry.registerTool({
+      name: 'sleep',
+      noApproval: true,
+      descriptor: {
+        type: 'function',
+        function: {
+          name: 'sleep',
+          description:
+            '等待指定秒数（1-120s）再继续。用于异步工作流轮询：chat_start / chat_continue 发起的会话正在执行时，' +
+            '先 sleep 再用 chat_history read 查看结果（read 返回 running=true 表示仍在执行，false 即已收敛）。' +
+            '需要更长等待就多次调用。',
+          parameters: {
+            type: 'object',
+            properties: { seconds: { type: 'number', description: '等待秒数（1-120 的整数）' } },
+            required: ['seconds'],
+          },
+        },
+      },
+      invoke: async ({ args, signal }) => {
+        const n = Math.floor(Number(args?.seconds));
+        if (!Number.isFinite(n) || n < 1 || n > 120) return { ok: false, stdout: '', stderr: 'seconds 需为 1-120 的整数' };
+        await new Promise((resolve) => {
+          const t = setTimeout(resolve, n * 1000);
+          t.unref?.();
+          if (signal) {
+            if (signal.aborted) { clearTimeout(t); resolve(); return; }
+            signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+          }
+        });
+        if (signal?.aborted) return { ok: false, stdout: '', stderr: '等待被中断（run 已终止）' };
+        return { ok: true, stdout: `已等待 ${n}s`, stderr: '' };
       },
     });
   }

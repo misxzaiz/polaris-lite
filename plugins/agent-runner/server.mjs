@@ -631,6 +631,13 @@ export function createServerPart(options = {}) {
     // finishRun 时 done。经 adapter-registry 的 chat-loop-state service 同进程直调
     // （写消息的 mergeMessages 同一通道），SSE 扇出让全设备侧栏徽标即时亮/灭。
     reportLoopState(run, 'start');
+    // 心跳（2026-11-28）：此前只有 start/done 两报，chat-store 20s 无心跳即 GC 摘牌——
+    // 长 bash / 浏览器 / sleep 等工具执行期间「执行中」徽标会中途消失（chat_history
+    // read 的 running 状态同样失真）。10s 一跳（< 20s 超时）保活，finishRun 统一清理。
+    run.heartbeatTimer = setInterval(() => {
+      try { reportLoopState(run, 'heartbeat'); } catch { /* 徽标链路失败静默 */ }
+    }, 10_000);
+    run.heartbeatTimer.unref?.();
     const { sessionId, assistantId } = run;
     const signal = run.controller.signal;
     let turn = 0; // try 块外声明：catch/finally 的 syncTurnToSession 也要引用
@@ -951,6 +958,7 @@ export function createServerPart(options = {}) {
     if (run.finished) return;
     run.finished = true;
     run.phase = 'done';
+    if (run.heartbeatTimer) { clearInterval(run.heartbeatTimer); run.heartbeatTimer = null; }
     reportLoopState(run, 'done'); // 「执行中」徽标摘除（在 finished 置位后，不进 catch 路径）
     fireHook('turn-end', { sessionId: run.sessionId });
     run.controller.abort(); // 兜底：中断残余上游流
