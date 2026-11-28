@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { useSessionStore, acceptServerVersion, forceOverrideServer, refreshNow, isToolCard } from './store';
 import { PlusIcon, TrashIcon, FolderIcon, RefreshIcon, PencilIcon, CloseIcon, PinIcon } from './icons';
 import { WorkspacePicker } from './WorkspacePicker';
+import { searchSessions as remoteSearch, type SearchHit } from './sync';
 
 /** 浮层根：宿主 SlotLayout 提供的 fixed 覆盖层（空态 pointer-events:none 放行，子元素恢复 auto）。
  *  侧栏 .chat-sessions 是滚动容器（无限滚动后长列表常滚离顶部），就地 absolute 渲染的
@@ -107,6 +108,7 @@ export function SessionSidebar() {
   const [refreshing, setRefreshing] = useState(false);
   /** 会话搜索词（P0-4） */
   const [query, setQuery] = useState('');
+
   /** 动作菜单打开中的会话 id（窄屏 ⋮ / 长按唤出） */
   const [menuFor, setMenuFor] = useState<string | null>(null);
   /** 长按计时器 + 长按生效时间戳（吞掉随后 600ms 内的 click，否则松手即切会话；自过期防残留） */
@@ -135,12 +137,33 @@ export function SessionSidebar() {
     try { await refreshNow(); } finally { setRefreshing(false); }
   };
 
-  // ---- 搜索过滤（P0-4）：标题 + 首条消息全文，客户端过滤零成本 ----
+  // ---- 搜索过滤（侧栏搜索升级 2026-11-28）：本地快筛 + 服务端全文扫档双路 ----
+  // 本地：标题 + 首条消息（零延迟，已同步的会话立即命中）；
+  // 远端：标题 + 全部消息正文（能翻出只在中后段聊过的内容），带 300ms 防抖。
+  // 两路去重合并（本地优先，远端只补本地没命中的 sessionId）。
   const q = query.trim().toLowerCase();
+  const [remoteHits, setRemoteHits] = useState<SearchHit[] | null>(null);
+  useEffect(() => {
+    if (!q) { setRemoteHits(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await remoteSearch(q);
+      if (!cancelled) setRemoteHits(r.ok ? r.data.hits : []);
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [q]);
+
   const filtered = useMemo(() => {
     if (!q) return sessions;
-    return sessions.filter((s) => `${s.title} ${s.messages[0]?.content ?? ''}`.toLowerCase().includes(q));
-  }, [sessions, q]);
+    const local = sessions.filter((s) => `${s.title} ${s.messages[0]?.content ?? ''}`.toLowerCase().includes(q));
+    const hitIds = new Set(local.map((s) => s.id));
+    for (const h of remoteHits ?? []) {
+      if (hitIds.has(h.sessionId)) continue;
+      const s = sessions.find((x) => x.id === h.sessionId);
+      if (s) local.push(s); // 已同步列表里存在但本地筛漏了 → 远端命中补回
+    }
+    return local;
+  }, [sessions, q, remoteHits]);
 
   // ---- 时间分组（无搜索词时）：今天 / 7 天内 / 更早（按创建时间，与排序口径一致） ----
   const grouped = useMemo(() => {

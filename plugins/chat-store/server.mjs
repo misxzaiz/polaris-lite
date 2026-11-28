@@ -694,6 +694,15 @@ export function createServerPart(options = {}) {
     try {
       const url = new URL(req.url, 'http://x');
 
+      // ---- 全文搜索（GET /api/chat/sessions?q=…）----
+      // 侧栏搜索升级（2026-11-28）：标题 + 全部消息正文（复用 AI 工具 chat_history
+      // 的 searchSessions 同一实现，mtime 缓存一致）。q 为空退化为常规索引。
+      if (pathname === '/api/chat/sessions' && req.method === 'GET' && url.searchParams.get('q')) {
+        const r = searchSessions(url.searchParams.get('q'));
+        if (r.error) return sendJson(400, { error: r.error, code: 'BAD_REQUEST' });
+        return sendJson(200, { hits: r.hits, total: r.total });
+      }
+
       // ---- 索引 ----
       if (pathname === '/api/chat/sessions' && req.method === 'GET') {
         const since = Number(url.searchParams.get('since') ?? 0) || 0;

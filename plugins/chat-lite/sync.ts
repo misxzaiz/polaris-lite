@@ -89,6 +89,21 @@ export function pullIndex(since?: number): Promise<{ ok: true; data: PullIndexRe
   return jsonFetch<PullIndexResult>(`${BASE}${q}`);
 }
 
+/** 全文搜索（侧栏搜索升级，2026-11-28）：服务端扫标题+全部消息正文，
+ *  返回 sessionId+命中片段。q 空时不要调（前端退化为本地过滤）。 */
+export interface SearchHit {
+  sessionId: string;
+  title: string;
+  msgCount: number;
+  updatedAt: number;
+  lastActiveAt: number;
+  matched: 'title' | 'body';
+  snippet: string;
+}
+export function searchSessions(q: string): Promise<{ ok: true; data: { hits: SearchHit[]; total: number } } | { ok: false; status: number }> {
+  return jsonFetch<{ hits: SearchHit[]; total: number }>(`${BASE}?q=${encodeURIComponent(q)}`);
+}
+
 export function pullSession(id: string): Promise<{ ok: true; data: SessionSnapshot } | { ok: false; status: number; code?: string }> {
   return jsonFetch<SessionSnapshot>(`${BASE}/${encodeURIComponent(id)}`);
 }
