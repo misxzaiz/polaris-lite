@@ -52,6 +52,23 @@ function kvKeyOf(target: string): string {
   return target === GLOBAL_ID ? 'global' : `session.${target}`;
 }
 
+/** 预设模板（一键填入编辑区，保存才生效）。开发纪律 = AGENTS.md 精简版
+ *  （2026-11-28 路线图「知识注入」项）：让 AI 做仓库/发版/验证类工作时
+ *  自带环境纪律，不用用户每次粘贴。 */
+const PRESETS: Array<{ label: string; text: string }> = [
+  {
+    label: '开发纪律',
+    text: [
+      '你正在协助开发 polaris-lite（本 App 自身，仓库 D:\\space\\base\\polaris-lite）。遵守以下纪律：',
+      '1. 环境判别只看端口：5000=开发（root/1234，随便改随便重启）；9825=生产（只读观察，禁止写入/重启/写测试数据）；9826=钉住的分析实例（允许写入重启）。',
+      '2. 动手前先用 git 工具看 status/diff：工作树常有用户未提交的 WIP，不碰未跟踪文件，不做 git checkout/reset --hard/clean（bash 硬规则也会拦）。',
+      '3. 发版只由用户执行 npm run release（commit→push→deploy:9826→build+restart 9825→三处一致终检）；你不执行 release/push/pm2 操作。',
+      '4. 改完前端/插件的验证链：npm run typecheck → npm test → npm run build:plugins；改插件 server 源码后 dev 需重启实例才生效。',
+      '5. 插件数据一律 cap.kv（服务端 sqlite），不用 localStorage；新增工具走 plugins/<id>/tool.mjs 注册（server 端点要收回环 Bearer）。',
+    ].join('\n'),
+  },
+];
+
 /* ---------------- 会话索引（chat-store 公开端点） ---------------- */
 
 interface SessionBrief {
@@ -164,6 +181,18 @@ export function SystemPromptPanel(): JSX.Element {
       />
       <div className="sp-foot">
         <span className={`sp-note ${note.startsWith('保存失败') ? 'sp-note-err' : ''}`}>{note}</span>
+        <span className="sp-presets">
+          {PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              className="sp-btn sp-btn-ghost"
+              onClick={() => { setDraft(p.text); setNote(`已填入「${p.label}」预设（需点保存才生效）`); }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </span>
         <button
           type="button"
           className="sp-btn sp-btn-ghost"

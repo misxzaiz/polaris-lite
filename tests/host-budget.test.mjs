@@ -64,11 +64,18 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *  布局职责回到插件 CSS（UA 默认样式 + 插件覆盖 margin/inset）。豁免随方案作废
  *  回滚，预算恢复 5345。
  * 2026-11-27 · 顶栏 chrome 外移（topbar 容器契约）：SlotLayout 顶栏渲染权经
- * containers 契约委托插件（与 slot-tabs/layout-root 同款机制；宿主保留抽屉状态
- * 权威 + 内置回退，types.ts 契约 +17、SlotLayout 委托 +18）。业务（会话标题等）
- * 全在 session-hud 插件里，核心零业务不变。CORE_BUDGET 5345 → 5385。
+ containers 契约委托插件（与 slot-tabs/layout-root 同款机制；宿主保留抽屉状态
+ 权威 + 内置回退，types.ts 契约 +17、SlotLayout 委托 +18）。业务（会话标题等）
+ 全在 session-hud 插件里，核心零业务不变。CORE_BUDGET 5345 → 5385。
+ * 2026-11-28 · 渲染崩溃加固（P0 审计六层保底的宿主层）：src/core/ErrorBoundary.tsx
+ 新增（约 +155 行）——根级 app 边界（SlotLayout 崩溃给可读兜底不再白屏）、面板级
+ panel 边界（SlotEntryView 统一包裹，单插件面板中毒只降级该面板）、window error/
+ unhandledrejection 全局监听（React 边界外的异步错误留底+通知中心 toast，节流）。
+ 边界必须宿主持有：插件互相不可见、崩溃隔离恰是宿主职责；消息级/工具卡级边界
+ 留在 chat-lite 插件内（MessageBoundary 已有、CardBoundary 新增）。CORE_BUDGET
+ 5385 → 5460。
  */
-const CORE_BUDGET = 5385;
+const CORE_BUDGET = 5460;
 
 /** 计入预算的根（src/ + server/） */
 const SCOPES = ['src', 'server'];

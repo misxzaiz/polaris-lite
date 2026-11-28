@@ -20,6 +20,7 @@ import { useEffect, useState } from 'react';
 import type { SlotId } from './types';
 import { host } from './hostRuntime';
 import { getRuntimeComponent } from './externalPlugins';
+import { ErrorBoundary } from './ErrorBoundary';
 import type { TabChromeProps } from './types';
 import { orderEntriesByUserOrder, orderEntriesWithPins, slotSupportsTabs } from './slotRegistry';
 
@@ -89,7 +90,11 @@ function SlotEntryView({ pluginId, component, slot }: { pluginId: string; compon
   }
   return (
     <div className={`slot slot-${slot}`} data-slot={slot} data-plugin={pluginId}>
-      <Comp />
+      {/* 面板级边界（六层保底第 2 层）：一个插件面板渲染中毒只降级该面板，
+          壳层与其余面板照常（2026-11-28 P0 渲染崩溃审计实施） */}
+      <ErrorBoundary variant="panel" label={pluginId}>
+        <Comp />
+      </ErrorBoundary>
     </div>
   );
 }

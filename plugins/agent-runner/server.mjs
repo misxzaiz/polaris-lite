@@ -881,6 +881,12 @@ export function createServerPart(options = {}) {
           const { call, callId, display } = p;
           const toolInput = parseArgs(call.arguments);
           fireHook('pre-tool-use', { sessionId, toolName: call.name, toolInput });
+          // 插件级强制审批钩子（机制在 runner、策略在插件）：适配器可对特定形态的
+          // 调用要求审批卡，且不被 yolo / 会话白名单豁免——agent-files 用它实现
+          // 「git 仓库内的写一律审批」（安全闸门 2026-11-28）。
+          const forcedApproval = typeof p.adapter?.needsApproval === 'function'
+            ? (await p.adapter.needsApproval({ args: toolInput, run, call }) === true)
+            : false;
           // 审批：confirm/allowlist 模式由服务端挂起；yolo 直接放行（与 agent-bash 裁决一致）。
           // 会话级白名单：always=按 approvalKey 前缀；trust=按工具名（run 内内存态）。
           const mode = readToolMode();
@@ -888,7 +894,8 @@ export function createServerPart(options = {}) {
           const allowlisted = mode.allowPrefixes.some((pre) => approvalKey === pre || approvalKey.startsWith(`${pre} `))
             || (run.sessionAllow?.has(approvalKey) ?? false)
             || (run.sessionAllow?.has(`tool:${call.name}`) ?? false);
-          const needApproval = (mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted)) && !allowlisted;
+          const needApproval = forcedApproval
+            || ((mode.mode === 'confirm' || (mode.mode === 'allowlist' && !allowlisted)) && !allowlisted);
           let verdict = 'ok';
           if (needApproval) verdict = await askApproval(run, call, display);
           if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }

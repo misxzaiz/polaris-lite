@@ -85,3 +85,11 @@
 .sp-note-err {
   color: var(--plite-danger, #c33);
 }
+
+/* 预设模板按钮组（2026-11-28）：底部与提示语并排，窄屏可换行 */
+.sp-presets {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}

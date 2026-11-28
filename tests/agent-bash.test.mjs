@@ -72,6 +72,23 @@ const MUST_PASS = [
   "powershell -NoProfile -Command \"Remove-Item -Path 'x.txt' -Force\"",
   'echo format', // format 只是字符串
   "printf '%s\\n' '# AI Engine Plugin Contract'",
+  // ── 安全闸门近形命令防误伤（denylist format 教训：锚定要精准）──
+  'git status',
+  'git log --oneline -5',
+  'git diff --stat',
+  'git add plugins/x.mjs',
+  'git commit -m "fix: x"',
+  'git reset HEAD -- plugins/x.mjs',
+  'git clean -n',
+  'git checkout-branch.txt', // 无空格：不是 checkout 子命令
+  'npm test',
+  'npm run typecheck',
+  'npm run build:plugins',
+  'npm run dev:standalone',
+  'pm2 ls',
+  'pm2 status',
+  'pm2 logs --lines 20',
+  'cat docs/git-switch-guide.md',
 ];
 
 // ── denylist：必须拦截（含 PowerShell/cmd 等价物）────────────────────
@@ -104,6 +121,34 @@ const MUST_DENY = [
   'echo x > .polaris-lite/providers.json',
   'powershell -NoProfile -Command "Set-MpPreference -DisableRealtimeMonitoring $true"',
   'powershell -NoProfile -Command "iex (Get-Content evil.ps1)"',
+  // ── 安全闸门（2026-11-28）：发版/切分支/丢 WIP/pm2 变更，yolo 也不可豁免 ──
+  'git checkout main',
+  'git checkout -- plugins/x.mjs',
+  'git -C D:/space/base/polaris-lite checkout main',
+  'git switch -c ai-branch',
+  'git restore plugins/x.mjs',
+  'git restore --staged x.mjs',
+  'git reset --hard HEAD~1',
+  'git reset --hard origin/master',
+  'git clean -fd',
+  'git clean -df .tmp',
+  'git clean --force',
+  'git push origin master',
+  'git push --force origin master',
+  'git -C . push',
+  'npm run release',
+  'npm run release -- --dry',
+  'npm run deploy:9826',
+  'npm run soft:9826',
+  'pnpm run release',
+  'node scripts/release.mjs',
+  'node scripts/deploy-9826.mjs status',
+  'node scripts/soft-deploy-9826.mjs',
+  'pm2 restart polaris-lite-9825',
+  'pm2 delete polaris-lite-9826',
+  'pm2 kill',
+  'npx pm2 resurrect',
+  'git add x.mjs && git commit -m x && git push',
 ];
 
 // ── denylist 纯函数断言（基于 server.mjs 导出的探测结果不可行——DENYLIST 未导出，

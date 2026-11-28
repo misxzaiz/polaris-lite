@@ -12,6 +12,7 @@
  *   与 renderBlocks 的 owner 映射口径分叉致组序号漂移，groups[漂移号] 越界读
  *   items → 整页白屏；含多次自动续写的长工具轮次会话打开即崩）。
  */
+import { Component } from 'react';
 import { Fragment, useEffect, useState } from 'react';
 import { CHANNEL_ARTIFACT_RENDERERS, CHANNEL_ARTIFACT_TOOL_NAMES } from '@sdk';
 import { Markdown } from './markdown';
@@ -19,9 +20,40 @@ import type { AsstBlock, ArtifactCardData, ToolCardData, ToolCardMessage } from 
 import { ToolCard } from './ToolCard';
 import { InteractiveCard } from './InteractiveCard';
 
+/**
+ * 单卡渲染隔离罩（六层保底第 3 层，2026-11-28）：一张毒卡只降级一张卡，
+ * 不再拖垮整条消息——消息级 MessageBoundary 的粒度细化。
+ * 本地 class 而非引宿主 core：插件唯一宿主依赖面是 @sdk（类型/常量），架构门禁。
+ */
+class CardBoundary extends Component<{ callId?: string; children: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) {
+    console.error('[chat-lite] 工具卡渲染失败，已降级:', this.props.callId ?? '?', error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          role="alert"
+          data-testid="toolcard-render-error"
+          style={{ fontSize: 12, color: 'var(--plite-danger, #c0392b)', opacity: 0.85, padding: '2px 0', wordBreak: 'break-all' }}
+        >
+          工具卡渲染出错，已跳过（{this.state.error.message}）
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /** ToolCard 契约是 ToolCardMessage（msg.tool）；块内只有 card 数据——shim 适配 */
 function CardShim({ card }: { card: ToolCardData }) {
-  return <ToolCard msg={{ id: '', role: 'tool', content: '', createdAt: 0, tool: card } as ToolCardMessage} />;
+  return (
+    <CardBoundary callId={card.callId}>
+      <ToolCard msg={{ id: '', role: 'tool', content: '', createdAt: 0, tool: card } as ToolCardMessage} />
+    </CardBoundary>
+  );
 }
 
 type ToolBlock = Extract<AsstBlock, { type: 'tool' }>;

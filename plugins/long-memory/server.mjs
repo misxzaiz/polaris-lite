@@ -128,6 +128,34 @@ export function createServerPart(options = {}) {
   const hardOff = process.env.PLITE_LONG_MEMORY === '0';
   const kv = () => registry?.getService?.('kv-store') ?? null;
 
+  // ---- 0. 内置纪律种子（2026-11-28 路线图「知识注入」项，幂等 + 惰性）----
+  // 环境纪律/发版纪律/协作纪律/验证链四条。两个约束：
+  //  - 幂等：kv 标记键存在即跳过（用户删除单条种子不会复活——标记在整体层面）；
+  //  - 惰性：不能在 createServerPart 装配期写 kv——测试环境装配全部 server 半边时
+  //    会凭空打开临时数据目录的 sqlite（句柄不关），测试清理 rmSync 撞 EPERM
+  //    （2026-11-28 server-boundary 两例实测）。首次真正消费 service 才种。
+  let seedChecked = false;
+  const ensureSeeded = () => {
+    if (seedChecked) return;
+    seedChecked = true;
+    try {
+      const k = kv();
+      if (!k || k.get(NS, 'seed.env-discipline-v1')) return;
+      const now = Date.now();
+      const seeds = [
+        { text: '环境判别只看端口：5000=开发（root/1234，可随便改可重启）；9825=生产（只读观察，禁止写入/重启/写测试数据）；9826=钉住的分析实例（允许写入重启）。', kind: 'config', reason: '内置种子：环境纪律' },
+        { text: '发版只由用户执行 npm run release（commit→push→deploy:9826→build+restart 9825→三处一致终检）；AI 不执行 release/push/checkout/pm2 操作（bash 硬规则会拦）。', kind: 'config', reason: '内置种子：发版纪律' },
+        { text: '工作树常有用户未提交的 WIP：动手前先用 git 工具看 status/diff，不碰未跟踪文件；git 工具只读，提交/切分支走面板或 bash 审批链。', kind: 'config', reason: '内置种子：协作纪律' },
+        { text: '改完前端/插件的验证链：npm run typecheck → npm test → npm run build:plugins；改插件 server 源码后 dev 需重启实例才生效。', kind: 'config', reason: '内置种子：验证链' },
+      ];
+      for (const s of seeds) {
+        const item = { id: newId(), text: s.text, kind: s.kind, reason: s.reason, createdAt: now, updatedAt: now };
+        k.set(NS, `item.${item.id}`, item);
+      }
+      k.set(NS, 'seed.env-discipline-v1', String(now));
+    } catch { /* 种子失败不阻塞消费 */ }
+  };
+
   // ---- 1. service 表注册（seedShadow 消费）----
   if (registry?.registerService && !registry.getService?.('long-memory')) {
     registry.registerService('long-memory', {
@@ -135,6 +163,7 @@ export function createServerPart(options = {}) {
       get() {
         try {
           if (hardOff) return null;
+          ensureSeeded();
           return buildInjectText(kv());
         } catch {
           return null;
@@ -144,6 +173,7 @@ export function createServerPart(options = {}) {
       settings() {
         try {
           if (hardOff) return { enabled: false, injectLimit: DEFAULT_INJECT_LIMIT, hardOff: true };
+          ensureSeeded();
           return { ...settingsOf(kv()), count: itemsOf(kv()).length };
         } catch {
           return { enabled: false, injectLimit: DEFAULT_INJECT_LIMIT, count: 0 };
@@ -226,6 +256,7 @@ export function createServerPart(options = {}) {
 
       // GET /api/long-memory/settings → { enabled, injectLimit, count }
       if (pathname === '/api/long-memory/settings' && req.method === 'GET') {
+        ensureSeeded();
         return sendJson(200, { ...settingsOf(k), count: itemsOf(k).length });
       }
 

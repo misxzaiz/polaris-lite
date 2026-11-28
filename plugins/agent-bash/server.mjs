@@ -61,6 +61,17 @@ const DENYLIST = [
   /[>|]+\s*.*\.polaris-lite[\\/](providers|auth-owner|tool-exec)/i, // 写核心数据文件
   /\b(Add-MpPreference|Set-MpPreference)\b/i,                 // Defender 排除项
   /\b(Invoke-Expression|iex)\b/i,
+  // ── 仓库/发布破坏性操作（安全闸门 2026-11-28：AI 永不执行发版/切分支/丢 WIP/pm2）──
+  // 教训：工作树常有用户未提交 WIP；checkout/reset --hard/clean 会无声销毁它。
+  // 发版必须走 npm run release（人审），AI 直推直发会造成三环境版本漂移（5367064 事故）。
+  // (?![\w-]) 防文件名误伤（git checkout-branch.txt 的 checkout- 前缀是词边界假象）。
+  /\bgit\s+(-C\s+\S+\s+)?(checkout|switch|restore)(?![\w-])/i, // 切分支/丢弃改动（含 git -C 形态）
+  /\bgit\s+(-C\s+\S+\s+)?reset\s+[^\n]*--hard\b/i,            // reset --hard 丢 WIP（裸 reset=取消暂存，放行）
+  /\bgit\s+(-C\s+\S+\s+)?clean\b[^\n]*(-[a-z]*f|--force)/i,   // clean -f 删未跟踪文件
+  /\bgit\s+(-C\s+\S+\s+)?push(?![\w-])/i,                     // AI 不 push——发版一律走 npm run release
+  /\b(npm|pnpm|yarn)\s+run\s+(release|deploy(:9826)?|soft:9826)\b/i, // 发版/部署组合禁手工拼
+  /\bnode\s+[^\n;|&]*scripts[\\/](release|deploy-9826|soft-deploy-9826)\.mjs/i, // 直跑发版脚本同样拦
+  /\b(npx\s+)?pm2\s+(kill|delete|restart|stop|reload|resurrect|start|update|save|startup)\b/i, // pm2 变更（ls/status/logs 放行）
 ];
 
 /** 命令替换检测（借鉴 Gemini CLI shell-utils 的 detectCommandSubstitution）：

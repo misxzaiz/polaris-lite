@@ -58,9 +58,24 @@ function inZone(p, zone) {
 
 import { registerFilesWriteTool } from './tool.mjs';
 
+/** 写目标是否落在 git 仓库内（目标或其任一祖先存在 .git，向上最多 24 级）。
+ *  安全闸门（2026-11-28）：仓库写入一律审批卡——不靠配置标记，按 .git 自动识别，
+ *  dev/生产行为一致，新登记根零配置生效。内建 workspace 不是仓库，不受影响。
+ *  导出仅供测试（同 agent-bash 的 detectCommandSubstitution 惯例）。 */
+export function inGitRepo(real) {
+  let dir = real;
+  for (let i = 0; i < 24; i += 1) {
+    if (existsSync(resolve(dir, '.git'))) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  return false;
+}
+
 export function createServerPart(options = {}) {
   // 工具声明随插件：启用本插件即注册 files_write 工具；禁用即消失。
-  if (options.registry) registerFilesWriteTool(options.registry);
+  if (options.registry) registerFilesWriteTool(options.registry, { needsWriteApproval });
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
@@ -162,6 +177,15 @@ export function createServerPart(options = {}) {
       if (inZone(real, z)) return { error: `禁止写入：${z}`, code: 'FORBIDDEN' };
     }
     return { real };
+  }
+
+  /** needsApproval 策略（注入 tool.mjs；tool.mjs 不能 import node:fs，判定住这边）：
+   *  解析「写目标」，落点在 git 仓库内 → 一律审批卡（yolo/会话信任不豁免）。
+   *  解析失败按不拦放行（执行期会给出确切错误，不在审批层猜测）。 */
+  function needsWriteApproval(rootId, path) {
+    const chk = resolveSafeWritePath(rootId ?? '', path ?? '');
+    if (chk.error) return false;
+    return inGitRepo(chk.real);
   }
 
   function detectLineEndings(content) {

@@ -15,8 +15,13 @@ import { viewRegistry } from '@/core/workspace/viewRegistry';
 import { pushNotice } from '@/core/shellState';
 import { t } from '@/core/i18n';
 import { getRuntimeComponent, loadExternalPlugins } from '@/core/externalPlugins';
+import { ErrorBoundary, installGlobalErrorListeners } from '@/core/ErrorBoundary';
 import '@/plite-tokens.css';
 import '@/styles.css';
+
+// 全局运行时错误监听（React 边界外的异步错误此前完全无痕）：console 留底 +
+// 通知中心 toast（节流）。P0 渲染崩溃审计 · 六层保底第 5 层，2026-11-28。
+installGlobalErrorListeners();
 
 /** 启动告警：不再渲染壳层顶部（2026-11-27 用户禁令），经 shellState.pushNotice
  *  派发 DOM 事件 → notification-center 弹 toast + 落 inbox 可回看；console 同步留底。 */
@@ -105,10 +110,13 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  // 4. 渲染壳层（布局主体委托 layout-root 容器;无插件时回退固定四槽）
+  // 4. 渲染壳层（布局主体委托 layout-root 容器;无插件时回退固定四槽）。
+  //    根级边界（六层保底第 1 层）：运行期渲染崩溃给可读兜底+重载，不再白屏。
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <SlotLayout />
+      <ErrorBoundary variant="app" label="根布局">
+        <SlotLayout />
+      </ErrorBoundary>
     </StrictMode>,
   );
 }
