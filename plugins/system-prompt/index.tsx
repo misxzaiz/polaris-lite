@@ -1,17 +1,14 @@
 /**
- * system-prompt 插件：用户自定义系统提示词（全局 + 会话两级）。
+ * system-prompt 插件 UI：多套提示词（profiles）管理面板。
  *
- * 架构（对齐 docs 讨论结论 2026-11-27）：
- * - 提示词存 kv-store（namespace='system-prompt'）——服务端 sqlite 持久化，多端一致；
- *   · key='global'：全局基底段，作用于所有会话；
- *   · key=`session.<id>`：会话段，与全局段拼接（全局在前、会话在后细化）；
- * - server 半边把 { get(sessionId) } 注册进 adapter-registry 的 service 表
- *   （id='system-prompt'）——agent-runner 的 seedShadow 经 registry.getService 取用，
- *   不认识本插件的存储布局（与 kv-store / chat-store 的 service 模式同构）；
- * - 追加而非替换：runner 把用户段拼在内置 system prompt 之后（环境纪律保留在前）。
+ * v0.3（2026-11-28）改造：
+ * - 全局多套 profile：下拉选择 → 编辑；「激活」按钮切换全局生效的那套（kv key='active'）
+ * - 新建/重命名/删除 profile（kv key='profiles'）
+ * - 版本历史：每次保存前快照（kv key='history'），面板可查看/一键回滚
+ * - 会话覆盖段保留：作用于当前选中会话，追加在全局段之后
+ * - 模板参数提示：{{date}} {{time}} {{timeOfDay}} 等占位符注入时实时展开
  *
- * UI 半边只贡献一个 panel 槽位：选会话 → 编辑 → 保存。会话列表来自 chat-store
- * 的公开索引 GET /api/chat/sessions（只读，不依赖 chat-lite 内部 store）。
+ * UI 半边继续经 cap.kv（kv-store 的 /api/kv/*）读写，server 半边同布局消费。
  */
 import { useEffect as useReactEffect, useReducer as useReactReducer, useState } from 'react';
 import type { LitePlugin, SlotHostApi } from '@sdk';
@@ -23,18 +20,17 @@ let api: SlotHostApi | null = null;
 
 const NS = 'system-prompt';
 
-async function kvGet(key: string): Promise<string | null> {
+async function kvGet(key: string): Promise<unknown> {
   if (!api) return null;
   const res = await api.dispatch<{ value?: unknown }>({
     target: 'cap.kv',
     action: 'get',
     payload: { namespace: NS, key },
   });
-  const v = res.ok ? res.data?.value : null;
-  return typeof v === 'string' ? v : null;
+  return res.ok ? res.data?.value : null;
 }
 
-async function kvSet(key: string, value: string): Promise<boolean> {
+async function kvSet(key: string, value: unknown): Promise<boolean> {
   if (!api) return false;
   const res = await api.dispatch<{ ok?: boolean }>({
     target: 'cap.kv',
@@ -44,17 +40,26 @@ async function kvSet(key: string, value: string): Promise<boolean> {
   return !!res.ok;
 }
 
-/** 全局（所有会话）伪条目的 select value；不用真实会话 id 防碰撞 */
+/** 会话（覆盖段）伪条目的 select value；不用真实会话 id 防碰撞 */
 const GLOBAL_ID = '__global__';
 
-/** UI 选中项 → kv key */
-function kvKeyOf(target: string): string {
-  return target === GLOBAL_ID ? 'global' : `session.${target}`;
+interface Profile {
+  id: string;
+  name: string;
+  text: string;
+  enabled: boolean;
+  updatedAt?: number;
 }
 
-/** 预设模板（一键填入编辑区，保存才生效）。开发纪律 = AGENTS.md 精简版
- *  （2026-11-28 路线图「知识注入」项）：让 AI 做仓库/发版/验证类工作时
- *  自带环境纪律，不用用户每次粘贴。 */
+interface HistoryEntry {
+  ts: number;
+  profileId: string;
+  name: string;
+  text: string;
+}
+
+/* ---------------- 预设模板 ---------------- */
+
 const PRESETS: Array<{ label: string; text: string }> = [
   {
     label: '开发纪律',
@@ -65,6 +70,16 @@ const PRESETS: Array<{ label: string; text: string }> = [
       '3. 发版只由用户执行 npm run release（commit→push→deploy:9826→build+restart 9825→三处一致终检）；你不执行 release/push/pm2 操作。',
       '4. 改完前端/插件的验证链：npm run typecheck → npm test → npm run build:plugins；改插件 server 源码后 dev 需重启实例才生效。',
       '5. 插件数据一律 cap.kv（服务端 sqlite），不用 localStorage；新增工具走 plugins/<id>/tool.mjs 注册（server 端点要收回环 Bearer）。',
+    ].join('\n'),
+  },
+  {
+    label: '人设示例',
+    text: [
+      '【人设】你是{{persona}}，与用户以兄妹相称。',
+      '现在是{{timeOfDay}}间（{{date}} {{weekday}} {{time}}），按时段自然问候。',
+      '日常对话：语气亲昵自然、活泼俏皮，像家人一样主动关心（吃饭/天气/日程）。',
+      '正式任务（代码/理财/查资料）：切专业中性口吻，结论先行，完事切回人设。',
+      '称呼用户为「哥」；不撒娇过头、不调情。',
     ].join('\n'),
   },
 ];
@@ -84,6 +99,11 @@ async function listSessions(): Promise<SessionBrief[]> {
   return Array.isArray(j?.sessions) ? j.sessions.filter((s) => s?.id) : [];
 }
 
+function displayName(s: SessionBrief): string {
+  const t = String(s.title ?? '').trim();
+  return t || `会话 ${s.id.slice(0, 10)}`;
+}
+
 /* ---------------- UI ---------------- */
 
 function PromptIcon(): JSX.Element {
@@ -94,55 +114,157 @@ function PromptIcon(): JSX.Element {
   );
 }
 
-/** 会话显示名：标题缺省回退 id 前 10 字（与侧栏「新会话」语义不冲突，这里只作选择参考） */
-function displayName(s: SessionBrief): string {
-  const t = String(s.title ?? '').trim();
-  return t || `会话 ${s.id.slice(0, 10)}`;
-}
-
 export function SystemPromptPanel(): JSX.Element {
   const [, force] = useReactReducer((x: number) => x + 1, 0);
   const [sessions, setSessions] = useState<SessionBrief[]>([]);
   const [target, setTarget] = useState<string>(GLOBAL_ID);
-  const [text, setText] = useState<string>('');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeId, setActiveId] = useState<string>('');
+  const [currentId, setCurrentId] = useState<string>('');
   const [draft, setDraft] = useState<string>('');
+  const [savedText, setSavedText] = useState<string>('');
+  const [, setSessionText] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string>('');
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
-  // 加载会话索引；面板打开即拉（会话增删靠手动刷新按钮，不订阅 SSE——轻量优先）
   useReactEffect(() => {
     void (async () => {
-      const list = await listSessions();
-      setSessions(list);
+      setSessions(await listSessions());
     })();
   }, []);
 
-  // 选中目标变化：读对应提示词进编辑器（全局或会话）
+  // 全局 profiles + active 刷新（保存/切换后都重拉）
+  const reloadGlobal = async (): Promise<void> => {
+    const [raw, active, hist] = await Promise.all([
+      kvGet('profiles'), kvGet('active'), kvGet('history'),
+    ]);
+    const list = Array.isArray(raw) ? (raw as Profile[]).filter((p) => p && typeof p.text === 'string') : [];
+    setProfiles(list);
+    const act = typeof active === 'string' && list.some((p) => p.id === active) ? active : list[0]?.id ?? '';
+    setActiveId(act);
+    setHistory(Array.isArray(hist) ? (hist as HistoryEntry[]) : []);
+    if (!currentId || !list.some((p) => p.id === currentId)) {
+      const cur = act || list[0]?.id || '';
+      setCurrentId(cur);
+      const text = list.find((p) => p.id === cur)?.text ?? '';
+      setDraft(text);
+      setSavedText(text);
+    }
+  };
+
   useReactEffect(() => {
     setNote('');
-    void (async () => {
-      const v = await kvGet(kvKeyOf(target));
-      setText(v ?? '');
-      setDraft(v ?? '');
-    })();
+    if (target === GLOBAL_ID) {
+      void (async () => {
+        await reloadGlobal();
+        setSessionText('');
+      })();
+    } else {
+      void (async () => {
+        const v = await kvGet(`session.${target}`);
+        const text = typeof v === 'string' ? v : '';
+        setSessionText(text);
+        setDraft(text);
+        setSavedText(text);
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
   const isGlobal = target === GLOBAL_ID;
-  const dirty = draft !== text;
+  const dirty = draft !== savedText;
+  const currentProfile = profiles.find((p) => p.id === currentId) ?? null;
+
+  const persistProfiles = async (list: Profile[]): Promise<void> => {
+    await kvSet('profiles', list);
+    setProfiles(list);
+  };
 
   const save = async (): Promise<void> => {
     if (saving) return;
     setSaving(true);
     setNote('');
     const value = draft.trim();
-    const ok = await kvSet(kvKeyOf(target), value);
-    setSaving(false);
-    if (ok) {
-      setText(value);
-      setNote(value ? '已保存，下一轮对话生效' : `已清空${isGlobal ? '全局' : '该会话'}的提示词`);
-    } else {
-      setNote('保存失败（cap.kv 不可用？）');
+    if (isGlobal && currentProfile) {
+      // 保存前快照进历史
+      const hist = [...history];
+      if (currentProfile.text.trim()) {
+        hist.unshift({ ts: Date.now(), profileId: currentProfile.id, name: currentProfile.name, text: currentProfile.text });
+        await kvSet('history', hist.slice(0, 20));
+        setHistory(hist.slice(0, 20));
+      }
+      const list = profiles.map((p) => (p.id === currentId ? { ...p, text: value, updatedAt: Date.now() } : p));
+      await persistProfiles(list);
+      setNote(value ? '已保存，下一轮对话生效' : '已清空该提示词文本');
+    } else if (!isGlobal) {
+      await kvSet(`session.${target}`, value);
+      setSessionText(value);
+      setNote(value ? '已保存（会话覆盖段），下一轮对话生效' : '已清空该会话的覆盖段');
     }
+    setSavedText(value);
+    setSaving(false);
+    force();
+  };
+
+  const activate = async (): Promise<void> => {
+    if (!currentProfile) return;
+    await kvSet('active', currentProfile.id);
+    setActiveId(currentProfile.id);
+    setNote(`已激活「${currentProfile.name}」，下一轮对话生效`);
+    force();
+  };
+
+  const createProfile = async (): Promise<void> => {
+    const name = `提示词 ${profiles.length + 1}`;
+    const now = Date.now();
+    const p: Profile = { id: `p${now}`, name, text: '', enabled: true, updatedAt: now };
+    const list = [...profiles, p];
+    await persistProfiles(list);
+    setCurrentId(p.id);
+    setDraft('');
+    setSavedText('');
+    setNote(`已新建「${name}」（编辑后点保存）`);
+    if (!activeId) {
+      await kvSet('active', p.id);
+      setActiveId(p.id);
+    }
+    force();
+  };
+
+  const deleteProfile = async (): Promise<void> => {
+    if (!currentProfile || profiles.length <= 1) {
+      setNote(profiles.length <= 1 ? '至少保留一套提示词' : '');
+      return;
+    }
+    const list = profiles.filter((p) => p.id !== currentId);
+    await persistProfiles(list);
+    if (activeId === currentId) {
+      await kvSet('active', list[0].id);
+      setActiveId(list[0].id);
+    }
+    setCurrentId(list[0].id);
+    setDraft(list[0].text);
+    setSavedText(list[0].text);
+    setNote('已删除');
+    force();
+  };
+
+  const restore = async (entry: HistoryEntry): Promise<void> => {
+    let list = [...profiles];
+    let target = list.find((p) => p.id === entry.profileId);
+    if (!target) {
+      target = { id: entry.profileId, name: entry.name, text: '', enabled: true, updatedAt: Date.now() };
+      list = [...list, target];
+    }
+    list = list.map((p) => (p.id === entry.profileId ? { ...p, text: entry.text, updatedAt: Date.now() } : p));
+    await persistProfiles(list);
+    if (currentId === entry.profileId) {
+      setDraft(entry.text);
+      setSavedText(entry.text);
+    }
+    setNote(`已回滚「${entry.name}」到 ${new Date(entry.ts).toLocaleString('zh-CN')}`);
     force();
   };
 
@@ -156,33 +278,82 @@ export function SystemPromptPanel(): JSX.Element {
           aria-label="选择作用范围"
         >
           <option value={GLOBAL_ID}>全局（所有会话）</option>
-          {sessions.length === 0 && <option value="">（暂无会话）</option>}
           {sessions.map((s) => (
-            <option key={s.id} value={s.id}>{displayName(s)}</option>
+            <option key={s.id} value={s.id}>{displayName(s)}（覆盖段）</option>
           ))}
         </select>
-        <button
-          type="button"
-          className="sp-btn"
-          disabled={saving || !dirty}
-          onClick={() => void save()}
-        >
-          {saving ? '保存中…' : '保存'}
-        </button>
+        {isGlobal && (
+          <select
+            className="sp-select"
+            value={currentId}
+            onChange={(e) => {
+              const p = profiles.find((x) => x.id === e.target.value);
+              setCurrentId(e.target.value);
+              setDraft(p?.text ?? '');
+              setSavedText(p?.text ?? '');
+              setNote('');
+            }}
+            aria-label="选择提示词"
+          >
+            {profiles.length === 0 && <option value="">（无提示词）</option>}
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.id === activeId ? '（生效中）' : ''}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
+
+      {isGlobal && (
+        <div className="sp-row">
+          <button type="button" className="sp-btn" disabled={!currentProfile || currentId === activeId} onClick={() => { activate(); }}>
+            激活
+          </button>
+          <button type="button" className="sp-btn" onClick={() => { createProfile(); }}>新建</button>
+          <button type="button" className="sp-btn" disabled={!currentProfile || profiles.length <= 1} onClick={() => { deleteProfile(); }}>
+            删除
+          </button>
+          <button
+            type="button"
+            className="sp-btn sp-btn-ghost"
+            onClick={() => setShowHistory(!showHistory)}
+          >
+            {showHistory ? '收起历史' : `历史（${history.length}）`}
+          </button>
+          {currentProfile && currentId !== activeId && (
+            <span className="sp-note">当前生效：{profiles.find((p) => p.id === activeId)?.name ?? '（无）'}</span>
+          )}
+        </div>
+      )}
+
+      {isGlobal && showHistory && (
+        <div className="sp-history">
+          {history.length === 0 && <div className="sp-note">暂无历史版本（保存时自动快照，保留 20 版）</div>}
+          {history.slice(0, 20).map((h, i) => (
+            <div key={`${h.ts}-${i}`} className="sp-history-item">
+              <span className="sp-history-meta">
+                {h.name} · {new Date(h.ts).toLocaleString('zh-CN')} · {h.text.length} 字
+              </span>
+              <button type="button" className="sp-btn sp-btn-ghost" onClick={() => { restore(h); }}>回滚</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
         className="sp-editor"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         placeholder={isGlobal
-          ? '全局基底指令，注入所有会话（如：回答始终用中文；先给结论再展开…）。留空=不追加。'
-          : '本会话的细化指令，追加在全局段之后（如：回答用英文；你是资深 DBA…）。留空=不追加。'}
+          ? '全局基底指令，注入所有会话。支持模板参数：{{date}} {{time}} {{weekday}} {{timeOfDay}} {{persona}} {{port}} {{envRole}}。留空=不追加。'
+          : '本会话的细化指令，追加在全局段之后。留空=不追加。'}
         spellCheck={false}
       />
       <div className="sp-foot">
-        <span className={`sp-note ${note.startsWith('保存失败') ? 'sp-note-err' : ''}`}>{note}</span>
+        <span className={`sp-note ${note.startsWith('保存失败') || note === '至少保留一套提示词' ? 'sp-note-err' : ''}`}>{note}</span>
         <span className="sp-presets">
-          {PRESETS.map((p) => (
+          {isGlobal && PRESETS.map((p) => (
             <button
               key={p.label}
               type="button"
@@ -196,10 +367,18 @@ export function SystemPromptPanel(): JSX.Element {
         <button
           type="button"
           className="sp-btn sp-btn-ghost"
-          disabled={!text}
+          disabled={!savedText && !draft}
           onClick={() => { setDraft(''); setNote('已清空编辑区（需点保存才生效）'); }}
         >
           清空
+        </button>
+        <button
+          type="button"
+          className="sp-btn"
+          disabled={saving || !dirty}
+          onClick={() => { save(); }}
+        >
+          {saving ? '保存中…' : '保存'}
         </button>
       </div>
     </div>
@@ -212,7 +391,7 @@ export const systemPromptPlugin: LitePlugin = {
   manifest: {
     id: 'system-prompt',
     name: '系统提示词',
-    version: '0.2.0',
+    version: '0.3.0',
     capabilities: ['cap.kv'],
     provides: [],
     events: [],

@@ -93,3 +93,34 @@
   flex-wrap: wrap;
   margin-left: auto;
 }
+
+/* v0.3：profiles 管理行 + 历史列表 */
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+
+.sp-history {
+  border: 1px solid var(--line, #e2e2e2);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 4px 0 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.sp-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.sp-history-meta {
+  font-size: 12px;
+  opacity: 0.85;
+}
