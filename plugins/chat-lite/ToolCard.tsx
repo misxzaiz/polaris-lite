@@ -208,6 +208,8 @@ function bootstrapSource() {
   let full = '';
   let lastHead = '';
   let lastBody = '';
+  let follow = true; // 贴底跟滚：内容长到哪看到哪；用户触摸/滚轮接管后暂停
+  let takeOverUntil = 0; // 接管滞回窗口（期间恢复检查不跑，防触摸即贴底的瞬时回弹）
   const morph = () => {
     const doc = new DOMParser().parseFromString(full, 'text/html');
     const headHtml = doc.head.innerHTML;
@@ -228,14 +230,72 @@ function bootstrapSource() {
     document.body.innerHTML = bodyHtml;
     const h = document.documentElement.scrollHeight;
     (window.parent as Window).postMessage({ type: 'height', h }, '*');
+    // 临时诊断（.tmp-streamfix 调试期，验证后删除）
+    const W2 = window as unknown as { __m?: Array<[number, boolean, number, number, number]> };
+    W2.__m = W2.__m ?? [];
+    W2.__m.push([Date.now() % 100000, follow, window.scrollY, document.documentElement.scrollHeight, window.innerHeight]);
+    // 恢复检查放在 morph 里：沙箱 iframe 的 scroll 事件不可靠（实测程序化滚动
+    // 不触发），而 morph 在流式期间 ≤200ms 一帧，天然是可靠的检查节拍。
+    // takeOverUntil 滞回：触摸瞬间视口往往恰好贴底（gap<40），立即恢复检查会在
+    // 下一个 morph 就把跟滚重新打开——接管后给 600ms 让新内容先拉开距离
+    if (!follow && Date.now() >= takeOverUntil) {
+      const doc = document.documentElement;
+      if (doc.scrollHeight - window.innerHeight - window.scrollY < 40) {
+        follow = true;
+        postFollow(true);
+      }
+    }
+    // 生成期贴底跟滚：直设不用 smooth（180ms 一帧的 morph 节奏下 smooth 动画互相打架）
+    if (follow) window.scrollTo(0, document.documentElement.scrollHeight);
   };
+  const postFollow = (on: boolean) => {
+    (window.parent as Window).postMessage({ type: 'follow', on }, '*');
+  };
+  // MessageChannel 合帧：chunk 只累计 full，每轮事件循环排空后才 morph 一次。
+  // 直接逐帧 morph 会跟不上到达速率——morph 成本随内容增长（实测 ~430ms/帧），
+  // 消息队列积压几十秒，触摸暂停/贴底全部被积压的旧 morph 淹没。MessageChannel
+  // 任务不受沙箱定时器节流影响（React 调度器同款原语），且天然「排空合并」。
+  const channel = new MessageChannel();
+  let morphQueued = false;
+  channel.port1.onmessage = () => {
+    morphQueued = false;
+    morph();
+  };
+  channel.port2.start();
   window.addEventListener('message', (e) => {
     const d = e.data || {};
     if (d.type === 'chunk' && typeof d.html === 'string') {
       full += d.html;
-      morph();
+      if (!morphQueued) {
+        morphQueued = true;
+        channel.port2.postMessage(0);
+      }
+    } else if (d.type === 'follow-bottom') {
+      // 父页胶囊「回到底部」：恢复跟滚并立即贴底
+      follow = true;
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      postFollow(true);
     }
   });
+  // 用户接管识别：touchstart/wheel 只会由真人操作触发（程序化 scrollTo 不发这些
+  // 事件），不会自己误杀自己。接管后滚回接近底部（与源码流同阈值 40px）自动恢复。
+  const takeOver = () => {
+    if (follow) {
+      follow = false;
+      takeOverUntil = Date.now() + 600;
+      postFollow(false);
+    }
+  };
+  document.addEventListener('touchstart', takeOver, { passive: true });
+  document.addEventListener('wheel', takeOver, { passive: true });
+  window.addEventListener('scroll', () => {
+    if (follow) return;
+    const doc = document.documentElement;
+    if (doc.scrollHeight - window.innerHeight - window.scrollY < 40) {
+      follow = true;
+      postFollow(true);
+    }
+  }, { passive: true });
   // 就绪握手：监听器装好即回执，父页收到才投递——srcdoc 的 load 事件与子页
   // 脚本就绪之间存在竞态（实测 chunk 会落在窗口初始化空档被丢弃），不能靠时序猜。
   (window.parent as Window).postMessage({ type: 'ready' }, '*');
@@ -267,6 +327,7 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
   const lastSendRef = useRef(0);
   const sendTimerRef = useRef<number | null>(null);
   const [contentH, setContentH] = useState<number | null>(null); // 子页回报的文档高度
+  const [liveFollow, setLiveFollow] = useState(true); // 实时预览贴底跟滚状态（用户接管即暂停，出胶囊）
 
   // 实时预览投递：持久 iframe + ready 握手 + 差量发送 + 180ms 节流（渲染策略见
   // bootstrapSource——合帧在父页，子页同步 morph 不吃子框架定时器节流）。
@@ -315,19 +376,23 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
     flush();
   }, [html, flush]);
 
-  // 高度回传（容器自适应量测）+ 子页就绪握手：只认当前 iframe 发来的消息，
-  // 多张 render 卡同时流式时互不串扰。ready 到达即视为可投递并补发积压。
+  // 高度回传（容器自适应量测）+ 子页就绪握手 + 跟滚状态：只认当前 iframe 发来
+  // 的消息，多张 render 卡同时流式时互不串扰。ready 到达即视为可投递并补发积压。
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      const d = e.data as { type?: string; h?: number } | null;
+      const d = e.data as { type?: string; h?: number; on?: boolean } | null;
       if (!d) return;
       if (d.type === 'ready' && e.source === frameRef.current?.contentWindow) {
         loadedRef.current = true;
         flush();
         return;
       }
-      if (d.type !== 'height' || typeof d.h !== 'number') return;
       if (e.source !== frameRef.current?.contentWindow) return;
+      if (d.type === 'follow' && typeof d.on === 'boolean') {
+        setLiveFollow(d.on); // 用户在子页触摸/滚轮接管 → 暂停跟滚并出胶囊；滚回底部自动恢复
+        return;
+      }
+      if (d.type !== 'height' || typeof d.h !== 'number') return;
       setContentH(d.h);
     };
     window.addEventListener('message', onMsg);
@@ -380,6 +445,16 @@ function StreamPreview({ argsDelta, done }: { argsDelta: string; done?: boolean 
             srcDoc={STREAM_BOOTSTRAP}
             ref={attachFrame}
           />
+          {/* 跟滚暂停（用户在子页触摸/滚轮接管）时出胶囊，点击回发 follow-bottom */}
+          {!liveFollow && (
+            <button
+              type="button"
+              className="tc-stream-pill"
+              onClick={() => frameRef.current?.contentWindow?.postMessage({ type: 'follow-bottom' }, '*')}
+            >
+              有更新 ↓ 回到底部
+            </button>
+          )}
         </div>
       )}
     </div>
