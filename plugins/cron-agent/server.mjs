@@ -3,14 +3,24 @@
  *
  * 职责：cron 到点 → 以独立 sessionId 调 /api/agent/start 发起完整 AI 编排
  * （MCP / Skills / Hooks / 宿主工具全量经 agent-runner runLoop 生效），
- * 结果由 runner 落 chat-store 会话档，本插件再补桌面/手机推送。
+ * 结果由 runner 落 chat-store 会话档；本插件跟踪 run 收尾并把结果写入
+ * notification-center 的通知收件箱（kv 直写，面板可回看、可跳会话）。
  *
  * 边界（对齐项目纪律）：
  * - 零引擎知识：任务存 modelRef {engineId?, providerId?, modelId?, option?}，
  *   原样透传给 /api/agent/start，由 runner/适配器解析与报错（NO_PROVIDER 等）。
  * - 存储走 kv-store service（registry.getService('kv-store')），不自建 sqlite。
  * - 工具注册走通用 registry.registerTool（同 long-memory 惯例），AI 对话内可用。
- * - 定时器为进程内单实例分钟扫描（非每任务一 timer），常驻成本 O(任务数)。
+ * - 定时器为进程内单实例分钟扫描（非每任务一 timer），常驻成本 O(任务数)；
+ *   装配后 15s 自启（2026-11-28 重构：不再等面板首次访问——否则重启后
+ *   没人打开面板任务就永远不跑，违背「后台运行」的语义）。
+ *
+ * 系统凭证（2026-11-28 401 事故修复）：loopback 调 /api/auth/login 用临时 Bearer
+ * 换会话 cookie。owner 必须与 auth-owner.json 的真实用户名一致，否则登录
+ * 校验（entry.owner !== readOwner().username）401——旧实现经 globalThis.__pliteNodeFs
+ * 读 owner，而该全局从未被任何代码设置，解构抛错被吞后回退 'root'：
+ * dev（root 账号）碰巧可用，生产（boss 等非 root 账号）必 401。
+ * 修复 = 直接 import node:fs 读文件（node:* import 在 server.mjs 豁免，同 agent-runner）。
  *
  * HTTP 面（cookie 门禁，对齐 long-memory/kv-store）：
  *   GET  /api/cron/tasks           → 任务列表 + 最近运行
@@ -22,8 +32,19 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 
 const NS = 'cron-agent';
+/** 通知中心收件箱的 kv 坐标与容量（与 notification-center/store.ts 保持一致） */
+const NOTIFY_NS = 'notification-center';
+const NOTIFY_KEY = 'inbox';
+const NOTIFY_MAX = 100;
+/** run 收尾跟踪：轮询间隔与上限（30 分钟；超时按跟踪失败收尾，不留永久「执行中」） */
+const TRACK_POLL_MS = 15_000;
+const TRACK_MAX_POLLS = 120;
+/** 孤儿清扫：run 行卡 running 超过此时长视为跟踪丢失（进程重启） */
+const STALE_RUNNING_MS = 45 * 60_000;
 const TICK_MS = 20_000; // 分钟级扫描（留余量，重复触发由 lastRunAt 幂等挡住）
 const MAX_RUNS_PER_TASK = 20;
 const BODY_LIMIT = 1 << 20;
@@ -87,7 +108,9 @@ export function createServerPart(options = {}) {
   const registry = options.registry;
   const dataDir = options.dataDir;
   const hardOff = process.env.PLITE_CRON_AGENT === '0';
-  const selfPort = Number(process.env.PORT ?? 5000);
+  // loopback 目标端口：惰性求值（测试经 PLITE_SELF_PORT 指向真实测试服务，
+  // createProdServer listen(0) 的随机端口在装配期还拿不到）。
+  const selfPort = () => Number(process.env.PLITE_SELF_PORT ?? process.env.PORT ?? 5000);
 
   const kv = () => registry?.getService?.('kv-store') ?? null;
   const audit = (entry) => {
@@ -103,21 +126,20 @@ export function createServerPart(options = {}) {
   function ensureSystemToken() {
     try {
       if (systemToken && verifyTempToken?.(systemToken)) return systemToken;
+      // owner 必须取 auth-owner.json 的真实用户名：临时凭证登录按
+      // entry.owner === 当前 owner 校验，错了登录必 401（2026-11-28 事故根因）。
       const ownerName = (() => {
         try {
-          const { resolve: rsv, existsSync: ex, readFileSync: rf } = globalThis.__pliteNodeFs;
-          if (ex && rf) {
-            const f = rsv(dataDir, 'auth-owner.json');
-            if (ex(f)) return String(JSON.parse(rf(f, 'utf8')).username ?? 'root');
-          }
-        } catch { /* */ }
+          const ownerFile = resolvePath(dataDir, 'auth-owner.json');
+          if (existsSync(ownerFile)) return String(JSON.parse(readFileSync(ownerFile, 'utf8')).username ?? 'root');
+        } catch { /* 读不到按 root */ }
         return 'root';
       })();
       const token = randomBytes(24).toString('hex');
       tempTokens?.set?.(token, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, owner: ownerName });
       systemToken = token;
       return systemToken;
-    } catch { /* */ }
+    } catch { /* 取不到就退化：调用不带凭证，业务错误透传 */ }
     return null;
   }
 
@@ -149,11 +171,20 @@ export function createServerPart(options = {}) {
     return {
       id: t.id, name: t.name, cron: t.cron, prompt: t.prompt,
       modelRef: t.modelRef ?? {}, enabled: t.enabled !== false,
-      notify: t.notify ?? { desktop: true, phone: true },
+      notify: { enabled: notifyEnabled(t) },
       createdAt: t.createdAt, lastRunAt: t.lastRunAt ?? null,
       nextRunAt: t.nextRunAt ?? null,
       lastError: t.lastError ?? null,
     };
+  }
+
+  /** 通知开关（新形态 {enabled}；兼容旧 {desktop, phone} 数据） */
+  function notifyEnabled(t) {
+    const n = t?.notify;
+    if (!n || typeof n !== 'object') return true;
+    if (typeof n.enabled === 'boolean') return n.enabled;
+    if (n.desktop === false && n.phone === false) return false;
+    return true;
   }
 
   function normalizeModelRef(raw) {
@@ -183,10 +214,10 @@ export function createServerPart(options = {}) {
     }
     if (body.modelRef !== undefined) out.modelRef = normalizeModelRef(body.modelRef);
     if (body.notify !== undefined && typeof body.notify === 'object') {
-      out.notify = {
-        desktop: body.notify.desktop !== false,
-        phone: body.notify.phone !== false,
-      };
+      // 新形态 {enabled}；兼容旧 {desktop, phone}（二者皆 false 视为关）
+      const n = body.notify;
+      if (typeof n.enabled === 'boolean') out.notify = { enabled: n.enabled };
+      else out.notify = { enabled: !(n.desktop === false && n.phone === false) };
     }
     if (body.enabled !== undefined) out.enabled = !!body.enabled;
     return out;
@@ -199,7 +230,7 @@ export function createServerPart(options = {}) {
   async function obtainSessionCookie(token) {
     if (!token) return null;
     if (cookieSession && cookieSession.expiresAt > Date.now() + 60_000) return cookieSession;
-    const resp = await fetch(`http://127.0.0.1:${selfPort}/api/auth/login`, {
+    const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/auth/login`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: '{}', signal: AbortSignal.timeout(10_000),
     });
@@ -224,7 +255,7 @@ export function createServerPart(options = {}) {
       device: 'cron-agent 定时触发',
       ...task.modelRef,
     };
-    const resp = await fetch(`http://127.0.0.1:${selfPort}/api/agent/start`, {
+    const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/agent/start`, {
       method: 'POST', headers, body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30_000),
     });
@@ -241,7 +272,122 @@ export function createServerPart(options = {}) {
     return run;
   }
 
-  /** 发起一次执行（试跑或到点触发共用）；失败落 runs + lastError */
+  /** 更新一条 run 行（只对仍处 running 的行生效，幂等；找不到/已终态则不动） */
+  function settleRun(taskId, runId, patch) {
+    const runs = loadRuns(taskId);
+    const row = runs.find((x) => x.runId && x.runId === runId);
+    if (!row || row.status !== 'running') return null;
+    Object.assign(row, patch);
+    saveRuns(taskId, runs);
+    return row;
+  }
+
+  function updateTaskMeta(taskId, patch) {
+    const tasks = loadTasks();
+    const t = tasks.find((x) => x.id === taskId);
+    if (!t) return;
+    Object.assign(t, patch);
+    saveTasks(tasks);
+  }
+
+  // ---- 通知：直写 notification-center 收件箱（kv 同步读改写）----
+  // 旧实现调 /api/notify、/api/phone/notify——两个端点全库不存在，通知从未落地。
+  // 收件箱本就持久化在 kv（namespace=notification-center, key=inbox），服务端直写
+  // 即全设备可见（面板/下次打开 App 可回看，条目带 sessionId 可跳会话）。
+  // 已知边界：与前端页面的读改写存在竞态（页面 markRead 整表回写可能覆盖掉
+  // 刚写入的一两条），对个人应用属可接受概率；通知中心做服务端写通道时再收敛。
+  function pushInboxNotice(item) {
+    const k = kv();
+    if (!k) return;
+    try {
+      const list = k.get(NOTIFY_NS, NOTIFY_KEY);
+      const prev = Array.isArray(list) ? list : [];
+      const next = [item, ...prev.filter((x) => x?.id !== item.id)].slice(0, NOTIFY_MAX);
+      k.set(NOTIFY_NS, NOTIFY_KEY, next);
+    } catch { /* 通知失败不阻断业务 */ }
+  }
+
+  function notifyResult(task, run) {
+    const ok = run.status === 'done';
+    const failed = run.status === 'failed';
+    const title = ok ? `定时任务「${task.name}」已完成` : failed ? `定时任务「${task.name}」失败` : `定时任务「${task.name}」${run.status === 'skipped' ? '被跳过' : '已发起'}`;
+    const body = failed
+      ? `失败原因：${run.error ?? 'unknown'}`
+      : ok
+        ? `整轮执行结束${run.turns ? `（${run.turns} 轮）` : ''}，点开对话面板可回看完整过程。`
+        : (run.error ?? '详见对话面板。');
+    pushInboxNotice({
+      id: `cron:${run.sessionId ?? `${task.id}:${run.startedAt}`}`,
+      level: ok ? 'success' : failed ? 'error' : 'info',
+      title, body,
+      at: Date.now(),
+      read: false,
+      source: 'cron-agent',
+      sessionId: run.sessionId ?? undefined,
+    });
+  }
+
+  // ---- run 收尾跟踪：轮询 /api/agent/state + 事件文件判终态 ----
+  // run 行发起时落 running；runner 在内存里跑，不回调本插件——旧实现没人跟踪，
+  // 行永远停在 running（面板永远「执行中」，下次到点还会被记 skipped）。
+  /** 从 run 事件日志提取终态：<dataDir>/agent-runs/<runId>.events.jsonl 尾部的
+   *  stream.error / message.done(interrupted) / loop.done。读不到返回 null。 */
+  function readRunOutcome(runId) {
+    if (!runId) return null;
+    try {
+      const file = resolvePath(dataDir, 'agent-runs', `${runId}.events.jsonl`);
+      if (!existsSync(file)) return null;
+      const lines = readFileSync(file, 'utf8').trimEnd().split('\n').slice(-40);
+      let outcome = null;
+      for (const line of lines) {
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev?.kind === 'stream.error') {
+          outcome = { status: 'failed', error: String(ev.payload?.message ?? '执行出错').slice(0, 200) };
+        } else if (ev?.kind === 'message.done') {
+          if (ev.payload?.interrupted === true) outcome = { status: 'failed', error: '已被中断' };
+          else if (!outcome) outcome = { status: 'done' };
+        } else if (ev?.kind === 'loop.done') {
+          outcome = { ...(outcome ?? { status: 'done' }), turns: Number(ev.payload?.turns ?? 0) || undefined };
+        }
+      }
+      return outcome;
+    } catch { return null; }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function trackRunCompletion(task, run) {
+    const token = ensureSystemToken();
+    for (let i = 0; i < TRACK_MAX_POLLS; i++) {
+      await sleep(TRACK_POLL_MS);
+      try {
+        const sess = await obtainSessionCookie(token);
+        const headers = {};
+        if (sess) headers.Cookie = sess.cookie;
+        const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/agent/state?sessionId=${encodeURIComponent(run.sessionId)}`, { headers, signal: AbortSignal.timeout(10_000) });
+        const j = await resp.json().catch(() => null);
+        if (resp.ok && j?.running === false) break;
+        // 401/网络抖动：下一轮重试（obtainSessionCookie 会换新 cookie）
+      } catch { /* 轮询失败不放弃，下一轮再试 */ }
+    }
+    // 收尾：事件文件优先（含成败语义），读不到再看是否轮询超时
+    const outcome = readRunOutcome(run.runId);
+    let patch;
+    if (outcome) {
+      patch = outcome.status === 'failed'
+        ? { status: 'failed', endedAt: Date.now(), error: outcome.error }
+        : { status: 'done', endedAt: Date.now(), turns: outcome.turns ?? null };
+    } else {
+      patch = { status: 'failed', endedAt: Date.now(), error: '执行状态丢失（进程重启？结果以会话档为准）' };
+    }
+    const settled = settleRun(task.id, run.runId, patch) ?? { ...run, ...patch };
+    updateTaskMeta(task.id, { lastError: settled.status === 'failed' ? (settled.error ?? null) : null });
+    await notifyResult(task, settled);
+  }
+
+  /** 发起一次执行（试跑或到点触发共用）；失败落 runs + lastError 并立刻通知；
+   *  成功则异步跟踪收尾（完成/失败时再落终态 + 通知）。 */
   async function executeTask(task, reason) {
     const startedAt = Date.now();
     let run;
@@ -252,40 +398,16 @@ export function createServerPart(options = {}) {
         run = pushRun(task.id, { runId: null, sessionId: r.sessionId, reason, status: 'failed', startedAt, endedAt: Date.now(), error: err });
       } else {
         run = pushRun(task.id, { runId: r.json?.runId ?? null, sessionId: r.sessionId, reason, status: 'running', startedAt, endedAt: null });
+        void trackRunCompletion(task, run).catch(() => undefined);
       }
     } catch (e) {
       run = pushRun(task.id, { runId: null, sessionId: null, reason, status: 'failed', startedAt, endedAt: Date.now(), error: String(e?.message ?? e).slice(0, 200) });
     }
     // 回写任务元数据（lastRunAt / lastError）
-    const tasks = loadTasks();
-    const t = tasks.find((x) => x.id === task.id);
-    if (t) {
-      t.lastRunAt = startedAt;
-      t.lastError = run.status === 'failed' ? run.error : null;
-      saveTasks(tasks);
-    }
-    // 桌面/手机推送（失败必推；成功推「报告已生成」摘要）
-    await notifyResult(task, run);
+    updateTaskMeta(task.id, { lastRunAt: startedAt, lastError: run.status === 'failed' ? (run.error ?? null) : null });
+    // 失败立刻通知；成功路径的通知在 trackRunCompletion 收尾时发（带真实结果）
+    if (run.status === 'failed') await notifyResult(task, run);
     return run;
-  }
-
-  async function notifyResult(task, run) {
-    const ok = run.status !== 'failed';
-    const title = ok ? `定时任务「${task.name}」已执行` : `定时任务「${task.name}」失败`;
-    const body = ok ? '报告已生成，点开对话面板可回看完整过程。' : `失败原因：${run.error ?? 'unknown'}`;
-    const token = ensureSystemToken();
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (task.notify?.desktop !== false) {
-      void fetch(`http://127.0.0.1:${selfPort}/api/notify`, {
-        method: 'POST', headers, body: JSON.stringify({ level: ok ? 'info' : 'error', title, body, source: 'cron-agent', sessionId: run.sessionId ?? undefined }),
-      }).catch(() => undefined);
-    }
-    if (task.notify?.phone !== false) {
-      void fetch(`http://127.0.0.1:${selfPort}/api/phone/notify`, {
-        method: 'POST', headers, body: JSON.stringify({ title, body }),
-      }).catch(() => undefined);
-    }
   }
 
   // ---- 调度器：单 timer 分钟扫描 ----
@@ -311,11 +433,25 @@ export function createServerPart(options = {}) {
         audit({ op: 'cron-fire', taskId: t.id, name: t.name });
         void executeTask(t, 'cron 到点').catch(() => undefined);
       }
+      // 孤儿清扫：跟踪器只活在进程内存里，进程重启后 run 行会永久卡 running——
+      // 超过 STALE_RUNNING_MS 仍 running 的行按「执行状态丢失」收尾并通知。
+      for (const t of tasks) {
+        try {
+          const runs = loadRuns(t.id);
+          const lastRun = runs[runs.length - 1];
+          if (lastRun?.status === 'running' && Date.now() - (lastRun.startedAt ?? 0) > STALE_RUNNING_MS) {
+            const settled = settleRun(t.id, lastRun.runId, { status: 'failed', endedAt: Date.now(), error: '执行状态丢失（进程重启？结果以会话档为准）' });
+            if (settled) notifyResult(t, settled);
+          }
+        } catch { /* 单任务清扫失败不影响其他任务 */ }
+      }
       // 顺手刷新展示用 nextRunAt（低频写，不与触发路径竞争）
       let dirty = false;
       for (const t of tasks) {
-        const nf = nextFire(parseCron(t.cron), now)?.getTime() ?? null;
-        if (t.nextRunAt !== nf && t.enabled !== false) { t.nextRunAt = nf; dirty = true; }
+        try {
+          const nf = nextFire(parseCron(t.cron), now)?.getTime() ?? null;
+          if (t.nextRunAt !== nf && t.enabled !== false) { t.nextRunAt = nf; dirty = true; }
+        } catch { /* 单任务坏 cron 不拖垮整轮刷新 */ }
       }
       if (dirty) saveTasks(tasks);
     } catch { /* 扫描永不抛 */ }
@@ -336,6 +472,7 @@ export function createServerPart(options = {}) {
   });
 
   function execToolAction(args) {
+    ensureStarted(); // AI 工具路径也拉起调度（不经 HTTP 中间件，没有中间件里的 ensureStarted）
     const a = args ?? {};
     const action = String(a.action ?? '');
     if (action === 'list') {
@@ -349,10 +486,11 @@ export function createServerPart(options = {}) {
       const t = {
         id: `t-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`,
         ...v, modelRef: v.modelRef ?? {},
-        notify: { desktop: true, phone: true },
+        notify: v.notify ?? { enabled: true },
         enabled: true, createdAt: Date.now(), lastRunAt: null, nextRunAt: null, lastError: null,
       };
       t.nextRunAt = nextFire(t.cronParsed)?.getTime() ?? null;
+      delete t.cronParsed; // 解析缓存只在校验期用，不落盘
       tasks.push(t);
       saveTasks(tasks);
       return { ok: true, text: JSON.stringify(publicTask(t)) };
@@ -363,6 +501,7 @@ export function createServerPart(options = {}) {
       if (!t) throw new Error(`任务不存在: ${a.id}`);
       const v = validateTaskInput(a, { partial: true });
       Object.assign(t, v);
+      delete t.cronParsed; // 解析缓存只在校验期用，不落盘
       try { t.nextRunAt = nextFire(parseCron(t.cron))?.getTime() ?? null; } catch { /* */ }
       saveTasks(tasks);
       return { ok: true, text: JSON.stringify(publicTask(t)) };
@@ -401,7 +540,9 @@ export function createServerPart(options = {}) {
     });
   }
 
-  // ---- 启动调度（服务端中间件返回后才 start，避免宿主装配期空转）----
+  // ---- 启动调度：装配后 15s 自启（不依赖面板访问；unref 不阻塞退出）----
+  // 旧实现只在有人访问 /api/cron/* 时才启动——重启后没人打开面板，任务就
+  // 永远不跑，违背「定时任务 = 后台运行」的语义（2026-11-28 用户质疑的根因）。
   let started = false;
   function ensureStarted() {
     if (started || hardOff) return;
@@ -410,6 +551,8 @@ export function createServerPart(options = {}) {
     tickTimer.unref?.(); // 不阻塞进程退出
     audit({ op: 'scheduler-start', tickMs: TICK_MS });
   }
+  const bootTimer = setTimeout(() => { try { ensureStarted(); } catch { /* */ } }, 15_000);
+  bootTimer.unref?.();
 
   return async function cronAgentApi(req, res, next) {
     if (hardOff) return next?.();
@@ -449,11 +592,12 @@ export function createServerPart(options = {}) {
         const t = {
           id: `t-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`,
           ...v, modelRef: v.modelRef ?? {},
-          notify: v.notify ?? { desktop: true, phone: true },
+          notify: v.notify ?? { enabled: true },
           enabled: body.enabled === false ? false : true,
           createdAt: Date.now(), lastRunAt: null, nextRunAt: null, lastError: null,
         };
         t.nextRunAt = nextFire(t.cronParsed)?.getTime() ?? null;
+        delete t.cronParsed; // 解析缓存只在校验期用，不落盘
         tasks.push(t);
         saveTasks(tasks);
         audit({ op: 'task-create', id: t.id, name: t.name });
@@ -468,6 +612,7 @@ export function createServerPart(options = {}) {
         if (!t) return send(404, { error: '任务不存在' });
         const v = validateTaskInput(body, { partial: true });
         Object.assign(t, v);
+        delete t.cronParsed; // 解析缓存只在校验期用，不落盘
         try { t.nextRunAt = nextFire(parseCron(t.cron))?.getTime() ?? null; } catch (e) {
           return send(400, { error: String(e?.message ?? e) });
         }
@@ -503,7 +648,7 @@ export function createServerPart(options = {}) {
         if (token) headers.Authorization = `Bearer ${token}`;
         let providers = [];
         try {
-          const r = await fetch(`http://127.0.0.1:${selfPort}/api/providers/list`, { headers });
+          const r = await fetch(`http://127.0.0.1:${selfPort()}/api/providers/list`, { headers });
           const j = await r.json().catch(() => null);
           providers = Array.isArray(j?.configs)
             ? j.configs.map((p) => ({ id: p.id, label: p.label ?? p.id, activeModel: p.activeModel ?? null }))

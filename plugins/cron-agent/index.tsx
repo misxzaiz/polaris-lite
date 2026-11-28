@@ -53,7 +53,7 @@ interface CronTask {
   prompt: string;
   modelRef: { engineId?: string; providerId?: string; modelId?: string; option?: string };
   enabled: boolean;
-  notify: { desktop: boolean; phone: boolean };
+  notify: { enabled: boolean };
   createdAt: number;
   lastRunAt: number | null;
   nextRunAt: number | null;
@@ -132,7 +132,7 @@ function CronAgentPanel() {
 
   const runNow = async (t: CronTask) => {
     const r = await postJson<{ ok: boolean }>(`${SRV}/tasks/run-now`, { id: t.id });
-    flash(r?.ok ? `任务「${t.name}」已发起试跑，报告将自动推送` : '发起失败');
+    flash(r?.ok ? `任务「${t.name}」已发起试跑，结束后写入通知中心` : '发起失败');
     setTimeout(() => { void reload(); }, 2000);
   };
 
@@ -161,7 +161,7 @@ function CronAgentPanel() {
       <div className="cr-head">
         <div>
           <div className="cr-title">定时任务</div>
-          <div className="cr-sub">到点自动触发完整 AI 对话：MCP / Skills / Hooks / 全部工具可用，报告自动推送</div>
+          <div className="cr-sub">到点后台自动触发完整 AI 对话（MCP / Skills / Hooks / 全部工具），结束后写入通知中心</div>
         </div>
         <button className="cr-btn primary" onClick={() => setCreating(true)}>＋ 新建任务</button>
       </div>
@@ -253,8 +253,7 @@ function TaskModal(props: { task: CronTask | null; catalog: EngineCatalog | null
   const [engineId, setEngineId] = useState(t?.modelRef?.engineId ?? '');
   const [providerId, setProviderId] = useState(t?.modelRef?.providerId ?? '');
   const [modelId, setModelId] = useState(t?.modelRef?.modelId ?? '');
-  const [notifyDesktop, setNotifyDesktop] = useState(t?.notify?.desktop !== false);
-  const [notifyPhone, setNotifyPhone] = useState(t?.notify?.phone !== false);
+  const [notifyEnabled, setNotifyEnabled] = useState(t?.notify?.enabled !== false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
 
@@ -271,7 +270,7 @@ function TaskModal(props: { task: CronTask | null; catalog: EngineCatalog | null
       cron: cron.trim(),
       prompt: prompt.trim(),
       modelRef: { engineId: engineId || undefined, providerId: providerId || undefined, modelId: modelId || undefined },
-      notify: { desktop: notifyDesktop, phone: notifyPhone },
+      notify: { enabled: notifyEnabled },
     };
     const r = t
       ? await postJson<{ ok: boolean; error?: string }>(`${SRV}/tasks/update`, body)
@@ -323,11 +322,11 @@ function TaskModal(props: { task: CronTask | null; catalog: EngineCatalog | null
         </div>
 
         <div className="cr-field">
-          <span>推送方式</span>
+          <span>完成通知</span>
           <div className="cr-chk-row">
-            <label><input type="checkbox" checked={notifyDesktop} onChange={(e) => setNotifyDesktop(e.target.checked)} />桌面通知</label>
-            <label><input type="checkbox" checked={notifyPhone} onChange={(e) => setNotifyPhone(e.target.checked)} />手机推送</label>
+            <label><input type="checkbox" checked={notifyEnabled} onChange={(e) => setNotifyEnabled(e.target.checked)} />结束后写入通知中心（失败必通知）</label>
           </div>
+          <span className="cr-hint">通知带会话入口，在通知面板或下次打开 App 时可见</span>
         </div>
 
         {err && <div className="cr-modal-err">{err}</div>}
@@ -348,7 +347,7 @@ export const cronAgentPlugin: LitePlugin = {
   manifest: {
     id: 'cron-agent',
     name: '定时任务',
-    version: '0.1.0',
+    version: '0.1.1',
     capabilities: [],
     provides: [],
     events: [],
