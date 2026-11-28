@@ -272,7 +272,7 @@ export function createServerPart(options = {}) {
       return entry;
     }
 
-    /** 朴素全文搜索：标题 + 全部消息正文；返回命中会话摘要（限 SEARCH_HITS_MAX） */
+    /** 朴素全文搜索：标题 + 全部消息正文；返回命中会话摘要（按活跃倒序取前 SEARCH_HITS_MAX 条） */
     function searchSessions(q) {
       const needle = String(q ?? '').trim().toLowerCase();
       if (!needle) return { error: 'q required' };
@@ -305,10 +305,12 @@ export function createServerPart(options = {}) {
             snippet,
           });
         }
-        if (hits.length >= SEARCH_HITS_MAX) break;
+        // 不在扫描期截断：目录名序 ≠ 活跃序，先截断会把最新命中挤掉
+        // （数百会话量级全量收集无压力，文本解析有 mtime 缓存）
       }
       hits.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-      return { hits, total: hits.length };
+      const total = hits.length;
+      return { hits: hits.slice(0, SEARCH_HITS_MAX), total, truncated: total > SEARCH_HITS_MAX };
     }
 
     /** 读单会话转录（标题/模型/消息对，正文截断到总帽） */
@@ -431,7 +433,9 @@ export function createServerPart(options = {}) {
   // 防递归护栏：invoke 上下文带 run（发起方 run）——若发起方自身已是 AI run
   //（其 sessionId 以 'chat-start-' 前缀标记），拒绝再套娃（深度恒为 1）。
   if (options.registry?.registerTool) {
-    const selfPort = Number(process.env.PORT ?? 5000);
+    // loopback 目标端口：惰性求值（测试经 PLITE_SELF_PORT 指向真实测试服务；
+    // createProdServer listen(0) 的随机端口在装配期拿不到）。
+    const selfPort = () => Number(process.env.PLITE_SELF_PORT ?? process.env.PORT ?? 5000);
     const verifyTempToken = options.verifyTempToken;
     const tempTokens = options.tempTokens;
     let systemToken = null;
@@ -439,14 +443,14 @@ export function createServerPart(options = {}) {
     function ensureSystemToken() {
       try {
         if (systemToken && verifyTempToken?.(systemToken)) return systemToken;
+        // owner 必须取 auth-owner.json 的真实用户名：临时凭证登录按
+        // entry.owner === 当前 owner 校验，错了登录必 401（2026-11-28 事故根因，
+        // 旧实现经从未被设置的 globalThis.__pliteNodeFs 读，回退 'root'）。
         const ownerName = (() => {
           try {
-            const { resolve: rsv, existsSync: ex, readFileSync: rf } = globalThis.__pliteNodeFs;
-            if (ex && rf) {
-              const f = rsv(dataDir, 'auth-owner.json');
-              if (ex(f)) return String(JSON.parse(rf(f, 'utf8')).username ?? 'root');
-            }
-          } catch { /* */ }
+            const ownerFile = resolve(dataDir, 'auth-owner.json');
+            if (existsSync(ownerFile)) return String(JSON.parse(readFileSync(ownerFile, 'utf8')).username ?? 'root');
+          } catch { /* 读不到按 root */ }
           return 'root';
         })();
         const token = randomBytes(24).toString('hex');
@@ -459,7 +463,7 @@ export function createServerPart(options = {}) {
     async function obtainSessionCookie(token) {
       if (!token) return null;
       if (cookieSession && cookieSession.expiresAt > Date.now() + 60_000) return cookieSession;
-      const resp = await fetch(`http://127.0.0.1:${selfPort}/api/auth/login`, {
+      const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/auth/login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: '{}', signal: AbortSignal.timeout(10_000),
       });
@@ -532,7 +536,7 @@ export function createServerPart(options = {}) {
             device: 'chat_start（AI 发起）',
             ...cleanRef,
           };
-          const resp = await fetch(`http://127.0.0.1:${selfPort}/api/agent/start`, {
+          const resp = await fetch(`http://127.0.0.1:${selfPort()}/api/agent/start`, {
             method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000),
           });
           const text = await resp.text().catch(() => '');

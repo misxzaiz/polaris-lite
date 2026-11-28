@@ -8,10 +8,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProdServer } from '../server/prod-server.mjs';
+import { createAuthMiddleware } from '../server/auth-session.mjs';
 
 function tempRoot() {
   const root = mkdtempSync(join(tmpdir(), 'plite-chat-store-'));
@@ -487,6 +489,28 @@ test('chat_history：search 命中标题与正文，返回片段；q 缺失报�
   assert.match(r3.stderr, /q required/);
 });
 
+test('chat_history：search 命中超过 20 条时按活跃倒序截断（不漏最新命中）', async (t) => {
+  const { dataDir } = tempRoot();
+  const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
+  const access = createChatStoreAccess({ dataDir });
+  // 25 个全命中会话：最新 updatedAt 放在字典序最后的 s-25（listRecords 按 readdirSync 名序扫描）
+  for (let i = 1; i <= 25; i++) {
+    const id = `s-${String(i).padStart(2, '0')}`;
+    access.writeRecord(id, { version: 1, updatedAt: i, session: {
+      id, title: `话题${i}`, createdAt: i, lastActiveAt: i,
+      messages: [{ id: 'm1', role: 'user', content: '黄金定投记录', createdAt: i }],
+    } });
+  }
+  const invoke = await captureChatHistoryTool(t, { dataDir });
+  const r = await invoke({ action: 'search', q: '黄金' });
+  assert.equal(r.ok, true);
+  const p = JSON.parse(r.stdout);
+  assert.equal(p.total, 25, 'total 应为全量命中数');
+  assert.equal(p.truncated, true);
+  assert.equal(p.hits.length, 20, 'hits 截断到上限');
+  assert.equal(p.hits[0].sessionId, 's-25', '最新命中应排最前（旧实现扫描期截断会丢掉它）');
+});
+
 test('chat_history：read 返回转录（含 modelRef），不存在报错；set_model 写档生效', async (t) => {
   const { dataDir } = tempRoot();
   const { createChatStoreAccess } = await import('../plugins/chat-store/server.mjs');
@@ -526,9 +550,9 @@ test('chat_history：未知 action 报错并列出可用项', async (t) => {
 
 // ---------------------------------------------------------------- chat_start 工具
 // AI 在对话内发起全新独立会话（P2）。经 mock registry 捕获适配器直接 invoke；
-// fetch 打 /api/agent/start 的链路用环境变量 PLITE_SELF_PORT 指向 mock server，
-// 避免 401/agent-runner 依赖，专注验证：防递归护栏 / prompt 校验 / 标题预置 /
-// start 失败透传错误 / 成功路径返回 sessionId+runId。
+// fetch 打 /api/agent/start 的链路用环境变量 PLITE_SELF_PORT 指向指定端口
+// （工具惰性求值该变量），避免撞上本机可能在跑的真实实例，专注验证：
+// 防递归护栏 / prompt 校验 / 标题预置 / start 失败透传错误 / 成功路径返回 sessionId+runId。
 
 /** 捕获 chat_start 工具注册并直接调用 */
 async function captureChatStartTool(t, { dataDir }, startHandler) {
@@ -572,9 +596,77 @@ test('chat_start：prompt 校验——空/超长拒绝', async (t) => {
 test('chat_start：start 失败透传错误（NO_PROVIDER 等服务端报错）', async (t) => {
   const { dataDir } = tempRoot();
   const invoke = await captureChatStartTool(t, { dataDir });
-  // 未起真实服务：fetch 指向本进程不存在的端口 → 连接层错误也走同一透传分支
+  // PLITE_SELF_PORT 指向必拒连的端口：fetch 连接层错误也走同一透传分支
+  // （不依赖「本机 5000 恰好没服务」——dev 实例在跑时这里会真发登录请求）
+  const prev = process.env.PLITE_SELF_PORT;
+  process.env.PLITE_SELF_PORT = '9';
+  t.after(() => { if (prev === undefined) delete process.env.PLITE_SELF_PORT; else process.env.PLITE_SELF_PORT = prev; });
   const r = await invoke({ prompt: 'hello' });
   assert.equal(r.ok, false);
   assert.ok(r.stderr.length > 0, '应返回错误信息');
+});
+
+// ---------------------------------------------------------------- chat_start 鉴权回归
+// 2026-11-28 401 事故：ensureSystemToken 经从未被任何代码设置的 globalThis.__pliteNodeFs
+// 读 owner，解构抛 TypeError 被 catch 吞掉后恒回退 'root'——dev（root 账号）碰巧可用，
+// 非 root 账号环境（如钉住实例 owner=boss）登录校验 entry.owner !== readOwner().username
+// 必 401，实测 chat_start 返回「start 失败(401): unauthorized」。
+// 本用例挂**真实 auth 中间件**复现非 root 环境：首登注册 owner='boss'，chat-store 与
+// auth 共享同一 tempTokens 实例，loopback 服务按 agent-runner 同款 getSession 门禁。
+// 修复前（owner 回退 root）本用例 401；修复后（直读 auth-owner.json）通过。
+test('chat_start：系统凭证 owner 取真实注册用户（非 root 账号 401 事故回归）', async (t) => {
+  const { dataDir } = tempRoot();
+  // 真实 auth 实例：首登注册 + 临时凭证校验 + 会话 cookie，全是生产代码
+  const auth = createAuthMiddleware({ dataDir });
+  let captured = null;
+  const registry = {
+    registerTool: (adapter) => { if (adapter?.name === 'chat_start') captured = adapter; },
+    registerService: () => {},
+  };
+  const { createServerPart } = await import('../plugins/chat-store/server.mjs');
+  createServerPart({
+    dataDir, registry,
+    getSession: () => ({ user: { id: 'u-boss', name: 'boss' } }),
+    verifyTempToken: auth.verifyTempToken,
+    tempTokens: auth.tempTokens,
+  });
+  assert.ok(captured, 'chat_start 工具应已注册');
+
+  // loopback 服务：/api/agent/start 按 agent-runner 同款门禁（未登录 401）；
+  // 其余路径交给真实 auth 中间件（/api/auth/login 等）
+  const loop = http.createServer((req, res) => {
+    const [pathname] = (req.url ?? '').split('?');
+    if (pathname === '/api/agent/start' && req.method === 'POST') {
+      if (!auth.getSession(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized', code: 'SESSION_REQUIRED' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, runId: 'r-test' }));
+      return;
+    }
+    void auth.middleware(req, res, () => { res.writeHead(404); res.end(); });
+  });
+  await new Promise((r) => loop.listen(0, '127.0.0.1', r));
+  t.after(() => loop.close());
+  const { port } = loop.address();
+
+  // 首登即注册：auth-owner.json 落盘 username='boss'（非 root 账号环境）
+  const reg = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'boss', password: 'secret123' }),
+  });
+  assert.equal(reg.status, 200, '首登注册 owner=boss 失败');
+
+  const prev = process.env.PLITE_SELF_PORT;
+  process.env.PLITE_SELF_PORT = String(port);
+  t.after(() => { if (prev === undefined) delete process.env.PLITE_SELF_PORT; else process.env.PLITE_SELF_PORT = prev; });
+
+  const r = await captured.invoke({ args: { prompt: 'hello from regression' }, run: { sessionId: 's-origin' } });
+  assert.equal(r.ok, true, `chat_start 应成功（修复前此处 401）: ${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.match(out.sessionId, /^chat-start-/);
+  assert.ok(out.runId, '应返回 runId');
 });
 
