@@ -130,6 +130,152 @@ function MemoryRows(): JSX.Element | null {
   );
 }
 
+/* ---------------- 循环护栏分区（自包含：同 MemoryRows 形态，ChatInput 零传参）-----
+ * agent-runner runLoop 的轮数/工具调用次数上限（此前写死 40/80）。读写走同源 HTTP
+ * （SRV.agent/guardrail，会话 cookie；agent-runner 已在 serverApi.ts 登记，无新耦合）。
+ * 语义：开启 = run 达到上限后注入系统提示词并引导收敛（防失控空转烧 token）；关闭 =
+ * 不设上限，跑到模型收敛或用户中断。配置存 kv（agent-runner/guardrail），run 发起时
+ * 快照——进行中的 run 不受中途修改影响，下个 run 生效。
+ * 服务不可达（agent-runner 未装/禁用）时整分区隐藏（P0-4 兜底语义，同 MemoryRows）。 */
+interface GuardrailCfg {
+  enabled: boolean;
+  maxTurns: number;
+  maxToolCalls: number;
+  defaults: { maxTurns: number; maxToolCalls: number };
+}
+
+function GuardrailRows(): JSX.Element | null {
+  const [cfg, setCfg] = useState<GuardrailCfg | null>(null);
+  const [busy, setBusy] = useState(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const r = await fetch(`${SRV.agent}/guardrail`, { credentials: 'include' });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j && typeof j.enabled === 'boolean') {
+        setCfg({
+          enabled: !!j.enabled,
+          maxTurns: Number(j.maxTurns) || 40,
+          maxToolCalls: Number(j.maxToolCalls) || 80,
+          defaults: {
+            maxTurns: Number(j.defaults?.maxTurns) || 40,
+            maxToolCalls: Number(j.defaults?.maxToolCalls) || 80,
+          },
+        });
+      }
+    } catch { /* 插件未装/禁用：分区隐藏 */ }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  /** 全量保存（服务端归一化夹紧后回读，以响应为准回填本地态） */
+  const save = useCallback(async (next: { enabled: boolean; maxTurns: number; maxToolCalls: number }): Promise<void> => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${SRV.agent}/guardrail`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      });
+      const j = await r.json().catch(() => null);
+      if (j && typeof j.enabled === 'boolean') {
+        setCfg((c) => c && ({
+          enabled: !!j.enabled,
+          maxTurns: Number(j.maxTurns) || c.maxTurns,
+          maxToolCalls: Number(j.maxToolCalls) || c.maxToolCalls,
+          defaults: c.defaults,
+        }));
+      }
+    } catch { /* 保存失败：保持原状 */ }
+    setBusy(false);
+  }, []);
+
+  /** 数字输入：本地即时回显（夹紧上限，下限留给失焦兜底），500ms 防抖落盘——连续点步进器只发一次请求 */
+  const editNum = (key: 'maxTurns' | 'maxToolCalls', raw: string, hi: number): void => {
+    if (!cfg) return;
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n < 1) return;
+    setCfg({ ...cfg, [key]: Math.min(hi, n) });
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { void save({ ...cfg, [key]: Math.min(hi, n) }); }, 500);
+  };
+
+  /** 失焦兜底：夹紧回合法区间并立即落盘（取消挂起的防抖，避免旧值覆盖新值） */
+  const commitNum = (key: 'maxTurns' | 'maxToolCalls', lo: number, hi: number): void => {
+    if (!cfg) return;
+    const n = Math.max(lo, Math.min(hi, Math.round(cfg[key]) || lo));
+    setCfg({ ...cfg, [key]: n });
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    void save({ ...cfg, [key]: n });
+  };
+
+  if (!cfg) return null;
+
+  const custom = cfg.maxTurns !== cfg.defaults.maxTurns || cfg.maxToolCalls !== cfg.defaults.maxToolCalls;
+
+  return (
+    <>
+      <div className="chat-assistant-row">
+        <span className="chat-assistant-key">循环护栏</span>
+        <button
+          className={`chat-trust-chip ${cfg.enabled ? 'trusted' : ''}`}
+          onClick={() => void save({ ...cfg, enabled: !cfg.enabled })}
+          disabled={busy}
+          aria-pressed={cfg.enabled}
+          title={cfg.enabled
+            ? '已开启：AI 连续工作达到上限（轮数/工具调用次数）后收到系统提示并收敛，防失控空转烧 token。点击关闭（不设次数上限）'
+            : '已关闭：AI 可持续调用工具直到任务完成或手动中断（注意 token 消耗失控风险）。点击开启'}
+        >
+          {cfg.enabled ? `已开启 · ${cfg.maxTurns}轮/${cfg.maxToolCalls}次` : '已关闭（不限）'}
+        </button>
+        <span className="chat-row-aux" title="达到上限会注入系统提示并引导 AI 给出结论，而不是无限继续">防失控空转</span>
+      </div>
+      <div className="chat-assistant-row">
+        <span className="chat-assistant-key">轮数</span>
+        <input
+          className="chat-guard-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={1000}
+          value={cfg.maxTurns}
+          disabled={busy || !cfg.enabled}
+          onChange={(e) => editNum('maxTurns', e.target.value, 1000)}
+          onBlur={() => commitNum('maxTurns', 1, 1000)}
+          title="单次任务最多连续对话轮数（每轮可含多个工具调用）"
+        />
+        <span className="chat-assistant-key">次数</span>
+        <input
+          className="chat-guard-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={10000}
+          value={cfg.maxToolCalls}
+          disabled={busy || !cfg.enabled}
+          onChange={(e) => editNum('maxToolCalls', e.target.value, 10000)}
+          onBlur={() => commitNum('maxToolCalls', 1, 10000)}
+          title="单次任务最多工具调用总次数"
+        />
+        {custom && (
+          <button
+            className="chat-model-reset"
+            onClick={() => void save({ ...cfg, maxTurns: cfg.defaults.maxTurns, maxToolCalls: cfg.defaults.maxToolCalls })}
+            title={`恢复默认（${cfg.defaults.maxTurns} 轮 / ${cfg.defaults.maxToolCalls} 次）`}
+          >
+            恢复默认
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
 interface SessionSettingsPanelProps {
   // ---- 会话标题（头部展示；未设置=「新会话」时回退用户第一句）----
   sessionTitle: string;
@@ -516,6 +662,8 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
               </button>
             </div>
           )}
+          {/* 循环护栏（agent-runner runLoop 上限配置；服务不可达时整分区隐藏） */}
+          <GuardrailRows />
 
           {/* ===== 长期记忆：全局开关（long-memory 插件 HTTP；不可达=分区隐藏）===== */}
           <div className="chat-assistant-sec">记忆</div>

@@ -45,9 +45,27 @@ const RUNS_DIR = 'agent-runs';
 const SSE_PING_MS = 15_000;
 /** 审批挂起超时（无人值守自动拒绝；对齐前端 agent-loop APPROVAL_TIMEOUT_MS） */
 const APPROVAL_TIMEOUT_MS = 120_000;
-/** 循环护栏（对齐前端 agent-loop 2026-11-25 恢复的循环闸） */
-const MAX_LOOP_TURNS = 40;
-const MAX_TOOL_CALLS = 80;
+/**
+ * 循环护栏默认值（对齐前端 agent-loop 2026-11-25 恢复的循环闸）。
+ * 2026-11-28 配置化：实际生效值经 kv（namespace=agent-runner，key=guardrail）持久化，
+ * 会话设置面板可改（GET/POST /api/agent/guardrail）；run 发起时快照到 run.guardrail，
+ * 进行中的 run 不受中途改配置影响。关闭开关 = 不设上限（跑到模型收敛或用户中断）。
+ */
+const GUARDRAIL_DEFAULTS = { enabled: true, maxTurns: 40, maxToolCalls: 80 };
+
+/** 循环护栏配置归一化：非法/缺省字段回落默认，数值取整并夹紧（1..上限）防手滑写 0/负数卡死循环。 */
+function normalizeGuardrail(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) && n >= lo ? Math.min(hi, n) : dflt;
+  };
+  return {
+    enabled: r.enabled !== false,
+    maxTurns: clampInt(r.maxTurns ?? GUARDRAIL_DEFAULTS.maxTurns, 1, 1000, GUARDRAIL_DEFAULTS.maxTurns),
+    maxToolCalls: clampInt(r.maxToolCalls ?? GUARDRAIL_DEFAULTS.maxToolCalls, 1, 10000, GUARDRAIL_DEFAULTS.maxToolCalls),
+  };
+}
 /** 截断结果喂回模型的上下限（对齐 FEEDBACK_CAP） */
 const FEEDBACK_CAP = 8 * 1024;
 /** 单 run 事件日志大小上限（防失控；超出截断并标记） */
@@ -454,6 +472,11 @@ export function createServerPart(options = {}) {
     try { return kvService()?.keysWithPrefix(ns, prefix) ?? []; } catch { return []; }
   }
 
+  /** 循环护栏当前配置：kv 持久化（agent-runner/guardrail），读不到/坏数据回落默认。run 发起时快照。 */
+  function readGuardrail() {
+    try { return normalizeGuardrail(readKvSync('agent-runner', 'guardrail')); } catch { return { ...GUARDRAIL_DEFAULTS }; }
+  }
+
   /**
    * 执行单个工具调用：按工具名查通用注册表（适配器由工具插件注册），runner 零工具知识。
    * 返回 { ok, stdout, stderr, exitCode, durationMs, truncated, denied }。
@@ -650,10 +673,11 @@ export function createServerPart(options = {}) {
         // 触发压缩（先压再请求；水位达阈值 + 未熔断；失败非破坏回滚）
         await maybeCompact(run);
         if (signal.aborted) { emitRunDone(run, { interrupted: true }); return; }
-        if (turn >= MAX_LOOP_TURNS || totalToolCalls >= MAX_TOOL_CALLS) {
+        const gr = run.guardrail ?? GUARDRAIL_DEFAULTS;
+        if (gr.enabled && (turn >= gr.maxTurns || totalToolCalls >= gr.maxToolCalls)) {
           run.shadow.push({
             role: 'user',
-            content: `（系统：本轮任务已连续运行 ${turn} 轮、${totalToolCalls} 次工具调用，达到安全上限。` +
+            content: `（系统：本轮任务已连续运行 ${turn} 轮、${totalToolCalls} 次工具调用，达到安全上限（轮数上限 ${gr.maxTurns}、工具调用上限 ${gr.maxToolCalls}）。` +
               '请立即停止继续调用工具，基于已获得的信息给出当前结论与后续建议；若任务确实未完成，请明确说明剩余步骤，由用户决定是否继续。）',
           });
           const r = await engineTurn(run, { messages: run.shadow, tools: [], signal });
@@ -1265,6 +1289,8 @@ export function createServerPart(options = {}) {
           keepRecent: Number(body.ctxPolicy?.keepRecent) || 6,
         },
         compacting: false,
+        // 循环护栏：run 发起时快照（GET/POST /api/agent/guardrail 可改；进行中 run 不受影响）
+        guardrail: readGuardrail(),
       };
       if (!run.model) {
         return send(res, 400, { error: 'no usable model provider (missing key?)', code: 'NO_PROVIDER' });
@@ -1314,6 +1340,7 @@ export function createServerPart(options = {}) {
         model: snap.model, execCwd: snap.execCwd, boundRootId: snap.boundRootId, shellHint: snap.shellHint,
         acc: snap.acc ?? new UsageAccumulator(), ctxWindow: snap.ctxWindow ?? 0, ctxPolicy: snap.ctxPolicy ?? { autoCompact: true, threshold: 0.75, keepRecent: 6 },
         shadow: [...snap.shadow], compacting: false,
+        guardrail: readGuardrail(),
       };
       // 半截 prefill：shadow 尾是 assistant 半截，续写时下方 runLoop 会自然接续；
       // 追加续写提示（对齐前端 resume 不带 prompt 的语义：直接续，不注入用户问句）。
@@ -1432,6 +1459,25 @@ export function createServerPart(options = {}) {
         syncedSeq: run.syncedSeq ?? 0,
         assistantId: run.assistantId,
       });
+    }
+
+    // ---- GET /api/agent/guardrail：循环护栏配置（会话设置面板「执行」分区读写） ----
+    if (pathname === '/api/agent/guardrail' && req.method === 'GET') {
+      if (!kvService()) return send(res, 503, { error: 'kv-store 未注册，护栏配置不可用', code: 'KV_UNAVAILABLE' });
+      const cfg = readGuardrail();
+      return send(res, 200, { ok: true, ...cfg, defaults: { ...GUARDRAIL_DEFAULTS } });
+    }
+
+    // ---- POST /api/agent/guardrail：保存循环护栏配置（kv 持久化；新 run 生效） ----
+    if (pathname === '/api/agent/guardrail' && req.method === 'POST') {
+      if (!kvService()) return send(res, 503, { error: 'kv-store 未注册，护栏配置不可用', code: 'KV_UNAVAILABLE' });
+      let body;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(res, 400, { error: 'bad json', code: 'BAD_REQUEST' }); }
+      const next = normalizeGuardrail({ enabled: body.enabled, maxTurns: body.maxTurns, maxToolCalls: body.maxToolCalls });
+      writeKvSync('agent-runner', 'guardrail', next);
+      // 回读确认（写失败/坏值不静默）：返回实际持久化的值
+      const saved = readGuardrail();
+      return send(res, 200, { ok: true, ...saved, defaults: { ...GUARDRAIL_DEFAULTS } });
     }
 
     return send(res, 404, { error: 'not found' });

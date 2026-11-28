@@ -925,6 +925,25 @@
   font-weight: 600;
 }
 
+/* ===== 循环护栏数字输入（会话设置面板执行分区；轮数/工具调用次数） ===== */
+.chat-guard-num {
+  width: 58px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+.chat-guard-num:focus { border-color: var(--accent); outline: none; }
+.chat-guard-num:disabled { opacity: 0.45; }
+/* 隐藏 number 输入的上下箭头（手机数字键盘 inputMode 已够用，箭头挤占 58px 宽度） */
+.chat-guard-num::-webkit-outer-spin-button,
+.chat-guard-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.chat-guard-num { -moz-appearance: textfield; appearance: textfield; }
+
 /* ===== text 块间距（工具卡与文本块之间的呼吸） ===== */
 .tc-text { min-width: 0; }
 .tc-text + .tc-text, .tc-card + .tc-text, .tc-text + .tc-card, .tc-group + .tc-text, .tc-text + .tc-group { margin-top: 10px; }
