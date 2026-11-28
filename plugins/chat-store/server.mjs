@@ -692,12 +692,13 @@ export function createServerPart(options = {}) {
         const n = Math.floor(Number(args?.seconds));
         if (!Number.isFinite(n) || n < 1 || n > 120) return { ok: false, stdout: '', stderr: 'seconds 需为 1-120 的整数' };
         await new Promise((resolve) => {
-          const t = setTimeout(resolve, n * 1000);
-          t.unref?.();
-          if (signal) {
-            if (signal.aborted) { clearTimeout(t); resolve(); return; }
-            signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
-          }
+          // abort 监听用完即拆：轮询工作流里同一 run 会连发多次 sleep，
+          // 不拆的话监听器累积到 abort 才清（触发 MaxListeners 告警）
+          if (signal?.aborted) { resolve(); return; }
+          const onAbort = () => { clearTimeout(timer); resolve(); };
+          const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, n * 1000);
+          timer.unref?.();
+          signal?.addEventListener('abort', onAbort, { once: true });
         });
         if (signal?.aborted) return { ok: false, stdout: '', stderr: '等待被中断（run 已终止）' };
         return { ok: true, stdout: `已等待 ${n}s`, stderr: '' };
