@@ -59,9 +59,8 @@ function inZone(p, zone) {
 import { registerFilesWriteTool } from './tool.mjs';
 
 /** 写目标是否落在 git 仓库内（目标或其任一祖先存在 .git，向上最多 24 级）。
- *  安全闸门（2026-11-28）：仓库写入一律审批卡——不靠配置标记，按 .git 自动识别，
- *  dev/生产行为一致，新登记根零配置生效。内建 workspace 不是仓库，不受影响。
- *  导出仅供测试（同 agent-bash 的 detectCommandSubstitution 惯例）。 */
+ *  2026-11-28 晚按用户决策停用强制审批闸门（信任模式支持任意操作），保留判定函数
+ *  供测试与未来恢复使用：恢复时在 createServerPart 重新注入 needsWriteApproval。 */
 export function inGitRepo(real) {
   let dir = real;
   for (let i = 0; i < 24; i += 1) {
@@ -75,7 +74,7 @@ export function inGitRepo(real) {
 
 export function createServerPart(options = {}) {
   // 工具声明随插件：启用本插件即注册 files_write 工具；禁用即消失。
-  if (options.registry) registerFilesWriteTool(options.registry, { needsWriteApproval });
+  if (options.registry) registerFilesWriteTool(options.registry);
   const getSession = options.getSession;
   const verifyTempToken = options.verifyTempToken ?? ((token) => false);
   const dataDir = resolve(options.dataDir ?? '.polaris-lite');
@@ -179,9 +178,8 @@ export function createServerPart(options = {}) {
     return { real };
   }
 
-  /** needsApproval 策略（注入 tool.mjs；tool.mjs 不能 import node:fs，判定住这边）：
-   *  解析「写目标」，落点在 git 仓库内 → 一律审批卡（yolo/会话信任不豁免）。
-   *  解析失败按不拦放行（执行期会给出确切错误，不在审批层猜测）。 */
+  /** needsApproval 策略已停用（2026-11-28 晚用户决策：信任模式支持任意操作，仓库写入不再强制审批）。
+   *  函数保留：needsWriteApproval 判定 + inGitRepo 识别仍在，恢复时重新注入即可。 */
   function needsWriteApproval(rootId, path) {
     const chk = resolveSafeWritePath(rootId ?? '', path ?? '');
     if (chk.error) return false;

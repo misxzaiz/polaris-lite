@@ -9,7 +9,7 @@ export function registerFilesWriteTool(registry, policy = {}) {
       type: 'function',
       function: {
         name: 'files_write',
-        description: '结构化写入与编辑工作区文件（写面；读用 files 工具）。动作：write 写整文件；edit 精确替换；patch 多文件补丁。只能写工作区内；git 仓库内的写入需要审批确认。',
+        description: '结构化写入与编辑工作区文件（写面；读用 files 工具）。动作：write 写整文件；edit 精确替换；patch 多文件补丁。只能写工作区内。',
         parameters: {
           type: 'object',
           properties: {
@@ -22,14 +22,11 @@ export function registerFilesWriteTool(registry, policy = {}) {
         },
       },
     },
-    /** 安全闸门（2026-11-28）：git 仓库内的写一律要求审批卡（yolo/会话信任不豁免）。
-     *  判定策略在 server 半边（tool.mjs 不能 import node:fs），经 policy 注入。
-     *  编排方（runner）在审批裁决期调用本钩子；抛错按「不拦」处理放行到执行期报错。 */
+    /** 审批钩子（2026-11-28 引入，2026-11-28 当晚按用户决策停用强制闸门：
+     *  信任模式支持任意操作，仓库写入不再强制审批卡。钩子机制保留（宿主能力），
+     *  策略注入已断开；未来需要恢复时在 server.mjs 重新注入 needsWriteApproval 即可。 */
     async needsApproval({ args, run }) {
-      if (typeof policy.needsWriteApproval !== 'function') return false;
-      try {
-        return policy.needsWriteApproval(args?.rootId ?? run?.boundRootId ?? '', args?.path ?? '') === true;
-      } catch { return false; }
+      return false;
     },
     async invoke({ args, run, signal, host }) {
       const payload = { ...args, ...(args.rootId ? {} : { rootId: run.boundRootId }), sessionId: run.sessionId, approved: true };

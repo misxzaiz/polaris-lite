@@ -29,19 +29,18 @@ test('契约：runner 审批裁决必须先问适配器 needsApproval（机制�
     '强制审批必须短路 yolo/会话白名单（一律审批）');
 });
 
-test('契约：agent-files 策略住 server 半边、注入 tool.mjs（node:fs 豁免边界）', () => {
+test('契约：agent-files 策略住 server 半边、注入 tool.mjs（node:fs 豁免边界）——2026-11-28 晚停用：钩子保留但恒不拦', () => {
   assert.match(filesToolSrc, /async needsApproval\(\{ args, run \}\)/, '适配器必须暴露 needsApproval 钩子');
-  assert.match(filesToolSrc, /policy\.needsWriteApproval/, '判定必须走注入的策略（tool.mjs 不 import node:fs）');
-  assert.match(filesServerSrc, /registerFilesWriteTool\(options\.registry, \{ needsWriteApproval \}\)/);
   assert.match(filesServerSrc, /function inGitRepo/, '.git 自动识别住 server 半边');
 });
 
-test('契约：bash DENYLIST 硬规则——release/checkout/push/pm2 变更（yolo 不豁免）', () => {
-  assert.match(bashSrc, /\(checkout\|switch\|restore\)\(\?\!\[\\w-\]\)/, '缺 checkout/switch/restore 规则（含文件名防误伤环视）');
-  assert.match(bashSrc, /--hard\\b/, '缺 reset --hard 规则');
-  assert.match(bashSrc, /push\(\?\!\[\\w-\]\)/, '缺 git push 规则');
-  assert.match(bashSrc, /\(release\|deploy\(:9826\)\?\|soft:9826\)/, '缺发版脚本规则');
-  assert.match(bashSrc, /\(kill\|delete\|restart/, '缺 pm2 变更规则');
+test('契约：bash DENYLIST 仓库/发布闸门已停用（2026-11-28 晚用户决策：信任模式=任意操作），核心破坏类规则保留', () => {
+  assert.match(bashSrc, /repo\/publish gate removed 2026-11-28/, '闸门移除标记必须在场（防止误恢复或误删历史）');
+  assert.doesNotMatch(bashSrc, /\(checkout\|switch\|restore\)\(\?\!\[\\w-\]\)/, 'checkout/switch/restore 规则应已移除');
+  assert.doesNotMatch(bashSrc, /pm2\s+\(kill/, 'pm2 变更规则应已移除');
+  // 真正的破坏类（全盘/数据/提权）仍在 denylist
+  assert.match(bashSrc, /mkfs|diskpart/, '全盘破坏规则必须保留');
+  assert.match(bashSrc, /providers\|auth-owner/, '核心数据文件写保护必须保留');
 });
 
 // ── ② 功能用例 ───────────────────────────────────────────────────────────
@@ -65,30 +64,21 @@ function mockRegistry() {
   return { adapters, registerTool(a) { adapters.push(a); } };
 }
 
-test('files_write 适配器：needsApproval 透传策略判定（含异常兜底与缺省关闭）', async () => {
+test('files_write 适配器：needsApproval 恒不拦（2026-11-28 晚停用仓库审批闸门）', async () => {
   const reg = mockRegistry();
   registerFilesWriteTool(reg, { needsWriteApproval: (rootId, path) => rootId === 'r-repo' && path === 'x.mjs' });
   const a = reg.adapters[0];
   assert.equal(a.name, 'files_write');
   assert.equal(typeof a.needsApproval, 'function');
-  assert.equal(await a.needsApproval({ args: { action: 'write', path: 'x.mjs', rootId: 'r-repo' }, run: {} }), true,
-    '仓库根内的写 → 要求审批');
-  assert.equal(await a.needsApproval({ args: { action: 'write', path: 'x.mjs', rootId: 'r-ws' }, run: {} }), false,
-    '非仓库根不拦');
-  assert.equal(await a.needsApproval({ args: { action: 'write', path: 'other.mjs', rootId: 'r-repo' }, run: {} }), false,
-    '路径不符不拦');
-  // run.boundRootId 兜底
-  assert.equal(await a.needsApproval({ args: { action: 'edit' }, run: { boundRootId: 'r-repo' } }), false,
-    '无 path 时策略方按解析失败不拦');
+  assert.equal(await a.needsApproval({ args: { action: 'write', path: 'x.mjs', rootId: 'r-repo' }, run: {} }), false,
+    '策略已断开注入，仓库内写也不再强制审批');
+  // run.boundRootId 兜底路径同样不拦
+  assert.equal(await a.needsApproval({ args: { action: 'edit' }, run: { boundRootId: 'r-repo' } }), false);
 });
 
-test('files_write 适配器：无 policy 缺省关闭（向后兼容），策略抛错不拦', async () => {
+test('files_write 适配器：无 policy 缺省关闭（向后兼容）', async () => {
   const reg1 = mockRegistry();
   registerFilesWriteTool(reg1);
   assert.equal(await reg1.adapters[0].needsApproval({ args: { path: 'x' }, run: {} }), false,
     '未注入策略 → 不拦（兼容旧装配）');
-  const reg2 = mockRegistry();
-  registerFilesWriteTool(reg2, { needsWriteApproval: () => { throw new Error('boom'); } });
-  assert.equal(await reg2.adapters[0].needsApproval({ args: { path: 'x' }, run: {} }), false,
-    '策略抛错按不拦处理（执行期给确切错误）');
 });
